@@ -2,7 +2,7 @@ import { http, webSocket } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { NativeFrame, NativeSessionList } from './NativeSessionModel';
+import { NativeFrame, NativeSessionList, NativeSessionModel } from './NativeSessionModel';
 
 export class NativeHttpError extends Error {
   status: number;
@@ -24,6 +24,8 @@ export class NativeHarnessClient {
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
+  /** In-memory only: retain visible chat history across session switches and settings. */
+  readonly models: Map<string, NativeSessionModel> = new Map<string, NativeSessionModel>();
   selectedId: string = '';
 
   constructor(origin: string) { this.origin = origin; }
@@ -123,6 +125,9 @@ export class NativeHarnessClient {
       old.off('message'); old.off('close'); old.off('error'); old.off('open');
       old.close().catch(() => {});
     }
+  }
+  clearLocalState(): void {
+    this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear(); this.selectedId = '';
   }
   async follow(id: string, receive: (frame: NativeFrame) => void, ended: () => void): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');

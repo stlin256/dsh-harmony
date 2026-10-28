@@ -51,7 +51,7 @@ APP 中的登录方式只是连接向导提示，不能改变或绕过服务端�
 
 ## Huawei Push
 
-在 AGC 创建 HarmonyOS 应用并启用 Push Kit，bundle 名称、签名证书及工程项目必须匹配。默认 bundle 为 `io.github.stlin256.dshpocket`，可以修改，但须同步 AGC 配置。服务端使用同项目的 **项目级服务账号 JSON**，不是客户端 API key 或 OAuth client secret。
+在 AGC 创建 HarmonyOS 应用并启用 Push Kit，bundle 名称、签名证书及工程项目必须匹配。DSH Harmony bundle 为 `io.github.stlin256.dshharmony`。服务端使用同项目的 **项目级服务账号 JSON**，不是客户端 API key 或 OAuth client secret。
 
 服务账号 JSON 需要 `project_id`、`key_id`、`sub_account` 和 RSA PEM `private_key`。将文件保存在仓库外，仅供服务进程读取；`.env` 的 `HUAWEI_SERVICE_ACCOUNT` 指向该文件。服务端使用 PS256 JWT 和 Huawei v3 messages API，模型参照克隆项目中已存在的 HarmonyOS 接入，仍需在自己的 Huawei 项目中实际验证。
 

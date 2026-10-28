@@ -15,8 +15,8 @@ export function createPushSender(filename, category = 'MARKETING', testMessage =
     const response = await fetch(`https://push-api.cloud.huawei.com/v3/${account.project_id}/messages:send`, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json', 'push-type': '0' },
-      body: JSON.stringify({ payload: { notification: { category, title: 'DSH Harmony',
-        body: routing.code === 'run.failed' ? '任务执行失败，请打开工作空间查看' : routing.code === 'permission.required' ? '有任务需要确认' : '任务已完成',
+      body: JSON.stringify({ payload: { notification: { category, title: routing.title || 'DSH Harmony',
+        body: routing.code === 'run.failed' ? '任务执行失败' : routing.code === 'permission.required' ? '有任务需要确认' : '任务已完成',
         clickAction: { actionType: 0, data: routing } } }, target: { token: [token] }, pushOptions: { testMessage, ttl } })
     });
     const result = await response.json();

@@ -8,6 +8,42 @@
   let refreshAgain = false;
   let hostActive = true;
   const request = (command, value = '') => window.dshPocket?.request('presentation_' + crypto.randomUUID(), command, value);
+  const installSettingsButton = () => {
+    if (!document.body || location.pathname.startsWith('/pocket/')) return;
+    if (document.querySelector('[data-dsh-harmony-settings]')) return;
+    // Reuse the upstream sidebar settings row so this stays aligned with its
+    // navigation, spacing and theme. The original web settings remain intact.
+    const dividers = [...document.querySelectorAll('.nav-divider')];
+    const footer = dividers.map(node => node.parentElement).find(node =>
+      node?.querySelector('button svg.lucide-settings'));
+    const original = footer?.querySelector('button svg.lucide-settings')?.closest('button');
+    const originalRow = original?.parentElement;
+    if (!footer || !original || !originalRow) return;
+
+    const row = originalRow.cloneNode(true);
+    row.setAttribute('data-dsh-harmony-settings', '');
+    // The upstream desktop entry is hidden below its md breakpoint. Harmony
+    // needs the same control in the compact/mobile sidebar as well.
+    row.className = 'px-2 py-1.5';
+    const button = row.querySelector('button');
+    if (!button) return;
+    button.className = 'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground';
+    button.title = '应用设置';
+    button.setAttribute('aria-label', '应用设置');
+    const label = button.querySelector('span');
+    if (label) label.textContent = '应用设置';
+    // Keep the upstream flat Lucide gear and reset its visual state.
+    const icon = button.querySelector('svg');
+    if (icon) {
+      icon.classList.remove('text-primary', 'text-blue-500');
+      icon.setAttribute('aria-hidden', 'true');
+    }
+    button.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation();
+      request('openSettings');
+    });
+    originalRow.after(row);
+  };
   const syncTheme = () => {
     const settings = location.pathname.startsWith('/pocket/');
     const dark = settings ? document.documentElement.dataset.theme === 'dark' : document.body.hasAttribute('data-ds-dark-theme');
@@ -57,6 +93,8 @@
   });
   new MutationObserver(syncTheme).observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] });
   new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  new MutationObserver(installSettingsButton).observe(document.body, { childList: true, subtree: true });
+  installSettingsButton();
   syncTheme();
   void window.__pocketSyncOverview();
 })();

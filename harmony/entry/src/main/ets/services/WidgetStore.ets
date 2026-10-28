@@ -7,6 +7,8 @@ export class WidgetData {
   detail: string = '打开应用，连接你的 Harness';
   stamp: string = '尚未同步';
   showCounts: boolean = false;
+  showTasks: boolean = false;
+  tasks: string = '[]';
   running: string = '—';
   waiting: string = '—';
   completed: string = '—';
@@ -21,6 +23,14 @@ export class OverviewSnapshot {
   unknown: number = 0;
   observedAt: number = 0;
   generatedAt: number = 0;
+  tasks: WidgetTask[] = [];
+}
+
+export class WidgetTask {
+  sessionId: string = '';
+  title: string = '';
+  state: string = '';
+  updatedAt: number = 0;
 }
 
 /** Separate single-writer files: UI writes snapshots; extension writes instance
@@ -54,14 +64,13 @@ export class WidgetStore {
   }
 
   static detailsEnabled(context: common.Context): boolean {
-    return WidgetStore.fresh(context, 'pocket-widget-snapshot').getSync('details', false) === true;
+    return WidgetStore.fresh(context, 'pocket-widget-snapshot').getSync('taskNames', true) === true;
   }
 
   static async setDetails(context: common.Context, enabled: boolean): Promise<void> {
     await WidgetStore.enqueue(async (): Promise<void> => {
       const store = WidgetStore.fresh(context, 'pocket-widget-snapshot');
-      store.putSync('details', enabled);
-      // Clear prior aggregate values when the user switches privacy mode.
+      store.putSync('taskNames', enabled);
       store.putSync('snapshot', '');
       store.putSync('syncedAt', 0);
       store.flushSync();
@@ -74,7 +83,7 @@ export class WidgetStore {
       const store = WidgetStore.fresh(context, 'pocket-widget-snapshot');
       store.putSync('connected', true);
       store.putSync('syncedAt', Date.now());
-      store.putSync('snapshot', store.getSync('details', false) === true ? JSON.stringify(snapshot) : '');
+      store.putSync('snapshot', store.getSync('taskNames', true) === true ? JSON.stringify(snapshot) : '');
       store.flushSync();
       await WidgetStore.publish(context);
     });
@@ -84,7 +93,6 @@ export class WidgetStore {
     await WidgetStore.enqueue(async (): Promise<void> => {
       const store = WidgetStore.fresh(context, 'pocket-widget-snapshot');
       store.putSync('connected', false);
-      store.putSync('details', false);
       store.putSync('syncedAt', 0);
       store.putSync('snapshot', '');
       store.flushSync();
@@ -104,7 +112,7 @@ export class WidgetStore {
     data.stamp = '快照 ' + (date.getMonth() + 1) + '/' + date.getDate() + ' ' +
       date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
     if (Date.now() < time || Date.now() - time > 15 * 60000) { data.detail = '快照已过期，打开应用更新'; return data; }
-    if (store.getSync('details', false) !== true) return data;
+    if (!WidgetStore.detailsEnabled(context)) return data;
     const raw = store.getSync('snapshot', '') as string;
     if (!raw) return data;
     try {
@@ -116,7 +124,10 @@ export class WidgetStore {
       data.waiting = WidgetStore.count(snapshot.waiting);
       data.completed = WidgetStore.count(snapshot.completed);
       data.failed = WidgetStore.count(snapshot.failed);
-      data.detail = snapshot.unknown > 0 ? '部分任务状态待确认' : '最近观测状态 · 非实时';
+      const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks.filter(item => item &&
+        /^[A-Za-z0-9_-]{1,160}$/.test(item.sessionId) && typeof item.title === 'string' && item.title.length > 0).slice(0, 4) : [];
+      if (tasks.length) { data.showTasks = true; data.tasks = JSON.stringify(tasks); }
+      data.detail = snapshot.unknown > 0 ? '部分状态待确认' : '最近观测';
     } catch (_) { data.detail = '打开应用重新同步'; }
     return data;
   }

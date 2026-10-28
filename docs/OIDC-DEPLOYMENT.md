@@ -42,7 +42,7 @@ sudo systemctl restart deepseek-harness harness-gateway
 | 原生登录 | Harness Web + 本仓库单一 DSH 插件 | 服务地址 + Harness 访问密钥 |
 | Pocket ID | 上述插件 + HTTPS + Pocket ID + 可选 OIDC 网关/适配器 | 工作空间 HTTPS 地址 + 系统 Passkey |
 
-浏览器打开正常 Harness 地址即可使用原版网页；原生用户可使用原启动 URL 登录。Pocket ID 用户按现有 OIDC 流程登录。登录后 `/pocket/` 提供配套设置和匿名概览。旧 DSH-Pocket 项目的设备 bearer relay 协议与本项目不同，不需要为 DSH Harmony 再部署它。
+浏览器打开正常 Harness 地址即可使用原版网页；原生用户可使用原启动 URL 登录。Pocket ID 用户按现有 OIDC 流程登录。登录后 `/pocket/` 提供配套设置和任务概览。旧 DSH-Pocket 项目的设备 bearer relay 协议与本项目不同，不需要为 DSH Harmony 再部署它。
 
 系统推送另需当前 Harmony 应用对应的 Huawei Push Kit 服务账号 `HUAWEI_SERVICE_ACCOUNT`。未配置时插件仍能提供登录、原生会话、任务状态和队列，但不会投递系统推送。事件只从插件启用后观测，不回填全部历史任务。
 

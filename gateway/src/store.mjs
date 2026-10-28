@@ -9,6 +9,10 @@ export function openStore(filename) {
     CREATE TABLE IF NOT EXISTS credentials(id TEXT PRIMARY KEY, publicKey TEXT NOT NULL, counter INTEGER NOT NULL, transports TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, owner TEXT NOT NULL, token TEXT NOT NULL UNIQUE);
+    CREATE TABLE IF NOT EXISTS device_preferences(device TEXT PRIMARY KEY, notifications TEXT NOT NULL DEFAULT '{"completed":true,"failed":true,"approval":true}');
+    CREATE TRIGGER IF NOT EXISTS device_preferences_cleanup AFTER DELETE ON devices
+      BEGIN DELETE FROM device_preferences WHERE device=OLD.id; END;
+    CREATE TABLE IF NOT EXISTS task_titles(session TEXT PRIMARY KEY, title TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS task_states(session TEXT PRIMARY KEY, seq INTEGER NOT NULL, state TEXT NOT NULL, updated INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS pending_actions(session TEXT NOT NULL, approval TEXT NOT NULL, PRIMARY KEY(session,approval));
     CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, created INTEGER NOT NULL);

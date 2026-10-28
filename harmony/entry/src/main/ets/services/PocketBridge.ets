@@ -1,12 +1,25 @@
 import { common } from '@kit.AbilityKit';
 import { webview } from '@kit.ArkWeb';
-import { notificationManager } from '@kit.NotificationKit';
-import { pushService } from '@kit.PushKit';
 import { WindowAppearance } from './WindowAppearance';
 import { NativeExperience } from './NativeExperience';
 import { preferences } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
-import { OverviewSnapshot, WidgetStore } from './WidgetStore';
+import { OverviewSnapshot, WidgetStore, WidgetTask } from './WidgetStore';
+import { PushKitAdapter } from 'entry/PushKitAdapter';
+import { BackgroundMonitor } from './BackgroundMonitor';
+import { notificationManager } from '@kit.NotificationKit';
+
+class LocalNotificationMessage {
+  sessionId: string = '';
+  state: string = '';
+  title: string = '';
+}
+
+class NotificationLevels {
+  completed: boolean = true;
+  failed: boolean = true;
+  approval: boolean = true;
+}
 
 export class PocketBridge {
   private context: common.UIAbilityContext;
@@ -49,6 +62,10 @@ export class PocketBridge {
       AppStorage.setOrCreate<string>('uiMode', value);
       return '';
     }
+    if (command === 'openSettings') {
+      AppStorage.setOrCreate<string>('requestedPocketRoute', 'settings');
+      return '';
+    }
     if (command === 'themeMode') {
       if (!['system', 'light', 'dark'].includes(value)) throw new Error('Invalid theme');
       const store = preferences.getPreferencesSync(this.context, { name: 'pocket-native-experience' });
@@ -64,8 +81,17 @@ export class PocketBridge {
     }
     if (command === 'nativeState') {
       const state = JSON.parse(NativeExperience.state(this.context)) as Record<string, Object>;
+      const notices = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
+      const levels = JSON.parse(notices.getSync('levels', '{"completed":true,"failed":true,"approval":true}') as string) as Record<string, Object>;
       state['uiMode'] = AppStorage.get<string>('uiMode') || 'compatibility';
       state['widgetDetails'] = WidgetStore.detailsEnabled(this.context);
+      state['supportsPush'] = PushKitAdapter.supported;
+      state['pushEnabled'] = notices.getSync('pushEnabled', false) === true;
+      state['backgroundMonitor'] = notices.getSync('backgroundMonitor', false) === true;
+      AppStorage.setOrCreate<boolean>('nativeBackgroundMonitor', state['backgroundMonitor'] as boolean);
+      state['notifyCompleted'] = levels.completed === true;
+      state['notifyFailed'] = levels.failed === true;
+      state['notifyApproval'] = levels.approval === true;
       return JSON.stringify(state);
     }
     if (command === 'reduceTransparency' || command === 'reduceMotion') {
@@ -76,6 +102,48 @@ export class PocketBridge {
     if (command === 'widgetDetails') {
       if (value !== 'true' && value !== 'false') throw new Error('Invalid preference');
       await WidgetStore.setDetails(this.context, value === 'true');
+      return '';
+    }
+    if (command === 'notificationLevels') {
+      const levels = JSON.parse(value) as Record<string, Object>;
+      if (typeof levels.completed !== 'boolean' || typeof levels.failed !== 'boolean' || typeof levels.approval !== 'boolean') {
+        throw new Error('Invalid notification levels');
+      }
+      const store = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
+      store.putSync('levels', JSON.stringify({ completed: levels.completed, failed: levels.failed, approval: levels.approval }));
+      await store.flush();
+      return '';
+    }
+    if (command === 'pushEnabled' || command === 'backgroundMonitor') {
+      if (value !== 'true' && value !== 'false') throw new Error('Invalid notification preference');
+      const enabled = value === 'true';
+      const store = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
+      if (command === 'backgroundMonitor' && enabled && !PushKitAdapter.supported) {
+        await notificationManager.requestEnableNotification(this.context);
+      }
+      store.putSync(command, enabled); await store.flush();
+      if (command === 'backgroundMonitor') AppStorage.setOrCreate<boolean>('nativeBackgroundMonitor', enabled);
+      return '';
+    }
+    if (command === 'publishLocalNotification') {
+      if (PushKitAdapter.supported || AppStorage.get<boolean>('nativeBackgroundMonitor') !== true) return '';
+      const message = JSON.parse(value) as LocalNotificationMessage;
+      const sessionId = message.sessionId;
+      const state = message.state;
+      const title = message.title;
+      if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(sessionId) ||
+        !['completed', 'failed', 'waiting'].includes(state) || typeof title !== 'string') throw new Error('Invalid notification');
+      const category = state === 'completed' ? 'completed' : state === 'failed' ? 'failed' : 'approval';
+      const notices = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
+      const levels = new NotificationLevels();
+      try {
+        const saved = JSON.parse(notices.getSync('levels', JSON.stringify(levels)) as string) as NotificationLevels;
+        levels.completed = saved.completed !== false; levels.failed = saved.failed !== false; levels.approval = saved.approval !== false;
+      } catch (_) {}
+      const enabled = category === 'completed' ? levels.completed : category === 'failed' ? levels.failed : levels.approval;
+      if (!enabled) return '';
+      const body = state === 'completed' ? '任务已完成' : state === 'failed' ? '任务执行失败' : '有任务需要确认';
+      await BackgroundMonitor.notify(sessionId, title.slice(0, 80), body, BackgroundMonitor.notificationId(sessionId, state));
       return '';
     }
     if (command === 'widgetSnapshot') {
@@ -90,6 +158,17 @@ export class PocketBridge {
       safe.running = snapshot.running; safe.waiting = snapshot.waiting;
       safe.completed = snapshot.completed; safe.failed = snapshot.failed;
       safe.unknown = snapshot.unknown; safe.observedAt = snapshot.observedAt; safe.generatedAt = snapshot.generatedAt;
+      if (Array.isArray(snapshot.tasks)) {
+        safe.tasks = snapshot.tasks.filter((item: WidgetTask) => item && /^[A-Za-z0-9_-]{1,160}$/.test(item.sessionId) &&
+          typeof item.title === 'string' && item.title.length > 0 && item.title.length <= 160 &&
+          ['running', 'waiting', 'completed', 'failed', 'unknown'].includes(item.state))
+          .slice(0, 6).map((item: WidgetTask) => {
+            const task = new WidgetTask();
+            task.sessionId = item.sessionId; task.title = item.title.slice(0, 120);
+            task.state = item.state; task.updatedAt = Number.isFinite(item.updatedAt) ? item.updatedAt : 0;
+            return task;
+          });
+      }
       await WidgetStore.update(this.context, safe);
       return '';
     }
@@ -101,15 +180,14 @@ export class PocketBridge {
       return '';
     }
     if (command === 'enablePush') {
-      await notificationManager.requestEnableNotification(this.context);
-      return await pushService.getToken();
+      return await PushKitAdapter.getToken(this.context);
     }
-    if (command === 'disablePush') { await pushService.deleteToken(); return ''; }
+    if (command === 'disablePush') { await PushKitAdapter.deleteToken(); return ''; }
     if (command === 'clearSession') {
       this.closed = true;
       // The web side revokes its endpoint and authenticated cookie first.
       await WidgetStore.clear(this.context);
-      try { await pushService.deleteToken(); } catch (_) {}
+      try { await PushKitAdapter.deleteToken(); } catch (_) {}
       await webview.WebCookieManager.clearAllCookies();
       webview.WebStorage.deleteAllData();
       AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', false);

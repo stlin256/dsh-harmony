@@ -9,6 +9,7 @@ import { NativeTextContent } from './NativeTextContent';
 import { NativeInteraction } from './NativeInteraction';
 import { NativeSessionTools } from './NativeSessionTools';
 import { NativeMessageView } from './NativeMessageView';
+import { BackgroundMonitor } from '../services/BackgroundMonitor';
 
 class MessageSource implements IDataSource {
   private rows: NativeMessage[] = [];
@@ -29,14 +30,19 @@ class MessageSource implements IDataSource {
 @Component
 export struct NativeWorkspace {
   client: NativeHarnessClient = new NativeHarnessClient('');
+  context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+  supportsPush: boolean = false;
   onLogin: () => void = (): void => {};
+  onSettings: () => void = (): void => {};
   onSnapshot: (value: string) => Promise<void> = async (): Promise<void> => {};
+  onLocalNotification: (sessionId: string, title: string, state: string) => Promise<void> = async (): Promise<void> => {};
   onCompatibility: () => void = (): void => {};
   @StorageLink('nativeBackRevision') @Watch('backToSessions') private backRevision: number = 0;
   @StorageLink('nativeDark') private dark: boolean = false;
   @StorageLink('nativeRefreshRevision') @Watch('reload') private refreshRevision: number = 0;
   @StorageLink('nativeCompatibilityActive') @Watch('activityChanged') private fallbackActive: boolean = false;
   @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
+  @StorageLink('nativeBackgroundMonitor') @Watch('activityChanged') private backgroundMonitor: boolean = false;
   @StorageLink('requestedSession') @Watch('openRequested') private requestedSession: string = '';
   @State @Watch('sessionsChanged') private sessions: NativeSession[] = [];
   @State private continued: NativeFrame[] = [];
@@ -59,6 +65,7 @@ export struct NativeWorkspace {
   @State private running: boolean = false;
   @State private waiting: boolean = false;
   @State private uncertain: boolean = false;
+  @State private reconnecting: boolean = false;
   @State private error: string = '';
   @State private paging: boolean = false;
   @State private hasMore: boolean = false;
@@ -76,12 +83,17 @@ export struct NativeWorkspace {
   private reconnectTimer: number = -1;
   private retries: number = 0;
   private widgetTimer: number = -1;
+  private backgroundTimer: number = -1;
+  private backgroundActive: boolean = false;
+  private backgroundBusy: boolean = false;
+  private backgroundStates: Map<string, string> = new Map<string, string>();
 
   private sessionsChanged(): void { this.sessionSource.set(this.sessions); }
   aboutToAppear(): void { this.mounted = true; this.reload(); }
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
-    clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer); clearTimeout(this.backgroundTimer);
+    this.stopBackground();
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', false);
   }
   private async reload(): Promise<void> {
@@ -105,7 +117,10 @@ export struct NativeWorkspace {
           this.follow();
         } else this.select(requested);
       }
-    } catch (error) { this.handleError(error as Error); }
+    } catch (error) {
+      this.handleError(error as Error);
+      if (!(error instanceof NativeHttpError && error.status === 401)) this.scheduleReconnect('');
+    }
     finally { if (this.mounted && generation === this.generation) this.loading = false; }
   }
   private handleError(error: Error): void {
@@ -115,7 +130,13 @@ export struct NativeWorkspace {
   }
   private activityChanged(): void {
     clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
-    if (!this.active || this.fallbackActive) { this.interactions = []; this.client.pause(); this.connected = false; return; }
+    if (!this.active || this.fallbackActive) {
+      this.interactions = []; this.client.pause(); this.connected = false;
+      if (this.backgroundMonitor && !this.supportsPush && !this.fallbackActive) this.pollBackground(true);
+      else this.stopBackground();
+      return;
+    }
+    this.stopBackground();
     this.updateWidget();
     if (this.selected) this.follow(); else this.reload();
   }
@@ -132,15 +153,87 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.active || this.fallbackActive) return;
     try {
       const value = await this.client.request('/pocket/api/overview');
-      if (this.mounted && this.active && !this.fallbackActive) await this.onSnapshot(value);
+      if (this.mounted && this.active && !this.fallbackActive) {
+        this.rememberBackgroundStates(value);
+        await this.onSnapshot(value);
+      }
     } catch (_) {}
     finally { if (this.mounted && this.active && !this.fallbackActive) this.widgetTimer = setTimeout(() => { this.updateWidget(); }, 60000); }
+  }
+  private rememberBackgroundStates(raw: string): void {
+    try {
+      const data = JSON.parse(raw) as Record<string, Object>;
+      const tasks = data.tasks as Array<Record<string, Object>>;
+      if (!Array.isArray(tasks)) return;
+      for (const task of tasks) {
+        if (typeof task.sessionId === 'string' && typeof task.state === 'string') {
+          this.backgroundStates.set(task.sessionId, task.state);
+        }
+      }
+    } catch (_) {}
+  }
+  private knownActiveSession(): string {
+    let sessionId = '';
+    this.backgroundStates.forEach((state: string, id: string) => {
+      if (!sessionId && (state === 'running' || state === 'waiting')) sessionId = id;
+    });
+    return sessionId;
+  }
+  private async pollBackground(initial: boolean): Promise<void> {
+    if (!this.mounted || this.active || this.fallbackActive || !this.backgroundMonitor || this.supportsPush || this.backgroundBusy) return;
+    this.backgroundBusy = true;
+    try {
+      if (initial && !this.backgroundActive) {
+        const known = this.knownActiveSession();
+        if (known) {
+          try { await BackgroundMonitor.start(this.context, known); this.backgroundActive = true; } catch (_) {}
+        }
+      }
+      const raw = await this.client.request('/pocket/api/overview');
+      if (!this.mounted || this.active || this.fallbackActive || !this.backgroundMonitor) return;
+      const data = JSON.parse(raw) as Record<string, Object>;
+      const tasks = data.tasks as Array<Record<string, Object>>;
+      if (!Array.isArray(tasks)) return;
+      for (const task of tasks) {
+        if (typeof task.sessionId !== 'string' || typeof task.state !== 'string') continue;
+        const id = task.sessionId;
+        const state = task.state;
+        const previous = this.backgroundStates.get(id) || '';
+        if (previous && previous !== state && (state === 'waiting' || state === 'completed' || state === 'failed') &&
+          (previous === 'running' || previous === 'waiting')) {
+          const title = typeof task.title === 'string' ? task.title : '任务';
+          await this.onLocalNotification(id, title, state);
+        }
+        this.backgroundStates.set(id, state);
+      }
+      const active = tasks.filter((task: Record<string, Object>) => task.state === 'running' || task.state === 'waiting');
+      if (!active.length) { this.stopBackground(); return; }
+      if (!this.backgroundActive) {
+        const first = active[0].sessionId as string;
+        await BackgroundMonitor.start(this.context, first);
+        this.backgroundActive = true;
+      }
+      clearTimeout(this.backgroundTimer);
+      this.backgroundTimer = setTimeout(() => { this.pollBackground(false); }, 30000);
+    } catch (_) {
+      if (this.backgroundActive && this.mounted && !this.active && this.backgroundMonitor) {
+        clearTimeout(this.backgroundTimer);
+        this.backgroundTimer = setTimeout(() => { this.pollBackground(false); }, 30000);
+      }
+    } finally { this.backgroundBusy = false; }
+  }
+  private stopBackground(): void {
+    clearTimeout(this.backgroundTimer); this.backgroundTimer = -1;
+    if (!this.backgroundActive) return;
+    this.backgroundActive = false;
+    BackgroundMonitor.stop(this.context).catch(() => {});
   }
   private openRequested(): void {
     if (!this.requestedSession) return;
     const id = this.requestedSession; this.requestedSession = ''; this.select(id);
   }
   private select(id: string): void {
+    if (this.selected) this.client.models.set(this.selected, this.model);
     this.client.drafts.set(this.selected, this.draft);
     this.continued = []; this.interactions = []; this.toolsOpen = false; this.selected = id; this.client.selectedId = id;
     const session = this.sessions.find((item: NativeSession) => item.id === id);
@@ -150,10 +243,26 @@ export struct NativeWorkspace {
     this.uncertain = this.client.uncertain.has(id);
     this.animatePane(() => { this.showSessions = false; }); this.followTail = true;
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', !this.wide);
-    this.model = new NativeSessionModel(); this.source.set([]);
+    this.model = this.client.models.get(id) || new NativeSessionModel();
+    this.client.models.set(id, this.model);
+    this.previousRows = this.model.messages;
+    this.source.set(this.model.messages);
     this.streamText = ''; this.streamReasoning = '';
     this.running = false; this.waiting = false; this.retries = 0;
+    this.reconnecting = true;
+    this.hydrateHistory(id);
     this.follow();
+  }
+  private async hydrateHistory(id: string): Promise<void> {
+    if (!this.mounted || this.model.messages.length > 0) return;
+    try {
+      const page = await this.client.page(id, Number.MAX_SAFE_INTEGER);
+      if (!this.mounted || this.selected !== id || this.model.messages.length > 0) return;
+      this.model.prepend(page);
+      this.paint();
+    } catch (_) {
+      // Keep the last in-memory snapshot visible while the live channel retries.
+    }
   }
   private follow(): void {
     if (!this.mounted || !this.active || this.fallbackActive || !this.selected) return;
@@ -177,9 +286,11 @@ export struct NativeWorkspace {
         this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId); return;
       }
       this.model.apply(frame);
-      if (frame.type === 'snapshot') { this.connected = true; this.error = ''; this.retries = 0; }
+      if (frame.type === 'snapshot') {
+        this.connected = true; this.reconnecting = false; this.error = ''; this.retries = 0;
+      }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
-    }, (): void => { this.reconnect(id); }).catch((error: Error) => this.handleError(error));
+    }, (): void => { this.reconnect(id); }).catch((): void => { this.scheduleReconnect(id); });
   }
   private async reconnect(id: string): Promise<void> {
     if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
@@ -190,11 +301,16 @@ export struct NativeWorkspace {
       if (!state.authenticated) { this.onLogin(); return; }
     } catch (_) {}
     if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
+    this.scheduleReconnect(id);
+  }
+  private scheduleReconnect(id: string): void {
+    if (!this.mounted || !this.active || this.fallbackActive || (id && this.selected !== id)) return;
+    clearTimeout(this.reconnectTimer);
     this.interactions = [];
-    this.error = '实时连接中断，正在重新同步；不会自动重发消息。';
-    if (this.retries >= 5) { this.error = '连接已暂停，请点击刷新，或切换兼容模式。'; return; }
+    this.connected = false; this.reconnecting = true; this.error = '';
     this.retries++;
-    this.reconnectTimer = setTimeout(() => { this.follow(); }, Math.min(15000, 1000 * Math.pow(2, this.retries)));
+    const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.retries, 5)));
+    this.reconnectTimer = setTimeout(() => { if (id) this.follow(); else this.reload(); }, delay);
   }
   private paint(): void {
     if (!this.mounted) return;
@@ -203,7 +319,7 @@ export struct NativeWorkspace {
     this.streamText = this.model.streamText; this.streamReasoning = this.model.streamReasoning;
     if (this.followTail) setTimeout(() => { if (this.mounted) this.scroller.scrollEdge(Edge.Bottom); }, 0);
   }
-  private async create(): Promise<void> {
+  private async createSession(): Promise<void> {
     if (this.loading) return;
     this.loading = true;
     try {
@@ -288,6 +404,9 @@ export struct NativeWorkspace {
         Button('新建', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(13)
           .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .enabled(!this.loading).onClick(() => { this.newSessionOpen = true; })
+        Button('设置', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(12)
+          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          .accessibilityText('应用设置').onClick(this.onSettings)
       }.width('100%')
       List({ space: 4 }) {
         LazyForEach(this.sessionSource, (item: NativeSession) => {
@@ -301,6 +420,11 @@ export struct NativeWorkspace {
           }.onClick(() => this.select(item.id)).accessibilityText(item.title + (item.running ? '，运行中' : ''))
         }, (item: NativeSession) => item.id)
       }.layoutWeight(1).width('100%')
+      if (this.reconnecting) {
+        Text('连接中断，正在重连').fontSize(12).padding({ left: 10, right: 10, top: 8, bottom: 8 })
+          .width('100%').borderRadius(10).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
+      }
       if (this.loading) { Text('正在连接…').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
       if (!this.loading && !this.sessions.length) { Text('新建会话，开始你的任务').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
     }.padding(16).height('100%').width(this.wide ? 240 : '100%')
@@ -321,12 +445,23 @@ export struct NativeWorkspace {
         Button('工具', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(() => { this.toolsOpen = true; })
+        Button('设置', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          .accessibilityText('应用设置').onClick(this.onSettings)
         if (this.running) {
           Button('停止', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
             .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
             .onClick(() => { this.client.cancel(this.selected).catch((error: Error) => this.handleError(error)); })
         }
       }.width('100%')
+      if (this.reconnecting) {
+        Row({ space: 8 }) {
+          Text('•').fontSize(14).fontColor(this.dark ? '#F8C86A' : '#A56A00')
+          Text('连接中断，正在重连').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          Blank()
+        }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).width('100%').borderRadius(10)
+          .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
+      }
       List({ space: 18, scroller: this.scroller }) {
         if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(44).onClick(() => { this.older(); }) } }
         LazyForEach(this.source, (message: NativeMessage) => {
@@ -425,13 +560,11 @@ export struct NativeWorkspace {
           TextInput({ text: this.newPreset, placeholder: 'Agent Preset（留空使用默认配置）' }).onChange((value: string) => { this.newPreset = value; })
           Row({ space: 8 }) {
             Button('取消').height(44).onClick(() => { this.newSessionOpen = false; })
-            Button('创建').height(44).enabled(!this.loading).onClick(() => { this.create(); })
+            Button('创建').height(44).enabled(!this.loading).onClick(() => { this.createSession(); })
           }
         }.padding(16).width('100%')
       }
-      if (this.error) {
-        Text(this.error).fontSize(12).padding(12).fontColor(this.dark ? '#FF9393' : '#C53030')
-      }
+      if (this.error) { Text(this.error).fontSize(12).padding(12).fontColor(this.dark ? '#FF9393' : '#C53030') }
     }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
       .onAreaChange((_old: Area, area: Area) => { this.wide = Number(area.width) >= 760;
         AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', !this.wide && !this.showSessions); })

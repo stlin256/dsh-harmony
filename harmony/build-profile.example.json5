@@ -1,8 +1,14 @@
 {
   "app": {
     "signingConfigs": [],
-    "products": [{ "name": "default", "compatibleSdkVersion": "6.1.0(23)", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS" }],
+    "products": [
+      { "name": "default", "compatibleSdkVersion": "6.1.0(23)", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS", "bundleName": "io.github.stlin256.dshharmony" },
+      { "name": "store", "compatibleSdkVersion": "6.1.0(23)", "targetSdkVersion": "26.0.0", "runtimeOS": "HarmonyOS", "bundleName": "io.github.stlin256.dshharmony" }
+    ],
     "buildModeSet": [{ "name": "debug" }, { "name": "release" }]
   },
-  "modules": [{ "name": "entry", "srcPath": "./entry", "targets": [{ "name": "default", "applyToProducts": ["default"] }] }]
+  "modules": [{ "name": "entry", "srcPath": "./entry", "targets": [
+    { "name": "default", "applyToProducts": ["default"] },
+    { "name": "store", "applyToProducts": ["store"] }
+  ] }]
 }

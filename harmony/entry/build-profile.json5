@@ -1,1 +1,8 @@
-{ "apiType": "stageMode", "buildOption": {}, "targets": [{ "name": "default" }] }
+{
+  "apiType": "stageMode",
+  "buildOption": {},
+  "targets": [
+    { "name": "default", "source": { "sourceRoots": ["./src/personal"] } },
+    { "name": "store", "source": { "sourceRoots": ["./src/store"] } }
+  ]
+}

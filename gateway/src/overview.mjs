@@ -6,6 +6,10 @@ export const notificationCodes = ['run.completed', 'run.failed', 'permission.req
  * mutate the projection without a monotonic Harness session sequence. */
 export function projectEvent(db, event, now) {
   if (event.seq === undefined) return true;
+  if (typeof event.title === 'string' && event.title.length) {
+    db.prepare(`INSERT INTO task_titles VALUES (?,?) ON CONFLICT(session)
+      DO UPDATE SET title=excluded.title`).run(event.sessionId, event.title);
+  }
   const previous = db.prepare('SELECT seq,state FROM task_states WHERE session = ?').get(event.sessionId);
   if (previous && event.seq <= previous.seq) return false;
   const state = states[event.code] || previous?.state || 'running';
@@ -25,7 +29,7 @@ export function projectEvent(db, event, now) {
   return true;
 }
 
-/** Aggregate only: no session IDs, hostnames, message text or credentials. */
+/** Returns aggregate status and short task labels for the owner's app/widgets. */
 export function readOverview(db, now = Date.now()) {
   const result = { running: 0, waiting: 0, completed: 0, failed: 0, unknown: 0, observedAt: 0, generatedAt: now };
   for (const row of db.prepare(`SELECT state,updated,EXISTS(SELECT 1 FROM pending_actions p WHERE p.session=t.session) AS pending FROM task_states t`).all()) {
@@ -36,5 +40,15 @@ export function readOverview(db, now = Date.now()) {
       else result.running++;
     } else if (now - row.updated <= 86400000 && (row.state === 'completed' || row.state === 'failed')) result[row.state]++;
   }
+  result.tasks = db.prepare(`SELECT t.session,COALESCE(x.title,'') AS title,t.state,t.updated,
+    EXISTS(SELECT 1 FROM pending_actions p WHERE p.session=t.session) AS pending
+    FROM task_states t LEFT JOIN task_titles x ON x.session=t.session
+    WHERE t.state='running' OR (t.state IN ('completed','failed') AND t.updated>=?)
+    ORDER BY t.updated DESC LIMIT 6`).all(now - 86400000).map(row => ({
+      sessionId: row.session,
+      title: row.title || row.session,
+      state: row.state === 'running' ? row.pending ? 'waiting' : now - row.updated > 6 * 3600000 ? 'unknown' : 'running' : row.state,
+      updatedAt: row.updated
+    }));
   return result;
 }

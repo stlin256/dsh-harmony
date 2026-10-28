@@ -17,6 +17,7 @@
         "icon": "$media:app_icon",
         "label": "$string:app_name",
         "exported": true,
+        "backgroundModes": ["dataTransfer"],
         "startWindowIcon": "$media:app_icon",
         "startWindowBackground": "$color:start_window_background",
         "skills": [
@@ -38,6 +39,14 @@
       },
       {
         "name": "ohos.permission.ACCESS_FIDO2_ONLINEAUTH"
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:background_monitor_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "always"
+        }
       }
     ],
     "metadata": [

@@ -1,5 +1,7 @@
 # DSH Harmony
 
+![DSH Harmony](harmony/AppScope/resources/base/media/app_icon.svg)
+
 简体中文 · [English](README.en.md)
 
 面向 HarmonyOS 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 伴侣应用。兼容界面保留原版网页；实验性原生界面提供会话、消息、工具与实时交互，并接入系统通知和桌面服务卡片。
@@ -17,7 +19,7 @@
 
 1. 准备可访问的 Harness Web，服务器 Node.js 24.9+。
 2. 在 `gateway/` 运行 `npm ci`，回到仓库根目录运行 `node scripts/package-plugin.mjs`。
-3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.1.2.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
+3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.2.0.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
 4. 安装 App，默认选原生登录，填写地址和 Harness 启动 URL 中 `token=` 后的访问密钥。密钥不保存在 App 配置中；后续使用有效 Cookie。
 5. 可选 Pocket ID 的[流程与工具](docs/OIDC-DEPLOYMENT.md)均在仓库中，配置后选择下面的 Passkey 登录。
 
@@ -28,10 +30,10 @@
 - 兼容模式保留 Harness 原版工作空间、插件和高级控件。
 - 原生模式（实验）提供会话、文本/图片、工具、模型、队列、审批、提问和实时输出。覆盖范围见[界面模式](docs/UI-MODES.md)与[能力核对表](docs/NATIVE-COVERAGE.md)。
 - 本机主题、动效和连接管理；登录失败或离线时仍可退出。
-- 2×2 工作空间入口和 2×4 匿名状态卡片，使用带时间的本地快照，不保证后台实时更新。
-- 插件收集任务/审批事件，SQLite 保存通知队列。实际系统推送另需当前 Harmony 应用对应的 Huawei Push Kit 与服务账号；未配置时推送关闭。
+- 2×2 工作空间入口和 2×4 任务概览卡片，可显示任务名称并使用带时间的本地快照。
+- 插件收集任务/审批事件，SQLite 保存通知队列。个人 Push Kit 构建支持分级推送；应用商店构建不含 Push Kit，可选在有任务运行时监测状态。
 
-目标 SDK 26，最低 API 23。Release 已通过 DevEco CLI 编译和真机安装，原生完整覆盖与设备兼容性仍在推进。
+目标 SDK 26，最低 API 23。`default` 与 `store` 两个产品分别构建自用 Push Kit 版和应用商店版；构建方式见[移动端说明](harmony/README.md)。
 
 ## 开发与文档
 

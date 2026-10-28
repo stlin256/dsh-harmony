@@ -115,7 +115,9 @@ export function apply(ctx, options = {}) {
   ctx.on('session/event', (session, event) => {
     const value = routingEvent(session, event);
     if (value && !(typeof session.inheritedEventCount === 'number' && event.seq < session.inheritedEventCount)) {
-      try { owner.recordEvent(value); } catch { ctx.logger?.warn('Harmony event queue unavailable'); }
+      const title = session.projections?.values?.title ?? session.title ?? '';
+      try { owner.recordEvent({ ...value, ...(typeof title === 'string' ? { title } : {}) }); }
+      catch { ctx.logger?.warn('Harmony event queue unavailable'); }
     }
   }, { global: true });
   let flushing = false, disposed = false;

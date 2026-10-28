@@ -10,7 +10,11 @@
     },
     {
       "name": "widget_description",
-      "value": "快捷打开 Harness，查看匿名任务快照，不展示对话和服务器地址"
+      "value": "查看任务状态与名称，不显示对话内容"
+    },
+    {
+      "name": "background_monitor_reason",
+      "value": "在任务运行期间检查状态，并在任务结束或需要确认时通知你"
     }
   ]
 }

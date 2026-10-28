@@ -11,7 +11,8 @@ import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeWorkspace } from '../components/NativeWorkspace';
 import { NativeCompatibilitySurface } from '../components/NativeCompatibilitySurface';
 import { NativeSettings } from '../components/NativeSettings';
-import { NativeExperience, ChromeMaterialModifier } from '../services/NativeExperience';
+import { NativeExperience } from '../services/NativeExperience';
+import { PushKitAdapter } from 'entry/PushKitAdapter';
 
 @Entry
 @Component
@@ -34,7 +35,6 @@ struct Index {
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
   @StorageLink('nativeDark') private nativeDark: boolean = false;
   @StorageLink('nativeAppActive') @Watch('activityChanged') private appActive: boolean = true;
-  @StorageLink('nativeExperienceRevision') private experienceRevision: number = 0;
   @StorageLink('pocketForegroundRevision') @Watch('resumePage') private foregroundRevision: number = 0;
   @StorageLink('requestedPocketRoute') @Watch('openPocketRoute') private requestedPocketRoute: string = '';
   @State private origin: string = '';
@@ -129,7 +129,7 @@ struct Index {
     if (this.uiMode === 'native' && !this.authSurface) return;
     if (!this.ready || !this.requestedSession || !this.allowed(this.controller.getUrl())) return;
     // Gateway persists the session hint; it does not invent a Harness SPA route.
-    this.controller.loadUrl(this.origin + '/pocket/?session=' + encodeURIComponent(this.requestedSession));
+    this.controller.loadUrl(this.origin + '/?dshHarmonySession=' + encodeURIComponent(this.requestedSession));
     this.requestedSession = '';
   }
 
@@ -150,6 +150,9 @@ struct Index {
 
   private openPocketRoute(): void {
     if (!this.ready || !this.requestedPocketRoute) return;
+    if (this.requestedPocketRoute === 'settings') {
+      this.nativeSettings = true; this.requestedPocketRoute = ''; return;
+    }
     if (this.uiMode === 'native' && !this.authSurface) {
       this.nativeSettings = this.requestedPocketRoute !== 'workspace';
       this.requestedPocketRoute = ''; return;
@@ -237,6 +240,16 @@ struct Index {
     NativeCompatibilitySurface({ origin: this.origin, sessionId: this.nativeClient.selectedId,
       onClose: (): void => { this.closeCompatibility(); } })
   }
+  @Builder
+  private settingsSheet() {
+    NativeSettings({ client: this.nativeClient,
+      invoke: (command: string, value: string): Promise<string> => this.invokeNative(command, value),
+      onReturn: (): void => { this.nativeSettings = false; },
+      onModes: (): void => { this.modePicker = true; },
+      onConnection: (): void => { this.nativeSettings = false; this.connectionManager = true; },
+      onLogin: (): void => { this.loginSurface(); },
+      onLogout: (): Promise<void> => this.disconnectConnection() })
+  }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
       this.nativeSettings = false;
@@ -278,33 +291,6 @@ struct Index {
   }
 
   @Builder
-  private chrome() {
-    Row({ space: 8 }) {
-      Text('DSH Harmony').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-      Button(this.uiMode === 'native' ? '原生' : '兼容', { type: ButtonType.Normal })
-        .height(this.titleHeight - 12).padding({ left: 10, right: 10 }).fontSize(12).borderRadius(12)
-        .backgroundColor(Color.Transparent).fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
-        .accessibilityText('切换界面模式').attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
-        .onClick(() => { this.modePicker = true; })
-      Button('刷新', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
-        .fontSize(13).borderRadius(12).accessibilityText('刷新工作空间').backgroundColor(Color.Transparent)
-        .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
-        .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
-        .onClick(() => { this.error = ''; this.refreshContent(); })
-      Button('设置', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
-        .fontSize(13).borderRadius(12).accessibilityText('打开应用设置').backgroundColor(Color.Transparent)
-        .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-        .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
-        .onClick(() => {
-          if (this.uiMode === 'native' && !this.authSurface) this.nativeSettings = true;
-          else this.connectionManager = true;
-        })
-    }.padding({ left: 20, right: 12, top: 4, bottom: 4 }).width('100%')
-  }
-
-  @Builder
   private pageContent() {
     Column() {
       if (this.connectionManager) {
@@ -332,17 +318,14 @@ struct Index {
         }.layoutWeight(1).width('100%')
       } else if (this.ready) {
         if (this.uiMode === 'native' && !this.authSurface) {
-          if (this.nativeSettings) {
-            NativeSettings({ client: this.nativeClient,
-              invoke: (command: string, value: string): Promise<string> => this.invokeNative(command, value),
-              onReturn: (): void => { this.nativeSettings = false; }, onModes: (): void => { this.modePicker = true; },
-              onLogin: (): void => { this.loginSurface(); },
-              onLogout: (): Promise<void> => this.disconnectConnection() })
-          } else {
-            NativeWorkspace({ client: this.nativeClient, onLogin: (): void => { this.loginSurface(); },
-              onSnapshot: async (value: string): Promise<void> => { await this.invokeNative('widgetSnapshot', value); },
-              onCompatibility: (): void => { this.compatibility(); } })
-          }
+          NativeWorkspace({ client: this.nativeClient, context: this.context, supportsPush: PushKitAdapter.supported,
+            onLogin: (): void => { this.loginSurface(); },
+            onSettings: (): void => { this.nativeSettings = true; },
+            onSnapshot: async (value: string): Promise<void> => { await this.invokeNative('widgetSnapshot', value); },
+            onLocalNotification: async (sessionId: string, title: string, state: string): Promise<void> => {
+              await this.invokeNative('publishLocalNotification', JSON.stringify({ sessionId, title, state }));
+            },
+            onCompatibility: (): void => { this.compatibility(); } })
         } else {
           if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).width('100%').color(this.nativeDark ? '#5686FE' : '#4176E6').height(2) }
           Web({ src: this.origin + '/pocket/?mode=' + this.mode, controller: this.controller })
@@ -424,6 +407,8 @@ struct Index {
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
       .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: true,
         onDisappear: (): void => { this.closeCompatibility(); } })
+      .bindSheet(this.nativeSettings, this.settingsSheet, { height: SheetSize.LARGE, showClose: false,
+        onDisappear: (): void => { this.nativeSettings = false; } })
   }
 
   build() {
@@ -431,9 +416,7 @@ struct Index {
       this.pageContent()
     }
     .mode(NavigationMode.Stack)
-    .title({ builder: this.chrome, height: this.titleHeight }, NativeExperience.titleOptions(this.nativeDark, this.experienceRevision))
-    .titleMode(NavigationTitleMode.Mini)
-    .hideTitleBar(!this.ready)
+    .hideTitleBar(true)
     .hideBackButton(true)
     .hideToolBar(true)
     .width('100%').height('100%')

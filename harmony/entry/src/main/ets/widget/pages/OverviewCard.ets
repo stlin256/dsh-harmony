@@ -1,3 +1,5 @@
+import { WidgetTask } from '../../services/WidgetStore';
+
 @Entry
 @Component
 struct OverviewCard {
@@ -5,6 +7,8 @@ struct OverviewCard {
   @LocalStorageProp('detail') detail: string = '打开应用开始连接';
   @LocalStorageProp('stamp') stamp: string = '尚未同步';
   @LocalStorageProp('showCounts') showCounts: boolean = false;
+  @LocalStorageProp('showTasks') showTasks: boolean = false;
+  @LocalStorageProp('tasks') tasks: string = '[]';
   @LocalStorageProp('running') running: string = '—';
   @LocalStorageProp('waiting') waiting: string = '—';
   @LocalStorageProp('completed') completed: string = '—';
@@ -18,6 +22,19 @@ struct OverviewCard {
     }.layoutWeight(1).alignItems(HorizontalAlign.Start)
   }
 
+  private taskRows(): WidgetTask[] {
+    try { return (JSON.parse(this.tasks) as WidgetTask[]).slice(0, 4); }
+    catch (_) { return []; }
+  }
+
+  private stateLabel(state: string): string {
+    if (state === 'waiting') return '确认';
+    if (state === 'failed') return '失败';
+    if (state === 'completed') return '完成';
+    if (state === 'unknown') return '待确认';
+    return '运行';
+  }
+
   build() {
     Column({ space: 6 }) {
       Row() {
@@ -25,7 +42,19 @@ struct OverviewCard {
         Blank()
         Text(this.stamp).fontSize(10).fontColor($r('app.color.widget_secondary')).maxLines(1)
       }.width('100%')
-      if (this.showCounts) {
+      if (this.showTasks && this.taskRows().length) {
+        Column({ space: 2 }) {
+          ForEach(this.taskRows(), (task: WidgetTask) => {
+            FormLink({ action: 'router', abilityName: 'EntryAbility', params: { sessionId: task.sessionId } }) {
+              Row({ space: 8 }) {
+                Text(task.title).fontSize(12).layoutWeight(1).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.widget_primary'))
+                Text(this.stateLabel(task.state)).fontSize(10).fontColor($r('app.color.widget_secondary'))
+              }.width('100%').height(26)
+            }.width('100%').accessibilityText(task.title + '，' + this.stateLabel(task.state))
+          }, (task: WidgetTask) => task.sessionId)
+        }.layoutWeight(1).width('100%')
+      } else if (this.showCounts) {
         Row() {
           this.metric(this.running, '运行中')
           this.metric(this.waiting, '待审批')

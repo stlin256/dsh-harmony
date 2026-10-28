@@ -176,14 +176,21 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     if (!pushConfigured) return res.status(503).json({ error: '服务器未配置 Huawei Push' });
     const owner = session(req);
     if (!owner) return res.status(401).json({ error: '请先点击登录' });
-    const { id, token } = req.body || {};
+    const { id, token, notifications } = req.body || {};
     if (!/^[A-Za-z0-9_-]{16,80}$/.test(id) || typeof token !== 'string' || token.length < 16 || token.length > 4096) return res.sendStatus(400);
+    if (notifications !== undefined && (!notifications || typeof notifications !== 'object' || Array.isArray(notifications) ||
+      Object.keys(notifications).some(key => !['completed', 'failed', 'approval'].includes(key)) ||
+      Object.values(notifications).some(value => typeof value !== 'boolean'))) return res.sendStatus(400);
+    const levels = { completed: notifications?.completed !== false, failed: notifications?.failed !== false,
+      approval: notifications?.approval !== false };
     const existing = db.prepare('SELECT id,owner FROM devices WHERE id = ? OR token = ?').all(id, token);
     if (existing.some(row => row.owner !== owner)) return res.status(409).json({ error: '设备已绑定其他登录会话，请先在原会话关闭通知' });
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare('DELETE FROM devices WHERE token = ? AND owner = ? AND id != ?').run(token, owner, id);
       db.prepare('INSERT INTO devices VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET token=excluded.token').run(id, owner, token);
+      db.prepare(`INSERT INTO device_preferences(device,notifications) VALUES (?,?)
+        ON CONFLICT(device) DO UPDATE SET notifications=excluded.notifications`).run(id, JSON.stringify(levels));
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
     res.json({ ok: true });
@@ -216,6 +223,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   });
   function recordEvent(value) {
     const { id, sessionId, code, seq, approvalId } = value || {};
+    const title = typeof value?.title === 'string' ? value.title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 160) : '';
     if (!/^[A-Za-z0-9_:.-]{1,240}$/.test(id) || !/^[A-Za-z0-9_-]{1,160}$/.test(sessionId) || !eventCodes.includes(code)) return false;
     if (seq !== undefined && (!Number.isSafeInteger(seq) || seq < 0)) return false;
     if (seq !== undefined && code.startsWith('permission.') && (typeof approvalId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(approvalId))) return false;
@@ -223,9 +231,13 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     db.exec('BEGIN IMMEDIATE');
     try {
       const inserted = db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?)').run(id, now);
-      if (inserted.changes && projectEvent(db, { sessionId, code, seq, approvalId }, now) && notificationCodes.includes(code)) {
-        const payload = JSON.stringify({ sessionId, code });
-        for (const device of db.prepare('SELECT id FROM devices').all()) {
+      if (inserted.changes && projectEvent(db, { sessionId, code, seq, approvalId, title }, now) && notificationCodes.includes(code)) {
+        const payload = JSON.stringify({ sessionId, code, title });
+        const category = code === 'run.completed' ? 'completed' : code === 'run.failed' ? 'failed' : 'approval';
+        for (const device of db.prepare(`SELECT d.id,p.notifications FROM devices d LEFT JOIN device_preferences p ON p.device=d.id`).all()) {
+          let levels = { completed: true, failed: true, approval: true };
+          try { if (device.notifications) levels = { ...levels, ...JSON.parse(device.notifications) }; } catch {}
+          if (levels[category] === false) continue;
           db.prepare('INSERT INTO jobs(device,payload,due,expires) VALUES (?,?,?,?)').run(device.id, payload, now, now + 3600000);
         }
       }
@@ -289,6 +301,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     db.prepare('DELETE FROM sessions WHERE expires <= ?').run(now);
     db.prepare('DELETE FROM events WHERE created < ?').run(now - 7 * 86400000);
     db.prepare('DELETE FROM task_states WHERE updated < ?').run(now - 30 * 86400000);
+      db.prepare('DELETE FROM task_titles WHERE session NOT IN (SELECT session FROM task_states)').run();
     db.prepare('DELETE FROM pending_actions WHERE session NOT IN (SELECT session FROM task_states)').run();
   }
   return { app, upgrade, cleanup, recordEvent, close: () => { for (const set of sockets.values()) for (const socket of set) socket.destroy(); native.close(); proxy.close(); } };

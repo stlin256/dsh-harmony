@@ -2,9 +2,9 @@
 
 简体中文 · English
 
-安装这一个插件即可为 Harness 增加 DSH Harmony 原生登录、会话接口、实时通道、匿名任务概览、通知队列和网页会话定位。无需独立 relay 或常驻网关进程。Node.js 24.9+；需使用提供 `connection.requestRejection`、`connection.authorizeIndex`、`connection.authenticatedUrl` 的 Harness 版本。
+安装这一个插件即可为 Harness 增加 DSH Harmony 原生登录、会话接口、实时通道、任务概览、分级通知队列和网页会话定位。无需独立 relay 或常驻网关进程。Node.js 24.9+；需使用提供 `connection.requestRejection`、`connection.authorizeIndex`、`connection.authenticatedUrl` 的 Harness 版本。
 
-从仓库根目录运行 `node scripts/package-plugin.mjs`，生成 `.artifacts/dsh-harmony-plugin-0.1.2.tgz`。通过 Harness 的插件管理安装该包，并启用 `@dsh-harmony/plugin`。也可以将包作为当前 web profile 的依赖安装，在 `cordis.patch.yml` 追加：
+从仓库根目录运行 `node scripts/package-plugin.mjs`，生成 `.artifacts/dsh-harmony-plugin-0.2.0.tgz`。通过 Harness 的插件管理安装该包，并启用 `@dsh-harmony/plugin`。也可以将包作为当前 web profile 的依赖安装，在 `cordis.patch.yml` 追加：
 
 ```yaml
 - insert:
@@ -16,8 +16,8 @@ App 默认选择“原生登录”。填写 Harness Web 地址和启动 URL 中 
 
 Pocket ID Passkey 是可选的另一种登录方式，要求 HTTPS。其部署工具、适配器及说明位于仓库 `deploy/` 和 `docs/OIDC-DEPLOYMENT.md`。浏览器与 App 共用现有 Pocket ID 登录，不需要再注册独立的插件 Passkey。
 
-数据默认保存在 `$DSH_HOME/harmony.sqlite`（未设置 DSH_HOME 时为 `~/.dsh/harmony.sqlite`）。插件只记录启用后观测到的任务/审批状态。系统推送还需为这个 Harmony 应用配置 Huawei Push Kit 和 `HUAWEI_SERVICE_ACCOUNT`；未配置时原生登录、会话和事件概览仍可使用，实际推送关闭。
+数据默认保存在 `$DSH_HOME/harmony.sqlite`（未设置 DSH_HOME 时为 `~/.dsh/harmony.sqlite`）。插件保存启用后观测到的任务名、状态和待确认路由，不保存消息正文。通知等级由每台设备设置；推送构建还需配置 Huawei Push Kit 和 `HUAWEI_SERVICE_ACCOUNT`。应用商店构建不需要 Push Kit 服务帐号。
 
-The single plugin provides native Harness login, session APIs, live updates, task overview, notification queue and web session handoff. No separate relay or gateway daemon is required. Build the installable package using `node scripts/package-plugin.mjs`, then install and enable `@dsh-harmony/plugin` through Harness's plugin manager or its web-profile Cordis patch.
+The single plugin provides native Harness login, session APIs, live updates, task overview, notification levels and web session handoff. No separate relay or gateway daemon is required. Build the installable package using `node scripts/package-plugin.mjs`, then install and enable `@dsh-harmony/plugin` through Harness's plugin manager or its web-profile Cordis patch.
 
-Native login is the default. Enter the Harness Web origin and the access key from its startup URL's `token` query parameter. It reuses Harness's official token exchange and signed-cookie validation over HTTP or HTTPS. Configure network binding and trusted hosts using the standard Harness deployment settings. Optional Pocket ID login requires HTTPS and the OIDC adapter documented in the repository. System push delivery separately requires this app's Huawei Push Kit service-account configuration.
+Native login is the default. Enter the Harness Web origin and the access key from its startup URL's `token` query parameter. It reuses Harness's official token exchange and signed-cookie validation over HTTP or HTTPS. Configure network binding and trusted hosts using the standard Harness deployment settings. Optional Pocket ID login requires HTTPS and the OIDC adapter documented in the repository. The personal HAP uses the Huawei Push Kit service account; the AppGallery HAP excludes Push Kit.
