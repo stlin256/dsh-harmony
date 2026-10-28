@@ -155,11 +155,13 @@ test('native transport shares only gateway cookies, disables redirects and never
   const socket = { on: (event, callback) => socketCallbacks.set(event, callback), off: event => socketCallbacks.delete(event),
     connect: async () => true, close: async () => true };
   const network = { http: { RequestMethod: { GET:'GET',POST:'POST' }, HttpDataType:{STRING:'string'}, createHttp:()=>({
+    on(event, callback) { this[event] = callback; },
+    async requestInStream(url, options) { calls.push({url,options}); const encoded = new TextEncoder().encode('{}'); this.dataReceive(encoded.buffer); this.dataEnd(); return code; },
     async request(url, options) { calls.push({url,options}); return {responseCode:code,header:{'set-cookie':'pocket='+'b'.repeat(43)+'; Path=/; Secure; HttpOnly'},result:'{}'}; }, destroy(){} }) },
     webSocket:{createWebSocket:()=>{made++;return socket;}} };
   const {NativeHarnessClient}=load('NativeHarnessClient',{
     '@kit.NetworkKit':network,'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookie:()=>cookie,configCookie:async(...args)=>configured.push(args),saveCookieAsync:async()=>{}}}},
-    '@kit.ArkTS':{util:{generateRandomUUID:()=> 'request-id'}},'@kit.BasicServicesKit':{},'./NativeSessionModel':{}
+    '@kit.ArkTS':{util:{generateRandomUUID:()=> 'request-id',TextDecoder:{create:()=>({decodeToString: buffer => new TextDecoder().decode(buffer)})}}},'@kit.BasicServicesKit':{},'./NativeSessionModel':{}
   });
   const client=new NativeHarnessClient('https://dsh.example.com');
   await client.request('/pocket/api/state');
@@ -211,4 +213,22 @@ test('UI mode preference persists and JavaScript cannot switch it from another o
   bridge.request('request','uiMode','compatibility');
   await Promise.resolve();assert.equal(state.get('uiMode'),'native');
   await bridge.performNative('themeMode','dark');assert.equal(state.get('nativeThemeMode'),'dark');
+});
+
+test('native history grows past former limits and retains older pages on reconnect', () => {
+  const { NativeSessionModel } = load('NativeSessionModel', {});
+  const model = new NativeSessionModel();
+  const rows = Array.from({length:2000}, (_,seq)=>({seq,id:'event-'+seq,text:'row '+seq}));
+  model.apply({type:'snapshot',cursor:1999,beforeSeq:1000,messages:rows.slice(1000),hasMore:true});
+  model.prepend({messages:rows.slice(0,1000),beforeSeq:0,hasMore:false});
+  model.apply({type:'event',seq:2000,message:{id:'event-2000',seq:2000,text:'new'}});
+  assert.equal(model.messages.length,2001);
+  model.apply({type:'snapshot',cursor:2000,beforeSeq:1900,messages:model.messages.slice(1900),hasMore:true,replacements:[]});
+  assert.equal(model.messages.length,2001);
+  assert.equal(model.hasMore,false);
+  assert.equal(model.historyBefore,0);
+  model.apply({type:'start',attemptId:'a'});
+  model.apply({type:'delta',attemptId:'a',index:0,text:'😀'.repeat(100000),reasoning:'思考'.repeat(100000)});
+  assert.equal(model.streamText.length,200000);
+  assert.equal(model.streamReasoning.length,200000);
 });

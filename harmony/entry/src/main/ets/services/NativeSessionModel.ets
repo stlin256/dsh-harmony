@@ -24,12 +24,15 @@ export class NativeSessionList {
   truncated: boolean = false;
   items: NativeSession[] = [];
 }
+export class NativeReplacement { start: number = -1; end: number = -1; }
 export class NativeFrame {
+  replacements: NativeReplacement[] = [];
   type: string = '';
   messages: NativeMessage[] = [];
   message: NativeMessage | null = null;
   seq: number = -1;
   cursor: number = -1;
+  beforeSeq: number = 0;
   hasMore: boolean = false;
   attemptId: string = '';
   nextIndex: number = 0;
@@ -45,6 +48,8 @@ export class NativeFrame {
 /** One in-memory session projection. No transcripts or drafts are written to disk. */
 export class NativeSessionModel {
   messages: NativeMessage[] = [];
+  historyCut: number = -1;
+  historyBefore: number = -1;
   hasMore: boolean = false;
   running: boolean = false;
   waiting: boolean = false;
@@ -56,8 +61,13 @@ export class NativeSessionModel {
 
   apply(frame: NativeFrame): void {
     if (frame.type === 'snapshot') {
-      this.messages = (frame.messages || []).slice(-400);
-      this.hasMore = frame.hasMore === true;
+      // Retain loaded history on foreground/reconnect, applying replacement ranges.
+      const boundary = frame.beforeSeq === undefined ? 0 : frame.beforeSeq;
+      const older = this.messages.filter((item: NativeMessage) => item.seq < boundary &&
+        !(frame.replacements || []).some((range: NativeReplacement) => item.seq >= range.start && item.seq <= range.end));
+      this.messages = older.concat(frame.messages || []);
+      if (older.length === 0) { this.hasMore = frame.hasMore === true; this.historyBefore = boundary; }
+      this.historyCut = frame.cursor;
       this.cursor = frame.cursor;
       this.attemptId = frame.attemptId || '';
       this.nextIndex = frame.nextIndex || 0;
@@ -73,8 +83,7 @@ export class NativeSessionModel {
         this.messages = this.messages.filter((item: NativeMessage) => item.seq < frame.replaceStart || item.seq > frame.replaceEnd);
       }
       if (frame.message) {
-        if (this.messages.length >= 400) this.hasMore = true;
-        this.messages = this.messages.concat([frame.message]).slice(-400);
+        this.messages = this.messages.concat([frame.message]);
       }
     } else if (frame.type === 'start') {
       this.attemptId = frame.attemptId;
@@ -85,16 +94,17 @@ export class NativeSessionModel {
       if (frame.index < this.nextIndex) return;
       if (frame.index !== this.nextIndex) throw new Error('Stream gap');
       this.nextIndex++;
-      this.streamText = (this.streamText + (frame.text || '')).slice(0, 24000);
-      this.streamReasoning = (this.streamReasoning + (frame.reasoning || '')).slice(0, 24000);
+      this.streamText = this.streamText + (frame.text || '');
+      this.streamReasoning = this.streamReasoning + (frame.reasoning || '');
     } else if (frame.type === 'end' && frame.attemptId === this.attemptId) {
       this.attemptId = ''; this.streamText = ''; this.streamReasoning = '';
     } else if (frame.type === 'error') throw new Error('Native stream unavailable');
   }
 
   prepend(page: NativeFrame): void {
-    const existing: number[] = this.messages.map((item: NativeMessage) => item.seq);
-    this.messages = page.messages.filter((item: NativeMessage) => !existing.includes(item.seq)).concat(this.messages).slice(-1000);
+    const existing: Set<number> = new Set<number>(this.messages.map((item: NativeMessage) => item.seq));
+    this.messages = page.messages.filter((item: NativeMessage) => !existing.has(item.seq)).concat(this.messages);
     this.hasMore = page.hasMore;
+    this.historyBefore = page.beforeSeq;
   }
 }

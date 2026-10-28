@@ -76,7 +76,7 @@ test('native adapter uses official RPC envelopes and keeps upstream credentials 
   assert.deepEqual(calls.at(-1).value.payload.args.request.content,[{type:'text',text:'test prompt'}]);
   assert.equal((await call('/pocket/api/native/cancel',{sessionId:'session'})).status,200);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'../bad',requestId:'request',text:'x'})).status,400);
-  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'request',text:'x'.repeat(3001)})).status,400);
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'request',text:'x'.repeat(100000)})).status,200);
   const page=await call('/pocket/api/native/page',{sessionId:'session',beforeSeq:3});
   assert.equal(JSON.parse(page.text).messages[0].text,'older');
   for(const call of calls) {
@@ -123,4 +123,15 @@ test('normalization respects history replacements and produces native code block
   assert.equal(richBlocks('text\n```js\nconst x=1;\n```')[1].kind,'code');
   assert.deepEqual(normalizeFollow({type:'assistant-stream',frame:{type:'chunk',attemptId:'a',index:1,chunk:{type:'reasoning-delta',text:'thinking'}}}),
     {type:'delta',attemptId:'a',index:1,text:'',reasoning:'thinking'});
+});
+
+test('native history and stream preserve arbitrarily long Unicode content without display truncation', () => {
+  const text = '长内容😀\n'.repeat(200000);
+  const history = normalizedHistory([{type:'event',event:{seq:1,type:'assistant/message',data:{message:{content:[{type:'text',text}]}}}}]);
+  assert.equal(history.messages[0].text, text);
+  assert.equal(history.trimmed, false);
+  const snapshot = normalizeFollow({type:'snapshot',cursor:2,hasMore:true,records:[],assistantStream:{activeAttempt:{attemptId:'a',nextIndex:1,stream:[{type:'text-chunks',texts:[text]}]}}});
+  assert.equal(snapshot.text, text);
+  const unknown = normalizedHistory([{type:'event',event:{seq:3,type:'custom/record',data:{text}}}]);
+  assert.equal(JSON.parse(unknown.messages[0].text).text, text);
 });

@@ -43,6 +43,7 @@ export struct NativeWorkspace {
   @State private waiting: boolean = false;
   @State private uncertain: boolean = false;
   @State private error: string = '';
+  @State private paging: boolean = false;
   @State private hasMore: boolean = false;
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
@@ -76,7 +77,6 @@ export struct NativeWorkspace {
       if (value.protocol !== 1) throw new Error('请升级网关或使用兼容模式');
       this.sessions = value.items;
       this.updateWidget();
-      if (value.truncated) this.error = '仅显示最近 200 个会话；完整列表可在兼容模式查看。';
       const requested = this.requestedSession || this.client.selectedId;
       if (requested) { this.requestedSession = ''; this.select(requested); }
     } catch (error) { this.handleError(error as Error); }
@@ -185,14 +185,18 @@ export struct NativeWorkspace {
     finally { this.sending = false; }
   }
   private async older(): Promise<void> {
-    if (!this.model.messages.length) return;
+    if (this.paging || !this.hasMore || this.model.historyBefore < 0) return;
+    this.paging = true;
     this.followTail = false;
     try {
       const id = this.selected;
-      const page = await this.client.page(id, this.model.messages[0].seq);
+      const page = await this.client.page(id, this.model.historyBefore, this.model.historyCut);
       if (this.selected !== id || !this.mounted) return;
+      const previousCount = this.model.messages.length;
       this.model.prepend(page); this.paint();
+      this.scroller.scrollToIndex(this.model.messages.length - previousCount + (this.model.hasMore ? 1 : 0), false);
     } catch (error) { this.handleError(error as Error); }
+    finally { this.paging = false; }
   }
 
   @Builder
@@ -241,7 +245,7 @@ export struct NativeWorkspace {
         }
       }.width('100%')
       List({ space: 18, scroller: this.scroller }) {
-        if (this.hasMore) { ListItem() { Button('加载更早消息').height(44).onClick(() => { this.older(); }) } }
+        if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(44).onClick(() => { this.older(); }) } }
         LazyForEach(this.source, (message: NativeMessage) => {
           ListItem() { NativeMessageView({ message: message, onCompatibility: this.onCompatibility }) }
         }, (message: NativeMessage) => message.id)
@@ -257,6 +261,7 @@ export struct NativeWorkspace {
         }
       }.layoutWeight(1).width('100%').cachedCount(6)
         .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
+        .onReachStart(() => { if (this.hasMore) this.older(); })
         .onScroll(() => { this.followTail = this.scroller.isAtEnd(); })
       if (this.waiting) {
         Button('有待处理输入 · 切换兼容模式', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
@@ -270,7 +275,7 @@ export struct NativeWorkspace {
       }
       Row({ space: 8 }) {
         TextArea({ text: this.draft, placeholder: '向 Harness 发送消息' }).layoutWeight(1).height(76)
-          .maxLength(3000).fontSize(14).borderRadius(16)
+          .fontSize(14).borderRadius(16)
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onChange((value: string) => { this.draft = value; this.client.drafts.set(this.selected, value); })
         Button(this.sending ? '发送中' : '发送', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)

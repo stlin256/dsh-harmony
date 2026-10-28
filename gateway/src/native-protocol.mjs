@@ -1,17 +1,17 @@
-const clipped = (value, limit = 24000) => typeof value === 'string' ? value.length > limit ? value.slice(0, limit) + '\n…内容已截断，请在兼容模式查看完整内容' : value : '';
+const fullText = value => typeof value === 'string' ? value : value === undefined || value === null ? '' : JSON.stringify(value);
 export const sessionIdValid = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value);
 export function textBlocks(content) {
-  if (typeof content === 'string') return { text: clipped(content), reasoning: '' };
+  if (typeof content === 'string') return { text: fullText(content), reasoning: '' };
   const blocks = Array.isArray(content) ? content : [];
   const text = [], reasoning = [];
   for (const block of blocks) {
-    if (block?.type === 'text') text.push(clipped(block.text));
-    else if (block?.type === 'reasoning') reasoning.push(clipped(block.text));
-    else if (block?.type === 'image') text.push('[图片：请在兼容模式查看]');
-    else if (block?.type === 'tool-call') text.push('[工具调用 ' + clipped(block.name, 120) + ']');
-    else text.push('[此内容请在兼容模式查看]');
+    if (block?.type === 'text') text.push(fullText(block.text));
+    else if (block?.type === 'reasoning') reasoning.push(fullText(block.text));
+    else if (block?.type === 'image') text.push('[图片] ' + fullText(block));
+    else if (block?.type === 'tool-call') text.push('[工具调用 ' + fullText(block.name, 120) + ']');
+    else text.push(fullText(block));
   }
-  return { text: clipped(text.join('\n')), reasoning: clipped(reasoning.join('\n')) };
+  return { text: fullText(text.join('\n')), reasoning: fullText(reasoning.join('\n')) };
 }
 function textRuns(text) {
   return text.split(/\n\s*\n/).filter(part => part.trim()).map(part => {
@@ -27,7 +27,7 @@ export function richBlocks(text) {
   let previous = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > previous) result.push(...textRuns(text.slice(previous, match.index)));
-    result.push({ kind: 'code', text: match[2], language: clipped(match[1].trim(), 30) });
+    result.push({ kind: 'code', text: match[2], language: fullText(match[1].trim(), 30) });
     previous = match.index + match[0].length;
   }
   if (previous < text.length) result.push(...textRuns(text.slice(previous)));
@@ -40,11 +40,11 @@ export function normalizeRecord(record) {
   let role, label, content, detail = '';
   if (event.type === 'user/message') { role = 'user'; label = '你'; content = textBlocks(data.content); }
   else if (event.type === 'assistant/message') { role = 'assistant'; label = 'DeepSeek'; content = textBlocks(data.message?.content); }
-  else if (event.type === 'tool/call') { role = 'tool'; label = '工具 · ' + clipped(data.name, 100); content = { text: clipped(data.arguments), reasoning: '' }; }
+  else if (event.type === 'tool/call') { role = 'tool'; label = '工具 · ' + fullText(data.name, 100); content = { text: fullText(data.arguments), reasoning: '' }; }
   else if (event.type === 'tool/result') { role = 'tool'; label = data.message?.isError ? '工具执行失败' : '工具结果'; content = textBlocks(data.message?.content); }
   else if (event.type === 'approval/asked') { role = 'notice'; label = '需要审批'; content = { text: '请切换到兼容模式处理此审批。', reasoning: '' }; }
-  else if (event.type === 'turn/end' && data.reason?.kind === 'error') { role = 'notice'; label = '执行失败'; content = { text: clipped(data.reason.error?.message || '请检查服务端配置后重试'), reasoning: '' }; }
-  else return null;
+  else if (event.type === 'turn/end' && data.reason?.kind === 'error') { role = 'notice'; label = '执行失败'; content = { text: fullText(data.reason.error?.message || '请检查服务端配置后重试'), reasoning: '' }; }
+  else { role = 'detail'; label = event.type; content = { text: fullText(data), reasoning: '' }; }
   return { id: 'event-' + event.seq, seq: event.seq, role, label, text: content.text, reasoning: content.reasoning,
     blocks: richBlocks(content.text), detail };
 }
@@ -56,14 +56,7 @@ export function normalizedHistory(records) {
     const row = normalizeRecord(record);
     if (row) messages.push(row);
   }
-  let bytes = 0;
-  const bounded = [];
-  for (const row of messages.slice().reverse()) {
-    bytes += Buffer.byteLength(JSON.stringify(row));
-    if (bytes > 750000) break;
-    bounded.unshift(row);
-  }
-  return { messages: bounded, trimmed: bounded.length !== messages.length };
+  return { messages, trimmed: false };
 }
 export function compactText(stream) {
   let text = '', reasoning = '';
@@ -73,13 +66,14 @@ export function compactText(stream) {
     if (record?.type === 'chunk' && record.chunk?.type === 'text-delta') text += record.chunk.text;
     if (record?.type === 'chunk' && record.chunk?.type === 'reasoning-delta') reasoning += record.chunk.text;
   }
-  return { text: clipped(text), reasoning: clipped(reasoning) };
+  return { text: fullText(text), reasoning: fullText(reasoning) };
 }
 export function normalizeFollow(frame) {
   if (frame?.type === 'snapshot') {
     const history = normalizedHistory(frame.records);
     const active = frame.assistantStream?.activeAttempt;
-    return { type: 'snapshot', ...history, cursor: frame.cursor, hasMore: frame.hasMore || history.trimmed,
+    return { type: 'snapshot', ...history, cursor: frame.cursor, beforeSeq: frame.records?.[0]?.event?.seq ?? 0,
+      replacements: (frame.records || []).map(record => record.event?.surfaceOp).filter(op => op?.op === 'replace').map(op => ({ start: op.startSeq, end: op.endSeq })), hasMore: frame.hasMore || history.trimmed,
       attemptId: active?.attemptId || '', nextIndex: active?.nextIndex || 0, ...compactText(active?.stream) };
   }
   if (frame?.type === 'event') {
@@ -91,8 +85,8 @@ export function normalizeFollow(frame) {
     const item = frame.frame;
     if (item?.type === 'start') return { type: 'start', attemptId: item.attemptId, nextIndex: 0 };
     if (item?.type === 'chunk') return { type: 'delta', attemptId: item.attemptId, index: item.index,
-      text: item.chunk?.type === 'text-delta' ? clipped(item.chunk.text) : '',
-      reasoning: item.chunk?.type === 'reasoning-delta' ? clipped(item.chunk.text) : '' };
+      text: item.chunk?.type === 'text-delta' ? fullText(item.chunk.text) : '',
+      reasoning: item.chunk?.type === 'reasoning-delta' ? fullText(item.chunk.text) : '' };
     if (item?.type === 'end') return { type: 'end', attemptId: item.attemptId };
   }
   return null;

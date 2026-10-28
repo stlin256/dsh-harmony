@@ -12,16 +12,8 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
       headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: upstreamCookie },
       body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/' + method, payload: { args: method === 'list' ? { _request: request } : { request } } })
     });
-    // Bound memory even when an incompatible server returns an HTML page or a huge log.
-    const reader = response.body?.getReader();
-    let size = 0; const chunks = [];
-    if (reader) try {
-      while (true) { const next = await reader.read(); if (next.done) break; size += next.value.length;
-        if (size > 8 * 1024 * 1024) { await reader.cancel(); throw Error('Native response too large'); }
-        chunks.push(next.value); }
-    } finally { reader.releaseLock(); }
     if (!response.ok) throw Error('Harness native API unavailable');
-    const envelope = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const envelope = await response.json();
     if (envelope.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true) {
       // Do not relay arbitrary upstream details (which may contain paths or credentials).
       throw Error('Harness rejected this operation; use compatibility mode for details');
@@ -39,8 +31,8 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
     app.get('/pocket/api/native/sessions', guarded(async (_req, res, signal) => {
       const value = await rpc('list', {}, signal);
       const rows = Array.isArray(value?.items) ? value.items : [];
-      res.json({ protocol: 1, truncated: rows.length > 200, items: rows.filter(row => sessionIdValid(row.sessionId)).slice(0, 200).map(row => ({
-        id: row.sessionId, title: typeof row.projections?.values?.title === 'string' ? row.projections.values.title.slice(0, 200) : '新会话',
+      res.json({ protocol: 1, truncated: false, items: rows.filter(row => sessionIdValid(row.sessionId)).map(row => ({
+        id: row.sessionId, title: typeof row.projections?.values?.title === 'string' ? row.projections.values.title : '新会话',
         running: row.running === true, updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0
       })) });
     }));
@@ -53,13 +45,13 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
     }));
     app.post('/pocket/api/native/page', guarded(async (req, res, signal) => {
       if (!sessionIdValid(req.body?.sessionId) || !Number.isSafeInteger(req.body.beforeSeq) || req.body.beforeSeq < 0) return res.sendStatus(400);
-      const value = await rpc('page', { address: { kind: 'session', sessionId: req.body.sessionId }, beforeSeq: req.body.beforeSeq, maxMessages: 60 }, signal);
+      const value = await rpc('page', { address: { kind: 'session', sessionId: req.body.sessionId }, beforeSeq: req.body.beforeSeq, ...(Number.isSafeInteger(req.body.throughSeq) ? { throughSeq: req.body.throughSeq } : {}), maxMessages: 60 }, signal);
       const history = normalizedHistory(value.records);
-      res.json({ ...history, hasMore: value.hasMore || history.trimmed, cursor: value.cursor });
+      res.json({ ...history, hasMore: value.hasMore || history.trimmed, cursor: value.cursor, beforeSeq: value.records?.[0]?.event?.seq ?? req.body.beforeSeq, throughSeq: value.cursor });
     }));
     app.post('/pocket/api/native/prompt', guarded(async (req, res, signal) => {
       const { sessionId, requestId, text } = req.body || {};
-      if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' || !text.trim() || text.length > 3000) return res.sendStatus(400);
+      if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' || !text.trim()) return res.sendStatus(400);
       await rpc('prompt', { sessionId, requestId, mode: 'queue', content: [{ type: 'text', text }] }, signal);
       res.json({ accepted: true });
     }));
@@ -74,7 +66,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
     wss.handleUpgrade(req, socket, head, client => {
       const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
       const upstream = new WebSocket(url, { headers: { Cookie: upstreamCookie, Origin: target.origin },
-        handshakeTimeout: 10000, maxPayload: 8 * 1024 * 1024, followRedirects: false });
+        handshakeTimeout: 10000, maxPayload: 0, followRedirects: false });
       let alive = true;
       client.on('pong', () => { alive = true; });
       const heartbeat = setInterval(() => {
@@ -84,9 +76,11 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
       heartbeat.unref();
       const send = value => {
         if (client.readyState !== WebSocket.OPEN) return;
-        const text = JSON.stringify(value);
-        if (client.bufferedAmount > 2 * 1024 * 1024 || Buffer.byteLength(text) > 2 * 1024 * 1024) { client.close(1013, 'Refresh required'); return; }
-        client.send(text);
+        const text = Buffer.from(JSON.stringify(value));
+        // WebSocket fragmentation bounds individual transport frames without truncating content.
+        for (let offset = 0; offset < text.length; offset += 32768) {
+          client.send(text.slice(offset, offset + 32768), { binary: false, fin: offset + 32768 >= text.length });
+        }
       };
       const opening = setTimeout(() => { send({ type: 'error', message: '等待会话快照超时，请重新连接' }); client.close(1011); }, 15000);
       opening.unref();

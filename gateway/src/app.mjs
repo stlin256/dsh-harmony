@@ -82,7 +82,8 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     next();
   });
   // Parse only our endpoints: leave the upstream POST/stream bodies untouched.
-  app.use('/pocket/api', express.json({ limit: '16kb' }));
+  app.use('/pocket/api/native', requireAuth, express.json({ limit: Infinity }));
+  app.use('/pocket/api', (req, res, next) => req.path.startsWith('/native/') ? next() : express.json({ limit: '16kb' })(req, res, next));
   app.use('/pocket/api/auth', (req, res, next) => {
     const now = Date.now();
     // A global bound avoids trusting forwarded IP headers and bounds memory.

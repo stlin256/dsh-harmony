@@ -41,9 +41,25 @@ export class NativeHarnessClient {
       const options: http.HttpRequestOptions = {
         method: method, header: { 'Content-Type': 'application/json', Origin: this.origin, Cookie: await this.cookie() },
         expectDataType: http.HttpDataType.STRING, usingCache: false,
-        maxRedirects: 0, maxLimit: 2 * 1024 * 1024, connectTimeout: 10000, readTimeout: 25000
+        maxRedirects: 0, connectTimeout: 10000, readTimeout: 25000
       };
       if (body.length > 0) options.extraData = body;
+      if (path.startsWith('/pocket/api/native/')) {
+        // Streaming Network Kit API avoids HttpResponse's fixed receive-buffer ceiling.
+        const chunks: Uint8Array[] = [];
+        let bytes: number = 0;
+        const end = new Promise<void>((resolve: () => void) => { task.on('dataEnd', resolve); });
+        task.on('dataReceive', (data: ArrayBuffer): void => {
+          const part = new Uint8Array(data); chunks.push(part); bytes += part.byteLength;
+        });
+        const status = await task.requestInStream(this.origin + path, options);
+        if (status < 200 || status >= 300) throw new NativeHttpError(status);
+        await end;
+        const buffer = new Uint8Array(bytes);
+        let offset: number = 0;
+        chunks.forEach((part: Uint8Array) => { buffer.set(part, offset); offset += part.byteLength; });
+        return util.TextDecoder.create('utf-8').decodeToString(buffer);
+      }
       const response = await task.request(this.origin + path, options);
       if (response.responseCode < 200 || response.responseCode >= 300) throw new NativeHttpError(response.responseCode);
       // Share only this gateway's device-management session with ArkWeb. The
@@ -68,9 +84,9 @@ export class NativeHarnessClient {
       JSON.stringify({ requestId: util.generateRandomUUID() }))) as NativeCreatedSession;
     return result.id;
   }
-  async page(id: string, before: number): Promise<NativeFrame> {
+  async page(id: string, before: number, throughSeq: number = -1): Promise<NativeFrame> {
     return JSON.parse(await this.request('/pocket/api/native/page', http.RequestMethod.POST,
-      JSON.stringify({ sessionId: id, beforeSeq: before }))) as NativeFrame;
+      JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))) as NativeFrame;
   }
   async prompt(id: string, text: string): Promise<void> {
     this.uncertain.add(id);
@@ -110,7 +126,6 @@ export class NativeHarnessClient {
       if (error || generation !== this.generation || finished) return;
       try {
         const text = typeof data === 'string' ? data : util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(data));
-        if (text.length > 2 * 1024 * 1024) throw new Error('Frame too large');
         receive(JSON.parse(text) as NativeFrame);
       } catch (_) { finish(); }
     });
