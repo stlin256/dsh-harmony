@@ -10,7 +10,7 @@
 
 DSH Harmony is a HarmonyOS companion for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Connect to your self-hosted workspace from a phone or tablet, continue conversations, follow tool execution and streaming output, and keep track of progress through system notifications and home-screen widgets.
 
-The app preserves the original Harness Web interface and adds Passkey authentication, Huawei Push, native materials, and desktop shortcuts around it.
+Compatibility mode preserves the original Harness Web interface, while experimental native mode renders conversations and settings with ArkUI. The app adds Passkey authentication, Huawei Push, native materials, and desktop shortcuts around it.
 
 [Getting started](#getting-started) · [Deployment guide](docs/DEPLOYMENT.md) · [HarmonyOS 7 and widgets](docs/HARMONY7.md) · [License](LICENSE)
 
@@ -52,6 +52,17 @@ The available material effects depend on the OS version, device capabilities, an
 | **Task overview · 2×4** | View anonymous counts for running, approval-waiting, recently completed, and recently failed sessions; open the app to synchronize. |
 
 Task counts are hidden by default and can be enabled under **Settings → Desktop widgets**. Widgets store timestamped, anonymous snapshots without server addresses, project names, or conversation content. Counts reflect the latest session states observed by the plugin, rather than live connectivity or cumulative task totals.
+
+## Two interface modes
+
+| Mode | Experience |
+| --- | --- |
+| **Compatibility mode** | The default: original Harness Web UI, including its plugins and advanced interactions. |
+| **Native mode (experimental)** | HarmonyOS components for sessions, messages, code, tool details, and app settings, providing a foundation for native motion and responsiveness work. |
+
+Switch using the top mode button or app settings. Your selection is stored on the device, and both modes share the login session and server-side conversations. Native mode still uses the shared ArkWeb page for Passkey authentication; approvals, attachments, and custom plugin panels remain available in compatibility mode. Save unsent compatibility-mode drafts before switching.
+
+See the [interface modes guide](docs/UI-MODES.md) for the feature matrix, protocol, and acceptance checklist. Native mode still requires on-device performance and compatibility validation.
 
 ## How it works
 
@@ -125,6 +136,7 @@ The detailed guides below are currently in Chinese.
 | --- | --- |
 | [Deployment](docs/DEPLOYMENT.md) | Gateway, plugin, HTTPS, signing, Passkeys, and Push setup |
 | [HarmonyOS 7 and widgets](docs/HARMONY7.md) | Native capabilities, widget privacy, state aggregation, and device acceptance |
+| [Interface modes](docs/UI-MODES.md) | Compatibility/native comparison, switching, live protocol, and acceptance |
 | [Interface design](docs/DESIGN.md) | Harness styling, themes, and motion conventions |
 | [Validation](docs/VALIDATION.md) | Automated coverage and device testing checklist |
 | [`harmony/`](harmony/) | ArkTS native application and service widgets |

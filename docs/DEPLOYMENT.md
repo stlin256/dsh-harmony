@@ -86,3 +86,7 @@ Harness 的服务环境中设置 `POCKET_EVENT_SECRET`，与网关 `EVENT_SECRET
 应用使用 ArkWeb 系统 Passkey，不使用 JS 模拟成功或绕过服务端校验。当前环境没有 SDK，以上为工程交接路径，需由接手者实际执行编译；编译错误和运行结果请按 VALIDATION.md 记录。
 
 HarmonyOS 7 原生材质及新增桌面卡片的部署关系、统计含义和验收步骤见 [HARMONY7.md](HARMONY7.md)。网关和插件需一起升级；旧插件不生成完整概览。
+
+## 双模式部署
+
+新版网关包含原生会话适配器。更新依赖并重启网关，反向代理需允许 `/pocket/native/live` WebSocket；不需要为原生聊天新增 Harness 插件。临时认证页与原生客户端共用网关 cookie。界面能力和上游协议版本要求见 [UI-MODES.md](UI-MODES.md)。

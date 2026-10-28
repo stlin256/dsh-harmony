@@ -8,9 +8,9 @@
 
 简体中文 · [English](README.en.md)
 
-DSH Harmony 是面向 HarmonyOS 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 伴侣应用。通过原生 ArkWeb 访问自托管工作空间，在手机和平板上继续会话、查看工具执行和实时输出，并用系统通知与桌面服务卡片关注任务进展。
+DSH Harmony 是面向 HarmonyOS 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 伴侣应用。通过兼容或原生界面连接自托管工作空间，在手机和平板上继续会话、查看工具执行和实时输出，并用系统通知与桌面服务卡片关注任务进展。
 
-应用保留 Harness 原版 Web 界面，在系统层补充 Passkey 登录、Huawei Push、原生材质和桌面入口，让远程工作空间融入 HarmonyOS 的日常使用体验。
+兼容模式保留 Harness 原版 Web 界面，实验性原生模式使用 ArkUI 渲染会话和设置。应用在系统层补充 Passkey 登录、Huawei Push、原生材质和桌面入口，让远程工作空间融入 HarmonyOS 的日常使用体验。
 
 [快速开始](#快速开始) · [部署指南](docs/DEPLOYMENT.md) · [HarmonyOS 7 与桌面卡片](docs/HARMONY7.md) · [许可证](LICENSE)
 
@@ -52,6 +52,17 @@ DSH Harmony 是面向 HarmonyOS 的 [DeepSeek Harness](https://github.com/deepse
 | **任务状态概览 · 2×4** | 查看运行中、待审批、近期完成及近期失败的匿名数量，并打开应用同步状态。 |
 
 卡片默认隐藏任务数量，可在“设置 → 桌面卡片”中开启。桌面只保存带时间的匿名快照，不显示服务器地址、项目名或对话内容。数量按插件观测到的会话最近状态统计，并非实时在线状态或累计任务次数。
+
+## 两种界面模式
+
+| 模式 | 体验 |
+| --- | --- |
+| **兼容模式** | 默认模式，使用原版 Harness Web 界面，覆盖完整插件和高级交互。 |
+| **原生模式（实验）** | 使用鸿蒙原生组件显示会话、消息、代码、工具详情和应用设置，为原生动画与流畅性优化提供基础。 |
+
+通过顶部模式按钮或应用设置切换，选择保存在当前设备。两种模式共用登录态与服务端会话；原生模式的 Passkey 认证仍使用共用的 ArkWeb 页面，审批、附件和插件专用面板可切回兼容模式处理。切换前请保存兼容模式中未发送的草稿。
+
+功能对照、协议与验收步骤见 [界面模式指南](docs/UI-MODES.md)。原生模式尚未完成真机性能与兼容性验证。
 
 ## 工作方式
 
@@ -123,6 +134,7 @@ npm start
 | --- | --- |
 | [部署指南](docs/DEPLOYMENT.md) | 网关、插件、HTTPS、签名、Passkey 与 Push 配置 |
 | [HarmonyOS 7 与卡片](docs/HARMONY7.md) | 原生能力、卡片隐私、状态统计及设备验收 |
+| [界面模式](docs/UI-MODES.md) | 兼容／原生模式对照、切换、流式协议和验收 |
 | [界面设计](docs/DESIGN.md) | Harness 风格、主题和动效约定 |
 | [验证说明](docs/VALIDATION.md) | 自动化验证范围与设备测试清单 |
 | [`harmony/`](harmony/) | ArkTS 原生应用与服务卡片 |
