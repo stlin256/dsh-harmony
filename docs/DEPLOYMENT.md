@@ -71,7 +71,7 @@ APP 中的登录方式只是连接向导提示，不能改变或绕过服务端�
 
 Harness 的服务环境中设置 `POCKET_EVENT_SECRET`，与网关 `EVENT_SECRET` 相同；也可以用 `POCKET_EVENT_ENDPOINT` 代替 YAML 中的 endpoint。请按所使用 Harness 版本的插件加载方式安装；本项目没有自动修改用户的 Harness 配置。
 
-插件监听真实的全局 `session/event`：`turn/end` 的 completed/error、`approval/asked`。取消事件不作为完成通知，历史继承事件被过滤。只提交事件键、会话 ID 和事件代码，网络失败在插件内存中有界重试；网关接受后写 SQLite，支持重启续发。**插件向网关交接前的内存队列不耐进程重启**；没有宣称全链路严格一次投递。当前不发送普通提问提醒。
+插件监听真实的全局 `session/event`：`turn/start`、`turn/end`、`approval/asked` 和 `approval/decided`。取消事件只更新状态，不作为完成通知，历史继承事件被过滤。只提交事件键、会话 ID、事件代码、序号及必要的审批标识，网络失败在插件内存中有界重试；网关接受后写 SQLite，支持重启续发。**插件向网关交接前的内存队列不耐进程重启**；没有宣称全链路严格一次投递。当前不发送普通提问提醒。
 
 ## DevEco Studio 编译
 
@@ -84,3 +84,5 @@ Harness 的服务环境中设置 `POCKET_EVENT_SECRET`，与网关 `EVENT_SECRET
 5. 首次启动填写 **网关 HTTPS 源地址**，不是本机 Harness 端口。Passkey RP ID 是该域名，域名更换后已有 Passkey 无法继续用于新域名。
 
 应用使用 ArkWeb 系统 Passkey，不使用 JS 模拟成功或绕过服务端校验。当前环境没有 SDK，以上为工程交接路径，需由接手者实际执行编译；编译错误和运行结果请按 VALIDATION.md 记录。
+
+HarmonyOS 7 原生材质及新增桌面卡片的部署关系、统计含义和验收步骤见 [HARMONY7.md](HARMONY7.md)。网关和插件需一起升级；旧插件不生成完整概览。

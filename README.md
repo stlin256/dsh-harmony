@@ -5,6 +5,8 @@ HarmonyOS 原生 ArkWeb 应用，加载 DeepSeek Harness 原版远程 Web 界面
 - 原版 Harness 会话、工具、文件和实时输出；原生连接向导、返回、刷新、文件选择、明暗主题。
 - Passkey 注册与登录，系统 FIDO2 验证；显式启用的无验证模式。
 - Huawei Push Kit：完成、失败、审批提醒，SQLite 投递队列、重试、去重及退出撤销。
+- HarmonyOS 7 原生 Navigation 材质与光感，支持减少透明／动效和省电回退。
+- 2×2 工作空间入口、2×4 匿名任务概览桌面卡片，默认隐藏数量。
 - 单用户、单 Harness 实例模型；所有配对设备共享该工作空间。
 
 ```text
@@ -19,6 +21,7 @@ Harness 通知插件 → 认证事件入口 → SQLite 队列 → Huawei Push �
 | `gateway/` | Node.js 24 网关、Passkey 页面、Huawei Push 服务 |
 | `plugins/pocket-notify/` | Harness Cordis 事件插件 |
 | `docs/DEPLOYMENT.md` | 服务端部署和原生编译交接 |
+| `docs/HARMONY7.md` | HarmonyOS 7 原生能力、卡片功能与真机验收 |
 | `docs/VALIDATION.md` | 已验证内容、验收步骤和已知边界 |
 
 在 DevEco Studio 中打开 `harmony/`，复制 `build-profile.example.json5` 为 `build-profile.json5`，使用自己的签名配置。连接前先按 [部署文档](docs/DEPLOYMENT.md) 启动网关和插件。
