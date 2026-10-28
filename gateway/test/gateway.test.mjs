@@ -21,7 +21,7 @@ async function fixture(t, overrides = {}) {
     return new Promise((resolve, reject) => {
       const req = request({ hostname: '127.0.0.1', port: server.address().port, path,
         method: body === undefined ? 'GET' : 'POST', ...rest,
-        headers: { host: 'dsh.example.com', origin, 'content-type': 'application/json', ...headers } }, res => {
+        headers: { host: 'dsh.example.com', origin, 'content-type': 'application/json', ...(body === undefined ? {} : { 'content-length': Buffer.byteLength(JSON.stringify(body)) }), ...headers } }, res => {
         const chunks = [];
         res.on('data', value => chunks.push(value));
         res.on('end', () => {
@@ -272,4 +272,19 @@ test('plugin retries preserve per-session event order before projection', async 
   await new Promise(setImmediate);
   assert.deepEqual(calls, [0, 0, 1]);
   listeners.get('dispose')();
+});
+
+test('native and compatibility registrations share tokens without crossing login sessions', async t => {
+  const {db,call}=await fixture(t,{mode:'none',allowNoAuth:true,pushConfigured:true});
+  const owner=cookies(await call('/pocket/api/auth/none',{}));
+  const other=cookies(await call('/pocket/api/auth/none',{}));
+  const token='same-device-token-123456789';
+  assert.equal((await call('/pocket/api/device',{id:'old-device-12345678',token},{headers:{cookie:owner}})).status,200);
+  assert.equal((await call('/pocket/api/device',{id:'native-device-123456',token},{headers:{cookie:owner}})).status,200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM devices').get().n,1);
+  assert.equal((await call('/pocket/api/device',{id:'other-device-123456',token},{headers:{cookie:other}})).status,409);
+  assert.equal((await call('/pocket/api/device',{allForSession:true},{method:'DELETE',headers:{cookie:other}})).status,200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM devices').get().n,1);
+  await call('/pocket/api/device',{allForSession:true},{method:'DELETE',headers:{cookie:owner}});
+  assert.equal(db.prepare('SELECT count(*) AS n FROM devices').get().n,0);
 });

@@ -1,4 +1,5 @@
 import express from 'express';
+import { createNativeHarness } from './native-harness.mjs';
 import { eventCodes, notificationCodes, projectEvent, readOverview } from './overview.mjs';
 import httpProxy from 'http-proxy';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
@@ -23,6 +24,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   if (!['passkey', 'none'].includes(mode) || (mode === 'none' && !allowNoAuth)) throw Error('No-auth requires explicit ALLOW_NO_AUTH=true');
   if (!eventSecret || eventSecret.length < 32) throw Error('EVENT_SECRET must have at least 32 characters');
   if (mode === 'passkey' && (!bootstrapSecret || bootstrapSecret.length < 32)) throw Error('BOOTSTRAP_SECRET must have at least 32 characters');
+  const native = createNativeHarness({ upstream: target.origin, upstreamCookie, publicOrigin: origin });
   const app = express();
   app.disable('x-powered-by');
   const challenges = new Map();
@@ -149,13 +151,19 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     if (!owner) return res.status(401).json({ error: '请先点击登录' });
     const { id, token } = req.body || {};
     if (!/^[A-Za-z0-9_-]{16,80}$/.test(id) || typeof token !== 'string' || token.length < 16 || token.length > 4096) return res.sendStatus(400);
-    const existing = db.prepare('SELECT owner FROM devices WHERE id = ? OR token = ?').get(id, token);
-    if (existing && existing.owner !== owner) return res.status(409).json({ error: '设备已绑定其他登录会话，请先在原会话关闭通知' });
-    db.prepare('INSERT INTO devices VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET token=excluded.token').run(id, owner, token);
+    const existing = db.prepare('SELECT id,owner FROM devices WHERE id = ? OR token = ?').all(id, token);
+    if (existing.some(row => row.owner !== owner)) return res.status(409).json({ error: '设备已绑定其他登录会话，请先在原会话关闭通知' });
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('DELETE FROM devices WHERE token = ? AND owner = ? AND id != ?').run(token, owner, id);
+      db.prepare('INSERT INTO devices VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET token=excluded.token').run(id, owner, token);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
     res.json({ ok: true });
   });
   app.delete('/pocket/api/device', requireAuth, (req, res) => {
-    db.prepare('DELETE FROM devices WHERE id = ? AND owner = ?').run(String(req.body?.id || ''), session(req) || '');
+    if (req.body?.allForSession === true) db.prepare('DELETE FROM devices WHERE owner = ?').run(session(req) || '');
+    else db.prepare('DELETE FROM devices WHERE id = ? AND owner = ?').run(String(req.body?.id || ''), session(req) || '');
     res.json({ ok: true });
   });
   app.post('/pocket/api/logout', (req, res) => {
@@ -188,6 +196,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
       db.exec('COMMIT'); res.json({ ok: true });
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   });
+  native.routes(app, requireAuth);
   const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
   app.get('/pocket/vendor.js', (_req, res) => res.sendFile(fileURLToPath(new URL('../node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js', import.meta.url))));
   app.use('/pocket', (_req, res, next) => {
@@ -223,7 +232,10 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     const expiry = setTimeout(() => socket.destroy(), Math.min(2147483647, expires - Date.now()));
     expiry.unref();
     socket.once('close', () => { clearTimeout(expiry); sockets.get(key)?.delete(socket); if (!sockets.get(key)?.size) sockets.delete(key); });
-    prepareProxy(req); proxy.ws(req, socket, head);
+    if (new URL(req.url, origin).pathname === '/pocket/native/live') {
+      if (sockets.get(key).size > 4) { socket.destroy(); return; }
+      native.upgrade(req, socket, head);
+    } else { prepareProxy(req); proxy.ws(req, socket, head); }
   }
   function cleanup() {
     const now = Date.now();
@@ -233,5 +245,5 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     db.prepare('DELETE FROM task_states WHERE updated < ?').run(now - 30 * 86400000);
     db.prepare('DELETE FROM pending_actions WHERE session NOT IN (SELECT session FROM task_states)').run();
   }
-  return { app, upgrade, cleanup, close: () => { for (const set of sockets.values()) for (const socket of set) socket.destroy(); proxy.close(); } };
+  return { app, upgrade, cleanup, close: () => { for (const set of sockets.values()) for (const socket of set) socket.destroy(); native.close(); proxy.close(); } };
 }
