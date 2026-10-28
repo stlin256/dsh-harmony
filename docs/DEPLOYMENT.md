@@ -90,3 +90,13 @@ HarmonyOS 7 原生材质及新增桌面卡片的部署关系、统计含义和�
 ## 双模式部署
 
 新版网关包含原生会话适配器。更新依赖并重启网关，反向代理需允许 `/pocket/native/live` WebSocket；不需要为原生聊天新增 Harness 插件。临时认证页与原生客户端共用网关 cookie。界面能力和上游协议版本要求见 [UI-MODES.md](UI-MODES.md)。
+
+## 原生界面的会话交接插件
+
+原生协议版本 2 需要同步部署新版网关与应用。临时兼容面板依然访问同一个网关源，反向代理需允许 `/pocket/native/live` 的 WebSocket 升级；原生审批还会在服务端打开 Harness 的 `$events` 与 `userQuestions/attachWait` 逻辑流。
+
+可选包 `plugins/harmony-navigation` 是 Harness UI 插件。将该目录作为本地包安装到运行 Harness 的环境，并在 Harness 的插件配置中加载 `@dsh-harmony/navigation`。包同时声明宿主入口和 `./client` 导出，客户端依赖公开的 `uiWorkspace` 服务；其发现与加载方式沿用 Harness 官方 UI 插件机制。重启 Harness，确保客户端插件清单包含该包后，重新打开应用的临时兼容面板。
+
+该插件消费 `dshHarmonySession` 查询参数，调用 `uiWorkspace.openSession`，随后从地址栏移除该参数。参数是会话标识，不含登录令牌或地址。没有安装插件时完整工作空间仍可打开，但需手动选择会话。插件不改变权限或认证策略，不抓取网页内容。
+
+此包通过了导航服务模拟测试，仍需在目标 Harness 版本验证本地包安装、客户端发现及会话打开。配置所用地址和部署路径请保留在部署环境中，不提交到本仓库。

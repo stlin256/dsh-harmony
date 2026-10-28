@@ -60,7 +60,7 @@ Task counts are hidden by default and can be enabled under **Settings → Deskto
 | **Compatibility mode** | The default: original Harness Web UI, including its plugins and advanced interactions. |
 | **Native mode (experimental)** | HarmonyOS components for sessions, messages, code, tool details, and app settings, providing a foundation for native motion and responsiveness work. |
 
-Switch using the top mode button or app settings. Your selection is stored on the device, and both modes share the login session and server-side conversations. Native mode still uses the shared ArkWeb page for Passkey authentication; approvals, attachments, and custom plugin panels remain available in compatibility mode. Save unsent compatibility-mode drafts before switching.
+Switch using the top mode button or app settings. Your selection is stored on the device, and both modes share the login session and server-side conversations. Native mode provides session controls, model and reasoning selection, queue editing, live approvals and questions, and image messages. Full native coverage is still in progress. Passkey authentication uses the shared ArkWeb page; remaining built-in features and third-party pages open in a temporary compatibility panel. The optional navigation plugin opens the matching session in that panel. Save unsent compatibility-mode drafts before switching.
 
 See the [interface modes guide](docs/UI-MODES.md) for the feature matrix, protocol, and acceptance checklist. Native mode still requires on-device performance and compatibility validation.
 
