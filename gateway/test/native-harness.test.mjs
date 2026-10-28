@@ -36,6 +36,11 @@ async function setup(t) {
       ws.on('message',raw=>{
         const frame=JSON.parse(raw); openings.push(frame);
         assert.equal(frame.type,'open');
+        if (frame.endpoint === '$events') {
+          assert.deepEqual(frame.payload, {args:{}});
+          ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'ready',clientId:'client-generation',host:{home:'~'}}}));
+          return;
+        }
         assert.equal(frame.payload.args.request.sessionId || frame.payload.args.request.address.sessionId,'session');
         if(frame.endpoint==='session/follow') {
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'snapshot',cursor:0,hasMore:false,
@@ -56,12 +61,12 @@ async function setup(t) {
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>{pocket.close();for(const ws of upstreamWS.clients)ws.terminate();upstreamWS.close();server.closeAllConnections();server.close();backend.closeAllConnections();backend.close();db.close();});
   const call=(path,body,authorized=true)=>new Promise((resolve,reject)=>{
-    const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:body===undefined?'GET':'POST',headers:{host:'dsh.example.com',origin,'content-type':'application/json',...(authorized?{cookie}:{})}},res=>{
+    const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:body===undefined?'GET':'POST',headers:{host:'dsh.example.com',origin,'content-type':'application/json',...(authorized?{cookie:typeof authorized === 'string' ? authorized : cookie}:{})}},res=>{
       const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>resolve({status:res.statusCode,text:Buffer.concat(chunks).toString()}));
     });req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));
   });
   const connect=(headers={})=>new WebSocket(`ws://127.0.0.1:${server.address().port}/pocket/native/live?sessionId=session`,{headers:{Host:'dsh.example.com',Origin:origin,Cookie:cookie,...headers}});
-  return {call,calls,connect,openings,db};
+  return {call,calls,connect,openings,db,emit: value => { for (const ws of upstreamWS.clients) ws.send(JSON.stringify({type:'item',streamId:'interactions',value})); }};
 }
 
 test('native adapter uses official RPC envelopes and keeps upstream credentials server-side',async t=>{
@@ -97,7 +102,7 @@ test('native live channel restores stream baseline and revokes both sockets on l
   assert.equal(frames.find(frame=>frame.type==='snapshot').text,'hel');
   assert.equal(frames.find(frame=>frame.type==='delta').text,'lo');
   assert.equal(frames.find(frame=>frame.type==='state').waiting,true);
-  assert.deepEqual(openings.map(frame=>frame.endpoint),['session/follow','session/observeState']);
+  assert.deepEqual(openings.map(frame=>frame.endpoint),['$events','session/follow','session/observeState']);
   const closed=once(ws,'close');
   assert.equal((await call('/pocket/api/logout',{})).status,200);
   await closed;
@@ -134,4 +139,72 @@ test('native history and stream preserve arbitrarily long Unicode content withou
   assert.equal(snapshot.text, text);
   const unknown = normalizedHistory([{type:'event',event:{seq:3,type:'custom/record',data:{text}}}]);
   assert.equal(JSON.parse(unknown.messages[0].text).text, text);
+});
+
+test('advanced native commands use exact public Session contracts and reject arbitrary RPCs', async t => {
+  const {call,calls} = await setup(t);
+  const operation = body => call('/pocket/api/native/operation',body);
+  assert.equal((await operation({operation:'modelCatalog'})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload,{args:{}});
+  assert.equal((await operation({operation:'rename',sessionId:'session',title:'标题'.repeat(2000)})).status,200);
+  assert.equal(calls.at(-1).value.method,'session/rename');
+  assert.equal((await operation({operation:'fork',sessionId:'session',atSeq:42})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request,{sessionId:'session',atSeq:42,allowMigration:false});
+  assert.equal((await operation({operation:'selectModel',sessionId:'session',provider:'provider',model:'model',reasoningEffort:'high'})).status,200);
+  assert.equal(calls.at(-1).value.payload.args.request.reasoningEffort,'high');
+  assert.equal((await operation({operation:'updateQueue',sessionId:'session',itemId:'item',kind:'edit',text:'updated'})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request.action,{kind:'edit',content:[{type:'text',text:'updated'}]});
+  assert.equal((await operation({operation:'deleteEverything',sessionId:'session'})).status,400);
+  assert.equal((await operation({operation:'updateQueue',sessionId:'session',itemId:'item',kind:'edit',text:''})).status,400);
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'steer',text:'adjust',mode:'steer'})).status,200);
+  assert.equal(calls.at(-1).value.payload.args.request.mode,'steer');
+});
+
+async function live(t) {
+  const setupResult = await setup(t);
+  const ws = setupResult.connect();
+  const frames = [];
+  ws.on('message', raw => frames.push(JSON.parse(raw)));
+  await once(ws,'open');
+  const until = async predicate => {
+    for (let i=0;i<200;i++) { if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5)); }
+    throw Error('fixture condition timed out');
+  };
+  await until(()=>frames.some(frame=>frame.type==='snapshot'));
+  return {...setupResult,ws,frames,until};
+}
+test('native decisions are live, owner-bound, single-use and revoked on Host cancellation', async t => {
+  const {call,calls,frames,emit,until,db} = await live(t);
+  emit({type:'waterfall',event:'approval/request',eventId:'approval',agentId:'session',request:{toolName:'shell',reason:'Run command'}});
+  await until(()=>frames.some(frame=>frame.type==='interaction'));
+  const frame = frames.find(frame=>frame.type==='interaction');
+  const answer = value => call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'approval',value});
+  const other = randomBytes(32).toString('base64url');
+  db.prepare('INSERT INTO sessions VALUES (?,?)').run(createHash('sha256').update(other).digest('hex'),Date.now()+60000);
+  assert.equal((await call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'approval',value:'allowed-once'},'pocket='+other)).status,409);
+  assert.equal((await answer('always-allow')).status,400);
+  assert.equal((await answer('allowed-once')).status,200);
+  assert.equal(calls.at(-1).value.method,'$events/result');
+  assert.deepEqual(calls.at(-1).value.payload.args,{clientId:'client-generation',eventId:'approval',outcome:{kind:'result',value:'allowed-once'}});
+  assert.equal((await answer('allowed-once')).status,409);
+  emit({type:'waterfall',event:'approval/request',eventId:'cancelled',agentId:'session',request:{toolName:'shell'}});
+  await until(()=>frames.some(frame=>frame.eventId==='cancelled'));
+  emit({type:'cancel',eventId:'cancelled'});
+  await until(()=>frames.some(frame=>frame.type==='interaction-ended'&&frame.eventId==='cancelled'));
+  assert.equal((await call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'cancelled',value:'allowed-once'})).status,409);
+});
+test('native question answers validate exact IDs and choices; other scopes delegate', async t => {
+  const {call,calls,frames,emit,until} = await live(t);
+  emit({type:'waterfall',event:'user-questions/request',eventId:'question',agentId:'session',request:{questions:[{id:'q',question:'Choose',options:[{label:'A'},{label:'B'}]}]}});
+  await until(()=>frames.some(frame=>frame.eventId==='question'));
+  const frame=frames.find(frame=>frame.eventId==='question');
+  const answer=answers=>call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'question',value:{answers}});
+  assert.equal((await answer([{id:'q',selected:['forged']}])).status,400);
+  assert.equal((await answer([{id:'q',selected:['A','B']}])).status,400);
+  assert.equal((await answer([{id:'q',selected:['A'],custom:'details'}])).status,200);
+  const before=calls.length;
+  emit({type:'waterfall',event:'approval/request',eventId:'other',agentId:'other-session',request:{toolName:'shell'}});
+  await until(()=>calls.length>before);
+  assert.deepEqual(calls.at(-1).value.payload.args.outcome,{kind:'next'});
+  assert.equal(frames.some(frame=>frame.eventId==='other'),false);
 });

@@ -2,15 +2,17 @@ import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { normalizeFollow, normalizedHistory, sessionIdValid } from './native-protocol.mjs';
 
-export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) {
+export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ownerOf }) {
+  const connections = new Map();
   const target = new URL(upstream);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
   async function rpc(method, request, signal) {
     const rpcId = randomUUID();
-    const response = await fetch(new URL('/api/session/' + method, target), {
+    const endpoint = method === '$events/result' ? method : 'session/' + method;
+    const response = await fetch(new URL('/api/' + endpoint, target), {
       method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
       headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: upstreamCookie },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: 'session/' + method, payload: { args: method === 'list' ? { _request: request } : { request } } })
+      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: method === '$events/result' ? request : method === 'list' ? { _request: request } : method === 'modelCatalog' ? {} : { request } } })
     });
     if (!response.ok) throw Error('Harness native API unavailable');
     const envelope = await response.json();
@@ -38,8 +40,8 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
     }));
     app.post('/pocket/api/native/create', guarded(async (req, res, signal) => {
       // A caller-chosen ID makes a timed-out create recoverable through the list.
-      if (!sessionIdValid(req.body?.requestId) || (req.body.cwd !== undefined && (typeof req.body.cwd !== 'string' || req.body.cwd.length > 1024))) return res.sendStatus(400);
-      const value = await rpc('create', { sessionId: req.body.requestId, ...(req.body.cwd ? { cwd: req.body.cwd } : {}) }, signal);
+      if (!sessionIdValid(req.body?.requestId) || (req.body.cwd !== undefined && typeof req.body.cwd !== 'string')) return res.sendStatus(400);
+      const value = await rpc('create', { sessionId: req.body.requestId, ...(req.body.cwd ? { cwd: req.body.cwd } : {}), ...(typeof req.body.agentPreset === 'string' && req.body.agentPreset ? { agentPreset: req.body.agentPreset } : {}) }, signal);
       if (!sessionIdValid(value?.sessionId)) throw Error('Invalid session');
       res.json({ id: value.sessionId });
     }));
@@ -52,8 +54,66 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
     app.post('/pocket/api/native/prompt', guarded(async (req, res, signal) => {
       const { sessionId, requestId, text } = req.body || {};
       if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' || !text.trim()) return res.sendStatus(400);
-      await rpc('prompt', { sessionId, requestId, mode: 'queue', content: [{ type: 'text', text }] }, signal);
+      if (req.body.mode !== undefined && !['queue', 'steer'].includes(req.body.mode)) return res.sendStatus(400);
+      await rpc('prompt', { sessionId, requestId, mode: req.body.mode || 'queue', content: [{ type: 'text', text }] }, signal);
       res.json({ accepted: true });
+    }));
+    app.post('/pocket/api/native/answer', guarded(async (req, res, signal) => {
+      const connection = connections.get(req.body?.connectionId);
+      const pending = connection?.pending.get(req.body?.eventId);
+      if (!connection || connection.owner !== ownerOf(req) || !pending) return res.sendStatus(409);
+      let outcome;
+      if (req.body.delegate === true) outcome = { kind: 'next' };
+      else if (pending.event === 'approval/request') {
+        if (!['allowed-once', 'rejected'].includes(req.body.value)) return res.sendStatus(400);
+        outcome = { kind: 'result', value: req.body.value };
+      } else {
+        const questions = pending.request.questions;
+        const answers = req.body.value?.answers;
+        if (!Array.isArray(questions) || !Array.isArray(answers) || answers.length !== questions.length ||
+            new Set(answers.map(answer => answer.id)).size !== questions.length ||
+            !questions.every(question => {
+              const answer = answers.find(item => item.id === question.id);
+              return answer && Array.isArray(answer.selected) && answer.selected.every(label => typeof label === 'string' && question.options?.some(option => option.label === label)) &&
+                new Set(answer.selected).size === answer.selected.length && (question.multiSelect || answer.selected.length <= 1) &&
+                (answer.custom === undefined || typeof answer.custom === 'string') &&
+                !(question.intent?.kind === 'approval' && (answer.custom || answer.selected.length !== 1));
+            })) return res.sendStatus(400);
+        outcome = { kind: 'result', value: { answers } };
+      }
+      // One user action, one result. Never repeat a potentially accepted decision.
+      connection.pending.delete(req.body.eventId);
+      await rpc('$events/result', { clientId: connection.clientId, eventId: req.body.eventId, outcome }, signal);
+      connection.send({ type: 'interaction-ended', eventId: req.body.eventId });
+      res.json({ accepted: true });
+    }));
+    app.post('/pocket/api/native/operation', guarded(async (req, res, signal) => {
+      const { operation, sessionId } = req.body || {};
+      if (operation !== 'modelCatalog' && !sessionIdValid(sessionId)) return res.sendStatus(400);
+      let request;
+      switch (operation) {
+        case 'modelCatalog': request = {}; break;
+        case 'state': case 'projections': request = { sessionId }; break;
+        case 'rename':
+          if (typeof req.body.title !== 'string' || !req.body.title.trim()) return res.sendStatus(400);
+          request = { sessionId, title: req.body.title }; break;
+        case 'fork':
+          if (req.body.atSeq !== undefined && (!Number.isSafeInteger(req.body.atSeq) || req.body.atSeq < 0)) return res.sendStatus(400);
+          request = { sessionId, ...(req.body.atSeq === undefined ? {} : { atSeq: req.body.atSeq }), allowMigration: false }; break;
+        case 'selectModel':
+          if (![req.body.provider, req.body.model].every(value => typeof value === 'string' && value.trim()) ||
+              (req.body.reasoningEffort !== undefined && typeof req.body.reasoningEffort !== 'string')) return res.sendStatus(400);
+          request = { sessionId, provider: req.body.provider, model: req.body.model,
+            ...(req.body.reasoningEffort === undefined ? {} : { reasoningEffort: req.body.reasoningEffort }) }; break;
+        case 'updateQueue': {
+          if (typeof req.body.itemId !== 'string' || !req.body.itemId || !['edit', 'remove', 'steer'].includes(req.body.kind)) return res.sendStatus(400);
+          if (req.body.kind === 'edit' && (typeof req.body.text !== 'string' || !req.body.text.trim())) return res.sendStatus(400);
+          request = { sessionId, itemId: req.body.itemId, action: { kind: req.body.kind,
+            ...(req.body.kind === 'edit' ? { content: [{ type: 'text', text: req.body.text }] } : {}) } }; break;
+        }
+        default: return res.sendStatus(400);
+      }
+      res.json(await rpc(operation, request, signal) ?? { accepted: true });
     }));
     app.post('/pocket/api/native/cancel', guarded(async (req, res, signal) => {
       if (!sessionIdValid(req.body?.sessionId)) return res.sendStatus(400);
@@ -67,6 +127,9 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
       const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
       const upstream = new WebSocket(url, { headers: { Cookie: upstreamCookie, Origin: target.origin },
         handshakeTimeout: 10000, maxPayload: 0, followRedirects: false });
+      const connectionId = randomUUID();
+      const connection = { owner: ownerOf(req), clientId: '', pending: new Map(), send: value => send(value) };
+      connections.set(connectionId, connection);
       let alive = true;
       client.on('pong', () => { alive = true; });
       const heartbeat = setInterval(() => {
@@ -86,6 +149,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
       opening.unref();
       client.once('close', () => clearTimeout(opening));
       upstream.once('open', () => {
+        upstream.send(JSON.stringify({ type: 'open', streamId: 'interactions', endpoint: '$events', payload: { args: {} } }));
         for (const [streamId, method, request] of [
           ['history', 'follow', { address: { kind: 'session', sessionId: id }, assistantStream: true, maxMessages: 80 }],
           ['state', 'observeState', { sessionId: id }]
@@ -97,7 +161,23 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
           if (frame.type === 'error') { send({ type: 'error', message: '实时会话不可用，请重新连接或切换兼容模式' }); client.close(1011); return; }
           if (frame.type === 'end') { client.close(1012, 'Stream ended'); return; }
           if (frame.type !== 'item') return;
-          if (frame.streamId === 'state') send({ type: 'state', running: frame.value?.running === true,
+          if (frame.streamId === 'interactions') {
+            const value = frame.value;
+            if (value.type === 'ready') connection.clientId = value.clientId;
+            else if (value.type === 'cancel') {
+              connection.pending.delete(value.eventId);
+              send({ type: 'interaction-ended', eventId: value.eventId });
+            } else if (value.type === 'waterfall' && connection.clientId) {
+              // Delegate other sessions and unrecognised plugin interactions immediately.
+              // Timed questions currently require the Harness foreground-claim lifecycle.
+              if (value.agentId !== id || !['approval/request', 'user-questions/request'].includes(value.event) || value.request?.wait?.timed === true) {
+                rpc('$events/result', { clientId: connection.clientId, eventId: value.eventId, outcome: { kind: 'next' } }).catch(() => client.close(1011));
+              } else {
+                connection.pending.set(value.eventId, value);
+                send({ type: 'interaction', connectionId, eventId: value.eventId, interaction: value.event, request: value.request });
+              }
+            }
+          } else if (frame.streamId === 'state') send({ type: 'state', running: frame.value?.running === true,
             waiting: Array.isArray(frame.value?.pendingInput) && frame.value.pendingInput.length > 0 });
           else if (frame.streamId === 'history') {
             if (frame.value?.type === 'snapshot') clearTimeout(opening);
@@ -105,7 +185,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin }) 
         } catch { client.close(1011, 'Invalid stream'); }
       });
       client.on('message', () => client.close(1008, 'Read-only channel'));
-      client.once('close', () => { clearInterval(heartbeat); upstream.terminate(); });
+      client.once('close', () => { clearInterval(heartbeat); connections.delete(connectionId); upstream.terminate(); });
       client.on('error', () => upstream.terminate());
       upstream.on('error', () => { send({ type: 'error', message: '实时连接失败，请检查连接或切换兼容模式' }); client.close(1011); });
       upstream.once('close', () => { if (client.readyState === WebSocket.OPEN) client.close(1012); });

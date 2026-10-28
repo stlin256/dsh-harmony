@@ -35,7 +35,7 @@ export class NativeHarnessClient {
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/none|native\/(?:sessions|create|page|prompt|cancel))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/none|native\/(?:sessions|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -79,25 +79,31 @@ export class NativeHarnessClient {
 
   async state(): Promise<GatewayState> { return JSON.parse(await this.request('/pocket/api/state')) as GatewayState; }
   async sessions(): Promise<NativeSessionList> { return JSON.parse(await this.request('/pocket/api/native/sessions')) as NativeSessionList; }
-  async create(): Promise<string> {
+  async create(cwd: string = '', agentPreset: string = ''): Promise<string> {
     const result = JSON.parse(await this.request('/pocket/api/native/create', http.RequestMethod.POST,
-      JSON.stringify({ requestId: util.generateRandomUUID() }))) as NativeCreatedSession;
+      JSON.stringify({ requestId: util.generateRandomUUID(), cwd: cwd || undefined, agentPreset: agentPreset || undefined }))) as NativeCreatedSession;
     return result.id;
   }
   async page(id: string, before: number, throughSeq: number = -1): Promise<NativeFrame> {
     return JSON.parse(await this.request('/pocket/api/native/page', http.RequestMethod.POST,
       JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))) as NativeFrame;
   }
-  async prompt(id: string, text: string): Promise<void> {
+  async prompt(id: string, text: string, mode: string = 'queue'): Promise<void> {
     this.uncertain.add(id);
     try {
       await this.request('/pocket/api/native/prompt', http.RequestMethod.POST,
-        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text }));
+        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode }));
     } catch (error) {
       if (error instanceof NativeHttpError && error.status >= 400 && error.status < 500) this.uncertain.delete(id);
       throw error;
     }
     this.uncertain.delete(id);
+  }
+  async answer(body: string): Promise<void> {
+    await this.request('/pocket/api/native/answer', http.RequestMethod.POST, body);
+  }
+  async operation(body: string): Promise<string> {
+    return this.request('/pocket/api/native/operation', http.RequestMethod.POST, body);
   }
   async cancel(id: string): Promise<void> {
     await this.request('/pocket/api/native/cancel', http.RequestMethod.POST, JSON.stringify({ sessionId: id }));

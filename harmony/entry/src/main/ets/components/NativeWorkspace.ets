@@ -1,6 +1,8 @@
 import { NativeHarnessClient, NativeHttpError } from '../services/NativeHarnessClient';
 import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel } from '../services/NativeSessionModel';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeInteraction } from './NativeInteraction';
+import { NativeSessionTools } from './NativeSessionTools';
 import { NativeMessageView } from './NativeMessageView';
 
 class MessageSource implements IDataSource {
@@ -31,6 +33,12 @@ export struct NativeWorkspace {
   @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
   @StorageLink('requestedSession') @Watch('openRequested') private requestedSession: string = '';
   @State private sessions: NativeSession[] = [];
+  @State private interactions: NativeFrame[] = [];
+  @State private toolsOpen: boolean = false;
+  @State private steer: boolean = false;
+  @State private newSessionOpen: boolean = false;
+  @State private newCwd: string = '';
+  @State private newPreset: string = '';
   @State private selected: string = '';
   @State private title: string = '工作空间';
   @State private draft: string = '';
@@ -98,7 +106,7 @@ export struct NativeWorkspace {
     else this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, action);
   }
   private backToSessions(): void {
-    this.animatePane(() => { this.showSessions = true; });
+    this.animatePane(() => { this.toolsOpen = false; this.showSessions = true; });
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', false);
   }
   private async updateWidget(): Promise<void> {
@@ -116,7 +124,7 @@ export struct NativeWorkspace {
   }
   private select(id: string): void {
     this.client.drafts.set(this.selected, this.draft);
-    this.selected = id; this.client.selectedId = id;
+    this.interactions = []; this.toolsOpen = false; this.selected = id; this.client.selectedId = id;
     const session = this.sessions.find((item: NativeSession) => item.id === id);
     this.title = session ? session.title : '会话';
     this.draft = this.client.drafts.get(id) || '';
@@ -135,6 +143,12 @@ export struct NativeWorkspace {
     this.connected = false;
     this.client.follow(id, (frame: NativeFrame): void => {
       if (!this.mounted || this.selected !== id) return;
+      if (frame.type === 'interaction') {
+        this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId).concat([frame]); return;
+      }
+      if (frame.type === 'interaction-ended') {
+        this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId); return;
+      }
       this.model.apply(frame);
       if (frame.type === 'snapshot') { this.connected = true; this.error = ''; this.retries = 0; }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
@@ -149,6 +163,7 @@ export struct NativeWorkspace {
       if (!state.authenticated) { this.onLogin(); return; }
     } catch (_) {}
     if (!this.mounted || !this.active || this.selected !== id) return;
+    this.interactions = [];
     this.error = '实时连接中断，正在重新同步；不会自动重发消息。';
     if (this.retries >= 5) { this.error = '连接已暂停，请点击刷新，或切换兼容模式。'; return; }
     this.retries++;
@@ -165,7 +180,8 @@ export struct NativeWorkspace {
     if (this.loading) return;
     this.loading = true;
     try {
-      const id = await this.client.create();
+      const id = await this.client.create(this.newCwd, this.newPreset);
+      this.newSessionOpen = false;
       if (!this.mounted) return;
       const value = await this.client.sessions();
       this.sessions = value.items; this.select(id);
@@ -178,7 +194,7 @@ export struct NativeWorkspace {
     this.sending = true; this.error = '';
     this.client.drafts.set(id, text);
     try {
-      await this.client.prompt(id, text);
+      await this.client.prompt(id, text, this.steer ? 'steer' : 'queue');
       this.client.drafts.set(id, '');
       if (this.selected === id) this.draft = '';
     } catch (error) { this.uncertain = this.client.uncertain.has(id); this.handleError(error as Error); }
@@ -207,7 +223,7 @@ export struct NativeWorkspace {
           .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
         Button('新建', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(13)
           .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          .enabled(!this.loading).onClick(() => { this.create(); })
+          .enabled(!this.loading).onClick(() => { this.newSessionOpen = true; })
       }.width('100%')
       List({ space: 4 }) {
         ForEach(this.sessions, (item: NativeSession) => {
@@ -238,6 +254,9 @@ export struct NativeWorkspace {
         }
         Text(this.title).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+        Button('工具', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
+          .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .onClick(() => { this.toolsOpen = true; })
         if (this.running) {
           Button('停止', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
             .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
@@ -263,7 +282,12 @@ export struct NativeWorkspace {
         .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
         .onReachStart(() => { if (this.hasMore) this.older(); })
         .onScroll(() => { this.followTail = this.scroller.isAtEnd(); })
-      if (this.waiting) {
+      ForEach(this.interactions, (frame: NativeFrame) => {
+        NativeInteraction({ client: this.client, frame, onDone: (): void => {
+          this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId);
+        } })
+      }, (frame: NativeFrame) => frame.eventId)
+      if (this.waiting && !this.interactions.length) {
         Button('有待处理输入 · 切换兼容模式', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(this.onCompatibility)
@@ -273,6 +297,10 @@ export struct NativeWorkspace {
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.client.uncertain.delete(this.selected); this.uncertain = false; })
       }
+      Row({ space: 8 }) {
+        Toggle({ type: ToggleType.Switch, isOn: this.steer }).onChange((value: boolean) => { this.steer = value; })
+        Text(this.steer ? '下一步干预' : '下一轮排队').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+      }.width('100%')
       Row({ space: 8 }) {
         TextArea({ text: this.draft, placeholder: '向 Harness 发送消息' }).layoutWeight(1).height(76)
           .fontSize(14).borderRadius(16)
@@ -291,18 +319,37 @@ export struct NativeWorkspace {
       Row() {
         if (this.wide || this.showSessions) { this.sessionList() }
         if (!this.showSessions || this.wide) {
-          if (this.selected) { this.conversation() }
+          if (this.selected) {
+            if (this.toolsOpen) {
+              NativeSessionTools({ client: this.client, sessionId: this.selected, sessionTitle: this.title,
+                onClose: (): void => { this.toolsOpen = false; },
+                onSelect: (id: string): void => { this.select(id); this.reload(); },
+                onRename: (title: string): void => { this.title = title; this.reload(); },
+                onCompatibility: this.onCompatibility }).layoutWeight(1)
+            } else { this.conversation() }
+          }
           else {
             Column({ space: 16 }) {
               Text('开始你的任务').fontSize(24).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
               Text('选择一个会话，或新建会话连接 Harness。').fontSize(14).fontColor(this.dark ? '#CFD3D6' : '#61666B')
               Button('新建会话', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(14)
                 .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115').fontColor(this.dark ? '#151517' : '#FFFFFF')
-                .enabled(!this.loading).onClick(() => { this.create(); })
+                .enabled(!this.loading).onClick(() => { this.newSessionOpen = true; })
             }.layoutWeight(1).height('100%').justifyContent(FlexAlign.Center).padding(24)
           }
         }
       }.width('100%').layoutWeight(1)
+      if (this.newSessionOpen) {
+        Column({ space: 8 }) {
+          Text('新建会话').fontSize(16).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          TextInput({ text: this.newCwd, placeholder: '工作目录（留空使用默认目录）' }).onChange((value: string) => { this.newCwd = value; })
+          TextInput({ text: this.newPreset, placeholder: 'Agent Preset（留空使用默认配置）' }).onChange((value: string) => { this.newPreset = value; })
+          Row({ space: 8 }) {
+            Button('取消').height(44).onClick(() => { this.newSessionOpen = false; })
+            Button('创建').height(44).enabled(!this.loading).onClick(() => { this.create(); })
+          }
+        }.padding(16).width('100%')
+      }
       if (this.error) {
         Text(this.error).fontSize(12).padding(12).fontColor(this.dark ? '#FF9393' : '#C53030')
       }

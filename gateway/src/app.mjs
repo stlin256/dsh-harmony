@@ -24,7 +24,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   if (!['passkey', 'none'].includes(mode) || (mode === 'none' && !allowNoAuth)) throw Error('No-auth requires explicit ALLOW_NO_AUTH=true');
   if (!eventSecret || eventSecret.length < 32) throw Error('EVENT_SECRET must have at least 32 characters');
   if (mode === 'passkey' && (!bootstrapSecret || bootstrapSecret.length < 32)) throw Error('BOOTSTRAP_SECRET must have at least 32 characters');
-  const native = createNativeHarness({ upstream: target.origin, upstreamCookie, publicOrigin: origin });
+  const native = createNativeHarness({ upstream: target.origin, upstreamCookie, publicOrigin: origin, ownerOf: req => session(req) || 'anonymous' });
   const app = express();
   app.disable('x-powered-by');
   const challenges = new Map();

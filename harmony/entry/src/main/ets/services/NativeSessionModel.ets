@@ -24,8 +24,23 @@ export class NativeSessionList {
   truncated: boolean = false;
   items: NativeSession[] = [];
 }
+export class NativeOption { label: string = ''; description: string = ''; }
+export class NativeIntent { kind: string = ''; approve: string = ''; reject: string = ''; always: string = ''; }
+export class NativeQuestion {
+  id: string = ''; header: string = ''; question: string = ''; detail: string = '';
+  multiSelect: boolean = false; options: NativeOption[] = []; intent: NativeIntent | null = null;
+}
+export class NativeLocalized { zh: string = ''; en: string = ''; }
+export class NativeInteractionRequest {
+  toolName: string = ''; reason: string = ''; displayReason: NativeLocalized | null = null;
+  questions: NativeQuestion[] = [];
+}
 export class NativeReplacement { start: number = -1; end: number = -1; }
 export class NativeFrame {
+  connectionId: string = '';
+  eventId: string = '';
+  interaction: string = '';
+  request: NativeInteractionRequest = new NativeInteractionRequest();
   replacements: NativeReplacement[] = [];
   type: string = '';
   messages: NativeMessage[] = [];
