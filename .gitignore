@@ -1,0 +1,16 @@
+node_modules/
+.env
+.env.*
+!.env.example
+**/.hvigor/
+**/oh_modules/
+**/build/
+**/local.properties
+harmony/build-profile.json5
+*.p12
+*.p7b
+*.cer
+*.keystore
+gateway/data/
+*.log
+.DS_Store
