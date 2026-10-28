@@ -1,10 +1,20 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>DSH Pocket</title><link rel="stylesheet" href="/pocket/style.css"><script src="/pocket/vendor.js" defer></script><script src="/pocket/pocket.js" defer></script></head>
-<body><main><header><span class="logo">D</span><div><h1>DSH Pocket</h1><p>你的随身工作空间</p></div></header>
-<section><h2 id="heading">连接 DeepSeek Harness</h2><p id="status" role="status">正在检查连接…</p>
-<label id="secret-label" hidden>首次配对密钥<input id="secret" type="password" autocomplete="off" placeholder="由服务管理员提供"></label>
-<div class="actions"><button id="login" hidden>使用 Passkey 登录</button><button id="register" hidden>创建 Passkey</button><button id="none" hidden>进入工作空间</button><a id="workspace" href="/" hidden>打开工作空间 ↗</a></div>
-<p id="compat" hidden>当前 WebView 无法使用 Passkey。请升级系统，并确认签名包含 FIDO2 权限；可在支持 Passkey 的浏览器中验证网关配置。</p></section>
-<section id="notifications" hidden><h2>任务通知</h2><p>任务完成、失败或需要确认时发送通知。锁屏上仅显示通用提示。</p><div class="actions"><button id="enable">开启通知</button><button id="disable" class="secondary">关闭通知</button><button id="logout" class="secondary">退出登录</button></div><p id="push-status" role="status"></p></section>
-<section id="session" hidden><h2>任务有新进展</h2><p>会话标识：<code id="session-id"></code></p><p>打开工作空间，从会话列表选择对应任务。</p><a href="/">查看工作空间 ↗</a></section>
-<footer>DSH Pocket · HarmonyOS companion<br>原版 Harness 界面 · 系统 Passkey · Huawei Push</footer></main></body></html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>设置 · DSH Pocket</title><script src="/pocket/appearance.js"></script><link rel="stylesheet" href="/pocket/style.css"><script src="/pocket/vendor.js" defer></script><script src="/pocket/pocket.js" defer></script></head>
+<body><main class="settings-shell">
+<aside class="rail"><header><span class="logo" aria-hidden="true">D</span><div><h1>设置</h1><p>DSH Pocket</p></div></header>
+<nav aria-label="应用设置"><button class="nav-item" data-section="general" aria-current="page"><span aria-hidden="true">⌘</span>通用</button><button class="nav-item" data-section="appearance"><span aria-hidden="true">◐</span>外观与动效</button><button class="nav-item" data-section="about"><span aria-hidden="true">ⓘ</span>关于</button></nav>
+<a class="back-link" href="/">返回工作空间 <span aria-hidden="true">↗</span></a></aside>
+<div class="content"><div class="content-heading"><div><p class="eyebrow">应用设置</p><h2 id="page-title">通用</h2></div><span class="badge">HarmonyOS</span></div>
+<div id="general" class="settings-page">
+<section><h3 id="heading">连接 DeepSeek Harness</h3><p id="status" role="status" aria-live="polite">正在检查连接…</p>
+<label id="secret-label" hidden>首次配对密钥<input id="secret" type="password" autocomplete="off" placeholder="输入管理员提供的密钥"></label>
+<div class="actions"><button id="login" class="primary" hidden>使用 Passkey 登录</button><button id="register" class="primary" hidden>创建 Passkey</button><button id="none" class="primary" hidden>进入工作空间</button><a id="workspace" class="button primary" href="/" hidden>打开工作空间 <span aria-hidden="true">↗</span></a></div>
+<p id="compat" class="notice" hidden>当前系统暂不支持 Passkey，请更新系统后重试，或使用支持 Passkey 的浏览器登录。</p></section>
+<section id="notifications" hidden><h3>通知</h3><div class="setting-row"><div><h4>任务提醒</h4><p>任务完成、失败或需要审批时通知你。</p></div><span class="badge">此设备</span></div><div class="actions"><button id="enable" class="primary">开启通知</button><button id="disable" class="secondary">关闭通知</button></div><p id="push-status" role="status" aria-live="polite"></p><p class="hint">锁屏仅显示通用提示，不展示对话内容。</p></section>
+<section id="session" hidden><h3>任务有新进展</h3><p>会话标识：<code id="session-id"></code></p><p>打开工作空间，从会话列表选择对应任务。</p><a class="button secondary" href="/">查看工作空间 ↗</a></section>
+<section id="account" hidden><h3>连接管理</h3><div class="setting-row"><div><h4>退出当前连接</h4><p>撤销此登录会话的通知注册，并返回连接向导。</p></div><button id="logout" class="secondary danger">退出</button></div><p id="account-status" role="status" aria-live="polite"></p></section>
+</div>
+<div id="appearance" class="settings-page" hidden><section><h3>外观</h3><div class="setting-row"><div><h4>与工作空间保持一致</h4><p>应用设置和原生栏跟随当前 Harness 的明暗主题；首次连接时跟随系统。</p></div><span class="badge" id="theme-label">跟随系统</span></div><p class="hint">工作空间的主题仍在 Harness 原版设置中调整。</p></section>
+<section><h3>动态效果</h3><div class="setting-row"><div><h4>减少动态效果</h4><p>关闭应用设置的入场和位移动画，保留清晰的状态反馈。</p></div><input id="reduce-motion" class="switch" type="checkbox" role="switch" aria-label="减少动态效果"></div><p class="hint">系统开启减少动态效果时，始终优先遵循系统偏好。</p></section></div>
+<div id="about" class="settings-page" hidden><section><h3>DSH Pocket</h3><p>随身连接你的 DeepSeek Harness 工作空间。</p><div class="setting-row"><h4>界面</h4><span class="detail">原版 Harness Web</span></div><div class="setting-row"><h4>客户端</h4><span class="detail">HarmonyOS · ArkWeb</span></div><div class="setting-row"><h4>登录</h4><span class="detail">系统 Passkey</span></div><div class="setting-row"><h4>通知</h4><span class="detail">Huawei Push</span></div></section></div>
+<footer>DSH Pocket <span aria-hidden="true">·</span> DeepSeek Harness companion</footer></div></main></body></html>

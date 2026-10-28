@@ -2,6 +2,28 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const pending = new Map();
+  const titles = { general: '通用', appearance: '外观与动效', about: '关于' };
+  for (const tab of document.querySelectorAll('[data-section]')) {
+    tab.onclick = () => {
+      for (const page of document.querySelectorAll('.settings-page')) page.hidden = page.id !== tab.dataset.section;
+      for (const item of document.querySelectorAll('[data-section]')) {
+        if (item === tab) item.setAttribute('aria-current', 'page');
+        else item.removeAttribute('aria-current');
+      }
+      $('page-title').textContent = titles[tab.dataset.section];
+    };
+  }
+  try { $('reduce-motion').checked = localStorage.getItem('pocket-reduce-motion') === 'true'; } catch {}
+  $('reduce-motion').onchange = () => {
+    const reduced = $('reduce-motion').checked;
+    document.documentElement.dataset.motion = reduced ? 'reduced' : 'system';
+    try { localStorage.setItem('pocket-reduce-motion', String(reduced)); } catch {}
+  };
+  try {
+    const host = localStorage.getItem('pocket-host-dark');
+    $('theme-label').textContent = host === 'true' ? '深色' : host === 'false' ? '浅色' : '跟随系统';
+  } catch {}
+
   window.__pocketReply = (id, ok, value) => {
     const item = pending.get(id);
     if (!item) return;
@@ -33,9 +55,10 @@
   function action(id, fn, output = 'status') {
     $(id).onclick = async () => {
       $(id).disabled = true;
+      $(id).setAttribute('aria-busy', 'true');
       try { await fn(); }
       catch (error) { $(output).textContent = error.message || '操作失败'; }
-      finally { $(id).disabled = false; }
+      finally { $(id).disabled = false; $(id).removeAttribute('aria-busy'); }
     };
   }
   async function passkey(register) {
@@ -67,7 +90,7 @@
     if (window.dshPocket) await native('clearSession');
     else location.replace('/pocket/');
   }
-  action('logout', logout, 'push-status');
+  action('logout', logout, 'account-status');
   async function initialize() {
     if (params.get('logout') === '1') { await logout(); return; }
     const state = await api('state', undefined, 'GET');
@@ -75,6 +98,7 @@
     $('status').textContent = state.authenticated ? '已准备就绪，可以继续你的任务。' : state.registered ? '使用你的 Passkey 安全登录。' : '首次连接：输入管理员提供的配对密钥，创建 Passkey。';
     $('workspace').hidden = !state.authenticated;
     $('notifications').hidden = !state.authenticated;
+    $('account').hidden = !state.authenticated;
     $('enable').disabled = !state.pushConfigured;
     if (!state.pushConfigured) $('push-status').textContent = '服务器尚未配置 Huawei Push 服务账号';
     if (!state.authenticated && state.mode === 'passkey') {
