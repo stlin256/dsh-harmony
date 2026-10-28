@@ -10,6 +10,7 @@ export class NativeHttpError extends Error {
 }
 export class GatewayState {
   mode: string = '';
+  authOrigin: string = '';
   authenticated: boolean = false;
   pushConfigured: boolean = false;
 }
@@ -30,14 +31,15 @@ export class NativeHarnessClient {
   private async cookie(): Promise<string> {
     try {
       const cookies = await webview.WebCookieManager.fetchCookie(this.origin + '/');
-      const match = cookies.match(/(?:^|;\s*)(pocket=[A-Za-z0-9_-]{43})(?:;|$)/);
-      return match ? match[1] : '';
+      // Send only the selected origin's gateway session cookies; never follow redirects.
+      return cookies.split(';').map((item: string) => item.trim())
+        .filter((item: string) => /^(?:pocket|__Host-hpg_session|dsh-auth-[A-Za-z0-9_-]+)=[A-Za-z0-9_.-]+$/.test(item)).join('; ');
     } catch (_) { return ''; }
   }
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/none|native\/(?:sessions|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -70,7 +72,8 @@ export class NativeHarnessClient {
       const value = headers['set-cookie'] || headers['Set-Cookie'];
       const cookies: string[] = typeof value === 'string' ? [value] : Array.isArray(value) ? value as string[] : [];
       for (const cookie of cookies) {
-        if (path === '/pocket/api/auth/none' && /^pocket=/.test(cookie)) {
+        if ((path === '/pocket/api/auth/none' && /^pocket=/.test(cookie)) ||
+          (path === '/pocket/api/auth/native' && /^dsh-auth-[A-Za-z0-9_-]+=/.test(cookie))) {
           await webview.WebCookieManager.configCookie(this.origin + '/', cookie, false, true);
           await webview.WebCookieManager.saveCookieAsync();
         }
@@ -80,6 +83,9 @@ export class NativeHarnessClient {
   }
 
   async state(): Promise<GatewayState> { return JSON.parse(await this.request('/pocket/api/state')) as GatewayState; }
+  async loginNative(token: string): Promise<void> {
+    await this.request('/pocket/api/auth/native', http.RequestMethod.POST, JSON.stringify({ token: token }));
+  }
   async sessions(): Promise<NativeSessionList> { return JSON.parse(await this.request('/pocket/api/native/sessions')) as NativeSessionList; }
   async create(cwd: string = '', agentPreset: string = ''): Promise<string> {
     const result = JSON.parse(await this.request('/pocket/api/native/create', http.RequestMethod.POST,
@@ -97,7 +103,7 @@ export class NativeHarnessClient {
         JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode, images: images }));
     } catch (error) {
       if (error instanceof NativeHttpError && error.status >= 400 && error.status < 500) this.uncertain.delete(id);
-      throw error;
+      throw new Error(error instanceof Error ? error.message : String(error));
     }
     this.uncertain.delete(id);
   }

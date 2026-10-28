@@ -3,6 +3,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { normalizeFollow, normalizedHistory, sessionIdValid } from './native-protocol.mjs';
 
 export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ownerOf }) {
+  const credential = () => typeof upstreamCookie === 'function' ? upstreamCookie() : upstreamCookie;
   const connections = new Map();
   const target = new URL(upstream);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
@@ -11,7 +12,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     const endpoint = method === '$events/result' ? method : method === 'answerQuestion' ? 'userQuestions/answer' : 'session/' + method;
     const response = await fetch(new URL('/api/' + endpoint, target), {
       method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
-      headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: upstreamCookie },
+      headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: await credential() },
       body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: method === '$events/result' ? request : method === 'answerQuestion' ? { agent: request.sessionId, callId: request.callId, answer: request.answer } : method === 'list' ? { _request: request } : method === 'modelCatalog' ? {} : { request } } })
     });
     if (!response.ok) throw Error('Harness native API unavailable');
@@ -140,12 +141,13 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       await rpc('cancel', { sessionId: req.body.sessionId }, signal); res.json({ accepted: true });
     }));
   }
-  function upgrade(req, socket, head) {
+  async function upgrade(req, socket, head) {
     const id = new URL(req.url, publicOrigin).searchParams.get('sessionId');
     if (!sessionIdValid(id)) { socket.destroy(); return; }
+    const cookie = await credential();
     wss.handleUpgrade(req, socket, head, client => {
       const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
-      const upstream = new WebSocket(url, { headers: { Cookie: upstreamCookie, Origin: target.origin },
+      const upstream = new WebSocket(url, { headers: { Cookie: cookie, Origin: target.origin },
         handshakeTimeout: 10000, maxPayload: 0, followRedirects: false });
       const connectionId = randomUUID();
       const connection = { owner: ownerOf(req), clientId: '', pending: new Map(), send: value => send(value), cancelWait: eventId => {
@@ -162,7 +164,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       let delivery = Promise.resolve();
       let queued = 0;
       const send = value => {
-        if (client.readyState !== WebSocket.OPEN) return;
+        if (client.readyState !== WebSocket.OPEN) return Promise.resolve();
         const text = Buffer.from(JSON.stringify(value));
         queued++; upstream.pause();
         // Serialize fragments and await each socket write. A slow phone applies
@@ -175,6 +177,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         }).catch(() => { client.close(1011, 'Delivery interrupted'); }).finally(() => {
           queued--; if (queued === 0 && upstream.readyState === WebSocket.OPEN) upstream.resume();
         });
+        return delivery;
       };
       const opening = setTimeout(() => { send({ type: 'error', message: '等待会话快照超时，请重新连接' }); client.close(1011); }, 15000);
       opening.unref();
@@ -188,6 +191,18 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         ]) upstream.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/' + method, payload: { args: { request } } }));
       });
       let questionSeq = -1;
+      const retired = new Set();
+      let controlOpened = false;
+      const useControl = stream => {
+        retired.add(stream);
+        if (controlOpened) return;
+        controlOpened = true;
+        upstream.send(JSON.stringify({ type: 'open', streamId: 'control', endpoint: 'session/control', payload: { args: {} } }));
+        rpc('list', {}).then(value => {
+          const row = value?.items?.find(item => item.sessionId === id);
+          if (row) send({ type: 'state', running: row.running === true, waiting: false });
+        }).catch(() => {});
+      };
       const questions = (value, seq) => {
         if (!Number.isSafeInteger(seq) || seq < questionSeq || client.readyState !== WebSocket.OPEN) return;
         questionSeq = seq;
@@ -201,7 +216,10 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       upstream.on('message', raw => {
         try {
           const frame = JSON.parse(raw.toString());
-          if (frame.type === 'error') { send({ type: 'error', message: '实时会话不可用，请重新连接或切换兼容模式' }); client.close(1011); return; }
+          if (frame.type === 'error') {
+            if (['state', 'projections'].includes(frame.streamId) && frame.error?.code === 'gateway/invocation-unavailable') { useControl(frame.streamId); return; }
+            send({ type: 'error', message: '实时会话不可用，请重新连接或切换兼容模式' }).finally(() => client.close(1011)); return;
+          }
           if (frame.type === 'end' && frame.streamId?.startsWith('wait:')) {
             const eventId = frame.streamId.slice(5);
             if (connection.pending.has(eventId)) {
@@ -210,9 +228,15 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
             }
             return;
           }
-          if (frame.type === 'end') { client.close(1012, 'Stream ended'); return; }
+          if (frame.type === 'end') { if (!retired.has(frame.streamId)) client.close(1012, 'Stream ended'); return; }
           if (frame.type !== 'item') return;
-          if (frame.streamId === 'projections') {
+          if (frame.streamId === 'control') {
+            const value = frame.value;
+            if (value?.type === 'baseline') {
+              const baseline = value.value?.projections?.[id];
+              if (baseline) questions(baseline.values?.userQuestions, baseline.asOfSeq ?? -1);
+            } else if (value?.type === 'projection' && value.sessionId === id && value.key === 'userQuestions') questions(value.value, value.seq);
+          } else if (frame.streamId === 'projections') {
             if (frame.value?.type === 'ready') rpc('projections', { sessionId: id }).then(value => questions(value?.values?.userQuestions, value?.asOfSeq ?? -1)).catch(() => {});
             else if (frame.value?.type === 'projection' && frame.value.key === 'userQuestions') questions(frame.value.value, frame.value.seq);
           } else if (frame.streamId?.startsWith('wait:')) {
@@ -230,6 +254,9 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
           } else if (frame.streamId === 'interactions') {
             const value = frame.value;
             if (value.type === 'ready') connection.clientId = value.clientId;
+            else if (value.type === 'emit' && value.event === 'api-session/status' && value.args?.[0] === id) {
+              send({ type: 'state', running: value.args[1] === true, waiting: false });
+            }
             else if (value.type === 'cancel') {
               endInteraction(value.eventId);
             } else if (value.type === 'waterfall' && connection.clientId) {
@@ -249,7 +276,11 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
           else if (frame.streamId === 'history') {
             if (frame.value?.type === 'snapshot') clearTimeout(opening);
             const value = normalizeFollow(frame.value); if (value) send(value); }
-        } catch { client.close(1011, 'Invalid stream'); }
+        } catch (error) {
+          // Location-only diagnostics: never log frame data or exception messages.
+          console.error(JSON.stringify({ event: 'native_stream_error', kind: error?.name || 'Error', at: error?.stack?.split('\n')[1]?.trim() || '' }));
+          client.close(1011, 'Invalid stream');
+        }
       });
       client.on('message', () => client.close(1008, 'Read-only channel'));
       client.once('close', () => { clearInterval(heartbeat); connections.delete(connectionId); for (const pending of connection.pending.values()) clearTimeout(pending.timer); upstream.terminate(); });

@@ -15,6 +15,7 @@ export struct NativeSettings {
   onReturn: () => void = (): void => {};
   onModes: () => void = (): void => {};
   onLogin: () => void = (): void => {};
+  onLogout: () => Promise<void> = async (): Promise<void> => {};
   @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private themeMode: string = 'system';
@@ -77,6 +78,10 @@ export struct NativeSettings {
     if (this.busy) return;
     this.busy = true; this.status = '';
     try {
+      if (command === 'logout') {
+        await this.onLogout();
+        return;
+      }
       const state = await this.client.state();
       if (!state.authenticated) { this.onLogin(); return; }
       if (command === 'enablePush') {
@@ -92,9 +97,6 @@ export struct NativeSettings {
       } else if (command === 'sync') {
         const value = await this.client.request('/pocket/api/overview');
         await this.invoke('widgetSnapshot', value); this.status = '桌面卡片快照已同步';
-      } else if (command === 'logout') {
-        await this.client.request('/pocket/api/logout', http.RequestMethod.POST, '{}');
-        await this.invoke('clearSession', '');
       }
     } catch (_) { this.status = '操作失败，请检查登录状态和网络后重试'; }
     finally { this.busy = false; }
@@ -103,7 +105,7 @@ export struct NativeSettings {
   @Builder
   private heading(title: string, detail: string) {
     Text(title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-    Text(detail).fontSize(12).lineHeight('20fp').fontColor(this.dark ? '#CFD3D6' : '#61666B')
+    if (detail) { Text(detail).fontSize(12).lineHeight('20fp').fontColor(this.dark ? '#CFD3D6' : '#61666B') }
   }
   @Builder
   private actionButton(label: string, command: string) {
@@ -120,11 +122,11 @@ export struct NativeSettings {
           Button('返回', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
             .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B').onClick(this.onReturn)
         }.width('100%')
-        this.heading('界面模式', '原生模式使用 ArkUI 组件；完整插件界面和高级交互可在兼容模式中使用。')
+        this.heading('界面模式', '')
         Button('切换界面模式', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115').onClick(this.onModes)
         Divider().color(this.dark ? '#353638' : '#EBEEF2')
-        this.heading('外观与动效', '保持 Harness 中性设计，系统减少动态效果始终优先。')
+        this.heading('外观与动效', '')
         Row({ space: 8 }) {
           ForEach(['system', 'light', 'dark'], (mode: string) => {
             Button((this.themeMode === mode ? '✓ ' : '') + (mode === 'system' ? '跟随系统' : mode === 'light' ? '浅色' : '深色'), { type: ButtonType.Normal })
@@ -144,10 +146,10 @@ export struct NativeSettings {
             .accessibilityText('减少动态效果').onChange((value: boolean) => { this.setting('reduceMotion', value); })
         }.width('100%').constraintSize({ minHeight: 44 })
         Divider().color(this.dark ? '#353638' : '#EBEEF2')
-        this.heading('通知', '任务完成、失败和需要审批时提醒。关闭操作会撤销当前登录会话的通知注册。')
+        this.heading('通知', '任务与审批提醒')
         Row({ space: 8 }) { this.actionButton('开启通知', 'enablePush'); this.actionButton('关闭通知', 'disablePush') }
         Divider().color(this.dark ? '#353638' : '#EBEEF2')
-        this.heading('桌面卡片', '长按桌面 DSH Harmony 图标添加 2×2 入口或 2×4 概览。卡片只保留带时间的匿名快照。')
+        this.heading('桌面卡片', '长按桌面图标添加')
         Row() {
           Text('显示匿名任务数量').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           Toggle({ type: ToggleType.Switch, isOn: this.widgetDetails }).enabled(!this.busy)
@@ -155,7 +157,7 @@ export struct NativeSettings {
         }.width('100%').constraintSize({ minHeight: 44 })
         this.actionButton('同步桌面卡片', 'sync')
         Divider().color(this.dark ? '#353638' : '#EBEEF2')
-        this.heading('连接管理', '退出会撤销登录和通知注册，并清除本机网页数据及桌面快照。')
+        this.heading('连接管理', '')
         this.actionButton('退出当前连接', 'logout')
         if (this.status) { Text(this.status).fontSize(12).lineHeight('20fp').fontColor(this.dark ? '#CFD3D6' : '#61666B') }
         Text('DSH Harmony · 原生模式（实验）').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')

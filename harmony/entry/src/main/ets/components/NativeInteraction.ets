@@ -2,6 +2,25 @@ import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeFrame, NativeQuestion, NativeOption } from '../services/NativeSessionModel';
 
 class Answer { id: string = ''; selected: string[] = []; custom: string = ''; }
+class AnswerPayload { answers: Answer[] = []; }
+class OperationAnswerPayload {
+  operation: string = 'answerQuestion';
+  sessionId: string = '';
+  callId: string = '';
+  answer: AnswerPayload = new AnswerPayload();
+}
+class ApprovalSubmissionPayload {
+  connectionId: string = '';
+  eventId: string = '';
+  delegate: boolean = false;
+  value: string = '';
+}
+class QuestionSubmissionPayload {
+  connectionId: string = '';
+  eventId: string = '';
+  delegate: boolean = false;
+  value: AnswerPayload = new AnswerPayload();
+}
 
 /** Only a live, correlated Host request can enable these decision controls. */
 @Component
@@ -58,11 +77,28 @@ export struct NativeInteraction {
     try {
       if (this.frame.callId) {
         if (!delegate) {
-          const result = await this.client.operation(JSON.stringify({ operation: 'answerQuestion', sessionId: this.frame.connectionId, callId: this.frame.callId, answer: { answers: this.answers } }));
+          const payload = new OperationAnswerPayload();
+          payload.sessionId = this.frame.connectionId;
+          payload.callId = this.frame.callId;
+          payload.answer.answers = this.answers;
+          const result = await this.client.operation(JSON.stringify(payload));
           if (result !== 'true') throw new Error('Question no longer answerable');
         }
-      } else await this.client.answer(JSON.stringify({ connectionId: this.frame.connectionId, eventId: this.frame.eventId,
-        delegate, value: this.frame.interaction === 'approval/request' ? value : { answers: this.answers } }));
+      } else if (this.frame.interaction === 'approval/request') {
+        const payload = new ApprovalSubmissionPayload();
+        payload.connectionId = this.frame.connectionId;
+        payload.eventId = this.frame.eventId;
+        payload.delegate = delegate;
+        payload.value = value;
+        await this.client.answer(JSON.stringify(payload));
+      } else {
+        const payload = new QuestionSubmissionPayload();
+        payload.connectionId = this.frame.connectionId;
+        payload.eventId = this.frame.eventId;
+        payload.delegate = delegate;
+        payload.value.answers = this.answers;
+        await this.client.answer(JSON.stringify(payload));
+      }
       this.onDone();
     } catch (_) {
       this.unconfirmed = true;

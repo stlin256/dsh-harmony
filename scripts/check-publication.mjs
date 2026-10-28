@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 const git = args => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const forbidden = (process.env.DSH_PRIVATE_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const failures = [];
+const inspectedBlobs = new Set();
 const inspect = (text, label) => {
   if (forbidden.some(value => text.toLowerCase().includes(value))) failures.push(label + ': private host');
   if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(text)) failures.push(label + ': private key');
@@ -16,7 +17,10 @@ for (const commit of git(['rev-list', '--all']).trim().split('\n').filter(Boolea
     if (!match) continue;
     const [, object, filename] = match;
     if (/\.(?:p12|p7b|keystore|sqlite|pem)$/.test(filename) || /(?:^|\/)\.env$/.test(filename)) failures.push(filename + ': forbidden artifact');
-    inspect(git(['cat-file', 'blob', object]), commit.slice(0, 8) + ':' + filename);
+    if (!inspectedBlobs.has(object)) {
+      inspect(git(['cat-file', 'blob', object]), commit.slice(0, 8) + ':' + filename);
+      inspectedBlobs.add(object);
+    }
   }
 }
 // Scan staged source too, before making the next commit.

@@ -17,10 +17,11 @@ async function exchange() {
 const db = openStore(env.DATA_FILE || './data/pocket.sqlite');
 const send = createPushSender(env.HUAWEI_SERVICE_ACCOUNT, env.HUAWEI_CATEGORY || 'MARKETING', env.HUAWEI_TEST_MESSAGE !== 'false');
 const pocket = createApp({ db, origin: env.PUBLIC_ORIGIN, upstream: env.UPSTREAM,
-  upstreamCookie: await exchange(), mode: env.AUTH_MODE || 'passkey', allowNoAuth: env.ALLOW_NO_AUTH === 'true',
-  bootstrapSecret: env.BOOTSTRAP_SECRET, eventSecret: env.EVENT_SECRET, pushConfigured: !!send });
+  upstreamCookie: env.AUTH_MODE === 'proxy' ? '' : await exchange(), mode: env.AUTH_MODE || 'passkey', allowNoAuth: env.ALLOW_NO_AUTH === 'true',
+  bootstrapSecret: env.BOOTSTRAP_SECRET, eventSecret: env.EVENT_SECRET, pushConfigured: !!send,
+  proxySecret: env.PROXY_SECRET, authOrigin: env.AUTH_ORIGIN || '' });
 const server = createServer(pocket.app);
-server.on('upgrade', pocket.upgrade);
+server.on('upgrade', (req, socket, head) => { pocket.upgrade(req, socket, head).catch(() => socket.destroy()); });
 let flushing = false;
 const tick = async () => {
   if (flushing) return;

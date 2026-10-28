@@ -45,6 +45,15 @@ async function setup(t, options = {}) {
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'ready',clientId:'client-generation',host:{home:'~'}}}));
           return;
         }
+        if (options.modern && ['session/observeState', 'session/observeProjections'].includes(frame.endpoint)) {
+          ws.send(JSON.stringify({ type: 'error', streamId: frame.streamId, error: { code: 'gateway/invocation-unavailable' } })); return;
+        }
+        if (frame.endpoint === 'session/control') {
+          assert.deepEqual(frame.payload, { args: {} });
+          ws.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { type: 'baseline', value: {
+            projections: { session: { asOfSeq: 0, values: { userQuestions: { active: [] } } } }
+          } } })); return;
+        }
         assert.equal(frame.payload.args.request.sessionId || frame.payload.args.request.address.sessionId,'session');
         if(frame.endpoint==='session/follow') {
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'snapshot',cursor:0,hasMore:false,
@@ -72,6 +81,25 @@ async function setup(t, options = {}) {
   const connect=(headers={})=>new WebSocket(`ws://127.0.0.1:${server.address().port}/pocket/native/live?sessionId=session`,{headers:{Host:'dsh.example.com',Origin:origin,Cookie:cookie,...headers}});
   return {call,calls,connect,openings,db,emit: value => { for (const ws of upstreamWS.clients) ws.send(JSON.stringify({type:'item',streamId:'interactions',value})); }};
 }
+
+test('modern Harness control stream replaces removed per-session observers without dropping history', async t => {
+  const { connect, openings } = await setup(t, { modern: true });
+  const ws = connect();
+  const frames = [];
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error('control fallback timeout')), 2000);
+    ws.on('message', raw => {
+      frames.push(JSON.parse(raw));
+      if (frames.some(x => x.type === 'questions') && frames.some(x => x.type === 'state') && frames.some(x => x.type === 'snapshot')) {
+        clearTimeout(timer); resolve();
+      }
+    });
+    ws.once('error', reject);
+  });
+  assert.equal(openings.filter(x => x.endpoint === 'session/control').length, 1);
+  assert.equal(frames.some(x => x.type === 'error'), false);
+  ws.close();
+});
 
 test('native adapter uses official RPC envelopes and keeps upstream credentials server-side',async t=>{
   const {call,calls}=await setup(t);

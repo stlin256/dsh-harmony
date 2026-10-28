@@ -1,0 +1,12 @@
+# Replace both example names. Caddy obtains public HTTPS certificates.
+agent.example.com {
+    reverse_proxy 127.0.0.1:4180 {
+        header_up -X-Forwarded-For
+        flush_interval -1
+    }
+}
+auth.example.com {
+    reverse_proxy 127.0.0.1:1411 {
+        header_up -X-Forwarded-For
+    }
+}

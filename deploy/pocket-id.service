@@ -1,0 +1,27 @@
+[Unit]
+Description=Pocket ID Passkey Identity Provider
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pocket-id
+Group=pocket-id
+WorkingDirectory=/var/lib/pocket-id
+EnvironmentFile=/etc/pocket-id/pocket-id.env
+ExecStart=/usr/local/bin/pocket-id
+Restart=on-failure
+RestartSec=5
+StateDirectory=pocket-id
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/pocket-id
+
+[Install]
+WantedBy=multi-user.target

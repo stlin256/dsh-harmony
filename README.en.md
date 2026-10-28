@@ -1,165 +1,42 @@
-<p align="center">
-  <img src="harmony/AppScope/resources/base/media/app_icon.svg" width="80" alt="DSH Harmony">
-</p>
-
 # DSH Harmony
-
-**Your DeepSeek Harness workspace, on HarmonyOS.**
 
 [简体中文](README.md) · English
 
-DSH Harmony is a HarmonyOS companion for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Connect to your self-hosted workspace from a phone or tablet, continue conversations, follow tool execution and streaming output, and keep track of progress through system notifications and home-screen widgets.
+A HarmonyOS companion for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Compatibility mode preserves the original Web workspace. The experimental native interface provides sessions, messages, tools and live interactions, with system notifications and home-screen widgets.
 
-Compatibility mode preserves the original Harness Web interface, while experimental native mode renders conversations and settings with ArkUI. The app adds Passkey authentication, Huawei Push, native materials, and desktop shortcuts around it.
+## Login options
 
-[Getting started](#getting-started) · [Deployment guide](docs/DEPLOYMENT.md) · [HarmonyOS 7 and widgets](docs/HARMONY7.md) · [License](LICENSE)
+| Method | Server requirements | App input |
+| --- | --- | --- |
+| **Native login — default** | Harness and this repository's single DSH plugin | Web origin and Harness access key |
+| **Pocket ID / Passkey — optional** | The plugin and a Pocket ID OIDC entry | Workspace HTTPS origin and system Passkey |
 
-## Features
-
-### Connect to your workspace
-
-- Use the original Harness conversations, tools, files, and streaming output.
-- Native connection setup, back navigation, refresh, system file selection, and keyboard avoidance.
-- Phone and tablet layouts, with app settings and native chrome following the workspace's light or dark theme.
-
-### Sign in with a Passkey
-
-- Register and authenticate with a system Passkey, verified by the gateway using WebAuthn.
-- Pair your first credential with an administrator-provided setup secret, then use your Passkey for subsequent sign-ins.
-- Explicitly enable unauthenticated access for a trusted, isolated network. Authentication policy remains under server control.
-
-### Receive task notifications
-
-- Huawei Push notifications for completion, failures, and approval requests.
-- A persistent server-side delivery queue with deduplication, retries, and expiration.
-- Generic lock-screen messages and notification registration revocation on sign-out.
-
-Notification display depends on device permissions, connectivity, and Huawei Push delivery policies.
-
-### Feel at home on HarmonyOS
-
-- System materials, touch lighting, and interaction feedback for native navigation controls on HarmonyOS 7.
-- Reduced-transparency and reduced-motion preferences, with fallbacks for power saving and unsupported capabilities.
-- System safe areas and font scaling, with native chrome kept clear of Web controls.
-
-The available material effects depend on the OS version, device capabilities, and system settings.
-
-### Open your workspace from the home screen
-
-| Widget | Purpose |
-| --- | --- |
-| **Workspace shortcut · 2×2** | Open Harness directly, or start connection setup when disconnected. |
-| **Task overview · 2×4** | View anonymous counts for running, approval-waiting, recently completed, and recently failed sessions; open the app to synchronize. |
-
-Task counts are hidden by default and can be enabled under **Settings → Desktop widgets**. Widgets store timestamped, anonymous snapshots without server addresses, project names, or conversation content. Counts reflect the latest session states observed by the plugin, rather than live connectivity or cumulative task totals.
-
-## Two interface modes
-
-| Mode | Experience |
-| --- | --- |
-| **Compatibility mode** | The default: original Harness Web UI, including its plugins and advanced interactions. |
-| **Native mode (experimental)** | HarmonyOS components for sessions, messages, code, tool details, and app settings, providing a foundation for native motion and responsiveness work. |
-
-Switch using the top mode button or app settings. Your selection is stored on the device, and both modes share the login session and server-side conversations. Native mode provides session controls, model and reasoning selection, queue editing, live approvals and questions, and image messages. Full native coverage is still in progress. Passkey authentication uses the shared ArkWeb page; remaining built-in features and third-party pages open in a temporary compatibility panel. The optional navigation plugin opens the matching session in that panel. Save unsent compatibility-mode drafts before switching.
-
-See the [interface modes guide](docs/UI-MODES.md) for the feature matrix, protocol, and acceptance checklist. Native mode still requires on-device performance and compatibility validation.
-
-## How it works
-
-```mermaid
-flowchart LR
-    App[DSH Harmony] <-->|HTTPS| Gateway[Authentication and notification gateway]
-    Gateway --> Harness[Harness Web]
-    Plugin[Harness event plugin] --> Gateway
-    Gateway --> Push[Huawei Push]
-    Push --> App
-    App -. Anonymous snapshots .-> Widgets[Home-screen widgets]
-```
-
-Harness runs on your server or computer. The gateway handles Passkey authentication, proxied access, and notification delivery. The native app displays the workspace and integrates with system services. Widgets use local snapshots synchronized by the app and do not hold login credentials.
-
-DSH Harmony currently supports **one user and one Harness instance per deployment**. Paired devices share that workspace.
+Native login uses Harness's official launch-token exchange and signed cookies. No separate relay or companion daemon is required. HTTP and HTTPS are supported. Pocket ID requires HTTPS. Both methods support LAN and public deployments. Login method and interface mode are separate choices.
 
 ## Getting started
 
-### 1. Prepare your environment
+1. Prepare a reachable Harness Web instance on Node.js 24.9+.
+2. Run `npm ci` in `gateway/`, then `node scripts/package-plugin.mjs` from the repository root.
+3. Install `.artifacts/dsh-harmony-plugin-0.1.2.tgz` using Harness's plugin manager and enable `@dsh-harmony/plugin`. See the [plugin guide](plugins/dsh-harmony/README.md) for manual installation.
+4. Install the app. Use the default native login with the Web origin and access key from the startup URL's `token` parameter. The key is not saved in app preferences; the signed cookie is used for later sessions.
+5. Optional Pocket ID setup instructions and tools are in the [Passkey deployment guide](docs/OIDC-DEPLOYMENT.md). Choose the lower Passkey option after configuring the server.
 
-| Component | Requirement |
-| --- | --- |
-| Harness | A working DeepSeek Harness Web service |
-| Gateway | Node.js **24.9+**, preferably 24.x, with access to Harness |
-| Network | An HTTPS domain with a valid certificate, reachable from your device; a reverse proxy supporting streaming and WebSockets |
-| Native build | DevEco Studio, the **API 26.0.0 SDK**, and a matching HarmonyOS signing configuration |
-| System notifications | A Huawei application project with Push Kit enabled and a server-side service account; optional if notifications are not needed |
+Configure binding, trusted hosts, port forwarding and TLS for your environment. See [deployment](docs/DEPLOYMENT.md).
 
-### 2. Deploy the gateway and plugin
+## Features and status
 
-Clone the repository and install the gateway dependencies:
+- Original Web workspace, plugins and advanced interactions in compatibility mode.
+- Experimental native sessions, text/images, tools, models, queues, approvals, questions and live output. See [interface modes](docs/UI-MODES.md) and [coverage](docs/NATIVE-COVERAGE.md).
+- Local theme, motion and connection settings; a failed or offline login can still be exited.
+- Entry and anonymous task widgets using timestamped snapshots, not continuous background updates.
+- Task/approval collection and a durable SQLite notification queue. Actual system delivery additionally requires Huawei Push Kit and a service account belonging to this Harmony app. Push is disabled until configured.
 
-```bash
-git clone https://github.com/stlin256/dsh-harmony.git
-cd dsh-harmony/gateway
-npm ci
-cp .env.example .env
-```
+SDK 26, API 23 compatibility. Release compilation and physical-device installation work through DevEco CLI. Native coverage and device compatibility remain under development.
 
-Follow the [deployment guide](docs/DEPLOYMENT.md) to configure your HTTPS origin, Harness upstream connection, pairing secret, and event secret. Then start the gateway:
+## Development
 
-```bash
-npm start
-```
+[Plugin](plugins/dsh-harmony/README.md) · [Deployment](docs/DEPLOYMENT.md) · [Pocket ID](docs/OIDC-DEPLOYMENT.md) · [HarmonyOS 7](docs/HARMONY7.md) · [Validation](docs/VALIDATION.md)
 
-Install the included event plugin in Harness and configure the same event secret. Configure a Huawei Push service account if you want system notifications.
+Run `npm ci && npm test` in `gateway/`. The native project is in `harmony/`; optional authentication tooling is in `deploy/`. `gateway/` contains modules reused inside the plugin and does not need to run separately. Keep signing configuration, deployment addresses, service accounts and user data outside Git; run `node scripts/check-publication.mjs` before publishing.
 
-### 3. Build and connect the app
-
-1. Open `harmony/` in DevEco Studio.
-2. Copy `build-profile.example.json5` to `build-profile.json5`, configure signing, and build and install the app.
-3. Enter the gateway's HTTPS address and pair a Passkey, or use the authentication mode permitted by your server.
-4. Enable notifications if desired, and long-press the app's home-screen icon to add a service widget.
-
-See the [deployment guide](docs/DEPLOYMENT.md) for signing permissions, reverse-proxy configuration, Passkey recovery, and Push setup.
-
-## Compatibility and status
-
-**Development preview.** HarmonyOS compilation and on-device acceptance are still pending. Native materials, Passkeys, and service-widget compatibility require device validation. The project currently provides a source-build workflow.
-
-The native project targets API 26.0.0 with a minimum compatibility configuration of API 23. New material APIs have runtime version guards, while older versions retain the basic interface. See the [validation checklist](docs/VALIDATION.md) for device testing.
-
-Widgets synchronize while the app is in the foreground and retain timestamped snapshots after it exits. This version does not provide live background widget updates. Unauthenticated mode is intended only for a trusted, isolated network and should not be exposed directly to the public internet.
-
-## Documentation and source layout
-
-The detailed guides below are currently in Chinese.
-
-| Resource | Contents |
-| --- | --- |
-| [Deployment](docs/DEPLOYMENT.md) | Gateway, plugin, HTTPS, signing, Passkeys, and Push setup |
-| [HarmonyOS 7 and widgets](docs/HARMONY7.md) | Native capabilities, widget privacy, state aggregation, and device acceptance |
-| [Interface modes](docs/UI-MODES.md) | Compatibility/native comparison, switching, live protocol, and acceptance |
-| [Interface design](docs/DESIGN.md) | Harness styling, themes, and motion conventions |
-| [Validation](docs/VALIDATION.md) | Automated coverage and device testing checklist |
-| [`harmony/`](harmony/) | ArkTS native application and service widgets |
-| [`gateway/`](gateway/) | Authentication gateway, settings interface, and notification service |
-| [`plugins/pocket-notify/`](plugins/pocket-notify/) | Harness event plugin |
-
-## Contributing
-
-Issues and improvements are welcome. For compatibility reports, include the app, OS, and SDK versions, reproduction steps, and sanitized diagnostics.
-
-Run the server and native service-logic tests with:
-
-```bash
-cd gateway
-npm ci
-npm test
-```
-
-Native service-logic tests use mocked system interfaces and do not replace DevEco builds or on-device testing. Before committing, run `node scripts/check-publication.mjs` from the repository root to check reachable history and staged content. Keep deployment addresses, access tokens, signing materials, and service accounts out of the repository.
-
-## Acknowledgments and license
-
-- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) provides the workspace and plugin ecosystem.
-- [claudecodeui](https://github.com/stlin256/claudecodeui) provides the reference foundation for the native Web shell and HarmonyOS integration.
-
-Licensed under [GNU AGPL v3](LICENSE). See [NOTICE](NOTICE) for source attribution.
+[AGPL v3](LICENSE); see [NOTICE](NOTICE). The optional OIDC gateway retains its [MIT license](deploy/pocket-id-gateway/LICENSE) and [upstream revision](deploy/pocket-id-gateway/UPSTREAM.md).

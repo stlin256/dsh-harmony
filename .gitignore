@@ -14,3 +14,5 @@ harmony/build-profile.json5
 gateway/data/
 *.log
 .DS_Store
+.artifacts/
+__pycache__/

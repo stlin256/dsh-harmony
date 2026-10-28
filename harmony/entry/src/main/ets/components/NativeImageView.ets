@@ -14,7 +14,7 @@ export struct NativeImageView {
   @State private loading: boolean = false;
   @State private error: string = '';
   @State private preview: boolean = false;
-  @State private scale: number = 1;
+  @State private previewScale: number = 1;
   private mounted: boolean = false;
   private source: image.ImageSource | null = null;
   aboutToAppear(): void { this.mounted = true; }
@@ -40,11 +40,11 @@ export struct NativeImageView {
   @Builder
   private fullImage() {
     Column({ space: 12 }) {
-      Button('关闭预览').height(44).onClick(() => { this.preview = false; this.scale = 1; })
+      Button('关闭预览').height(44).onClick(() => { this.preview = false; this.previewScale = 1; })
       if (this.bitmap) {
         Scroll() {
-          Image(this.bitmap).objectFit(ImageFit.Contain).width('100%').scale({ x: this.scale, y: this.scale })
-            .gesture(PinchGesture().onActionUpdate((event: GestureEvent) => { this.scale = Math.max(1, event.scale); }))
+          Image(this.bitmap).objectFit(ImageFit.Contain).width('100%').scale({ x: this.previewScale, y: this.previewScale })
+            .gesture(PinchGesture().onActionUpdate((event: GestureEvent) => { this.previewScale = Math.max(1, event.scale); }))
         }.scrollable(ScrollDirection.Free).layoutWeight(1).width('100%')
       }
     }.width('100%').height('100%').padding(16).backgroundColor(this.dark ? '#151517' : '#FFFFFF')

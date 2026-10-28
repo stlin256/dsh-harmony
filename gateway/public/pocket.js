@@ -52,6 +52,7 @@
     return response.json();
   }
   const params = new URLSearchParams(location.search);
+  let loginMode = '';
   let device = localStorage.getItem('pocket-device');
   if (!device) { device = crypto.randomUUID(); localStorage.setItem('pocket-device', device); }
   function action(id, fn, output = 'status') {
@@ -99,10 +100,14 @@
   action('sync-widget', syncWidget, 'widget-status');
   action('login', () => passkey(false));
   action('register', () => passkey(true));
-  action('none', async () => { await api('auth/none', {}); location.replace('/'); });
+  action('none', async () => {
+    await api(loginMode === 'host' ? 'auth/native' : 'auth/none', loginMode === 'host' ? { token: $('secret').value } : {});
+    $('secret').value = ''; location.replace('/pocket/');
+  });
   action('enable', async () => {
     // A no-auth network still gets a private device-management cookie.
     const state = await api('state', undefined, 'GET');
+    loginMode = state.mode;
     if (state.mode === 'none') await api('auth/none', {});
     const token = await native('enablePush');
     await api('device', { id: device, token });
@@ -167,7 +172,14 @@
       $('secret-label').hidden = state.registered;
       $('compat').hidden = !!window.PublicKeyCredential;
     }
-    $('none').hidden = state.mode !== 'none';
+    $('none').hidden = state.authenticated || !['none', 'host'].includes(state.mode);
+    if (state.mode === 'host' && !state.authenticated) {
+      $('secret-label').hidden = false;
+      $('secret-label').firstChild.textContent = '访问密钥';
+      $('secret').placeholder = '访问密钥';
+      $('none').textContent = '登录';
+      $('status').textContent = '登录工作空间';
+    }
     if (params.get('mode') === 'none' && state.mode !== 'none') $('status').textContent = '此服务要求 Passkey 登录，客户端选择不能更改服务端策略。';
     const session = params.get('session');
     if (state.authenticated && session && /^[A-Za-z0-9_-]{1,160}$/.test(session)) {
