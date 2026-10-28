@@ -4,6 +4,8 @@ import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
 import { WindowAppearance } from './WindowAppearance';
 import { NativeExperience } from './NativeExperience';
+import { preferences } from '@kit.ArkData';
+import { util } from '@kit.ArkTS';
 import { OverviewSnapshot, WidgetStore } from './WidgetStore';
 
 export class PocketBridge {
@@ -25,7 +27,7 @@ export class PocketBridge {
     const caller = this.controller.getLastJavascriptProxyCallingFrameUrl();
     const top = this.controller.getUrl();
     if (!this.trusted(caller) || !this.trusted(top) || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || typeof value !== 'string' || value.length > 2048) return;
-    this.dispatch(command, value).then((value: string) => this.reply(id, true, value))
+    this.performNative(command, value).then((value: string) => this.reply(id, true, value))
       .catch(() => this.reply(id, false, '操作失败，请检查应用权限、连接和本机设置'));
   }
 
@@ -33,9 +35,36 @@ export class PocketBridge {
     return url === this.origin || url.startsWith(this.origin + '/');
   }
 
-  private async dispatch(command: string, value: string): Promise<string> {
+  // Called directly only by trusted ArkTS UI. The JavaScript proxy exposes request alone.
+  async performNative(command: string, value: string): Promise<string> {
+    if (command === 'nativeAuthenticated') {
+      await webview.WebCookieManager.saveCookieAsync();
+      AppStorage.setOrCreate<number>('nativeAuthRevision', (AppStorage.get<number>('nativeAuthRevision') || 0) + 1);
+      return '';
+    }
+    if (command === 'uiMode') {
+      if (value !== 'compatibility' && value !== 'native') throw new Error('Invalid mode');
+      const store = preferences.getPreferencesSync(this.context, { name: 'dsh-pocket' });
+      store.putSync('uiMode', value); await store.flush();
+      AppStorage.setOrCreate<string>('uiMode', value);
+      return '';
+    }
+    if (command === 'themeMode') {
+      if (!['system', 'light', 'dark'].includes(value)) throw new Error('Invalid theme');
+      const store = preferences.getPreferencesSync(this.context, { name: 'pocket-native-experience' });
+      store.putSync('themeMode', value); await store.flush();
+      AppStorage.setOrCreate<string>('nativeThemeMode', value);
+      return '';
+    }
+    if (command === 'deviceId') {
+      const store = preferences.getPreferencesSync(this.context, { name: 'pocket-native-device' });
+      let id = store.getSync('id', '') as string;
+      if (!id) { id = util.generateRandomUUID(); store.putSync('id', id); await store.flush(); }
+      return id;
+    }
     if (command === 'nativeState') {
       const state = JSON.parse(NativeExperience.state(this.context)) as Record<string, Object>;
+      state['uiMode'] = AppStorage.get<string>('uiMode') || 'compatibility';
       state['widgetDetails'] = WidgetStore.detailsEnabled(this.context);
       return JSON.stringify(state);
     }
@@ -66,6 +95,7 @@ export class PocketBridge {
     }
     if (command === 'widgetDisconnected') { await WidgetStore.clear(this.context); return ''; }
     if (command === 'appearanceDark' || command === 'appearanceLight') {
+      if (AppStorage.get<string>('uiMode') === 'native' && AppStorage.get<boolean>('nativeAuthSurface') !== true) return '';
       AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
       WindowAppearance.apply(command === 'appearanceDark');
       return '';

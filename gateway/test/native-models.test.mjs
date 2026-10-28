@@ -129,3 +129,83 @@ test('form metadata resolves actual static card pages and resources', () => {
     assert.doesNotMatch(source, /fetch\(|Web\(|INTERNET|cookie|serverOrigin/);
   }
 });
+
+test('native session reducer restores streams, deduplicates replay and replaces history', () => {
+  const {NativeSessionModel}=load('NativeSessionModel',{});
+  const model=new NativeSessionModel();
+  model.apply({type:'snapshot',cursor:1,messages:[{id:'event-1',seq:1,text:'old'}],hasMore:false,attemptId:'attempt',nextIndex:2,text:'hel',reasoning:''});
+  model.apply({type:'delta',attemptId:'attempt',index:2,text:'lo',reasoning:''});
+  model.apply({type:'delta',attemptId:'attempt',index:2,text:'DUPLICATE',reasoning:''});
+  assert.equal(model.streamText,'hello');
+  assert.throws(()=>model.apply({type:'delta',attemptId:'attempt',index:4,text:'gap'}));
+  model.apply({type:'event',seq:2,replaceStart:1,replaceEnd:1,message:{id:'event-2',seq:2,text:'new'}});
+  model.apply({type:'event',seq:2,replaceStart:-1,replaceEnd:-1,message:{id:'event-2',seq:2,text:'duplicate'}});
+  assert.equal(model.messages.length,1);assert.equal(model.messages[0].text,'new');
+  model.apply({type:'state',running:true,waiting:true});assert.equal(model.waiting,true);
+  model.apply({type:'end',attemptId:'attempt'});assert.equal(model.streamText,'');
+  model.prepend({messages:[{seq:0,id:'event-0',text:'older'},{seq:2,id:'event-2',text:'new'}],hasMore:false});
+  assert.equal(model.messages.length,2);
+});
+
+test('native transport shares only gateway cookies, disables redirects and never retries prompts', async () => {
+  const calls = [], configured = [];
+  let code = 200, made = 0;
+  let cookie = Promise.resolve('other=hidden; pocket=' + 'a'.repeat(43));
+  const socketCallbacks = new Map();
+  const socket = { on: (event, callback) => socketCallbacks.set(event, callback), off: event => socketCallbacks.delete(event),
+    connect: async () => true, close: async () => true };
+  const network = { http: { RequestMethod: { GET:'GET',POST:'POST' }, HttpDataType:{STRING:'string'}, createHttp:()=>({
+    async request(url, options) { calls.push({url,options}); return {responseCode:code,header:{'set-cookie':'pocket='+'b'.repeat(43)+'; Path=/; Secure; HttpOnly'},result:'{}'}; }, destroy(){} }) },
+    webSocket:{createWebSocket:()=>{made++;return socket;}} };
+  const {NativeHarnessClient}=load('NativeHarnessClient',{
+    '@kit.NetworkKit':network,'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookie:()=>cookie,configCookie:async(...args)=>configured.push(args),saveCookieAsync:async()=>{}}}},
+    '@kit.ArkTS':{util:{generateRandomUUID:()=> 'request-id'}},'@kit.BasicServicesKit':{},'./NativeSessionModel':{}
+  });
+  const client=new NativeHarnessClient('https://dsh.example.com');
+  await client.request('/pocket/api/state');
+  assert.equal(calls[0].options.header.Cookie,'pocket='+'a'.repeat(43));
+  assert.equal(calls[0].options.maxRedirects,0);
+  assert.equal(calls[0].options.extraData,undefined);
+  assert.equal(configured.length,0,'ordinary responses must not overwrite the shared login cookie');
+  await client.request('/pocket/api/auth/none','POST','{}');
+  assert.equal(configured[0][2],false);assert.equal(configured[0][3],true);
+  code=502;
+  const before=calls.length;
+  await assert.rejects(()=>client.prompt('session','hello'));
+  assert.equal(calls.length,before+1,'a failed prompt must never be automatically replayed');
+  assert.equal(client.uncertain.has('session'),true);
+  await assert.rejects(()=>client.request('/pocket/api/../../other'));
+  let release;
+  cookie=new Promise(resolve=>{release=resolve;});
+  const pending=client.follow('session',()=>{},()=>{});
+  client.pause();release('pocket='+'a'.repeat(43));await pending;
+  assert.equal(made,0,'paused generation must not create a late socket');
+  cookie=Promise.resolve('pocket='+'a'.repeat(43));
+  let delivered=0;
+  await client.follow('session',()=>{delivered++;},()=>{});
+  const old=socketCallbacks.get('message');
+  client.pause();old(null,JSON.stringify({type:'state',running:true}));
+  assert.equal(delivered,0,'retired socket callbacks must not update the new interface');
+});
+
+test('UI mode preference persists and JavaScript cannot switch it from another origin', async () => {
+  const {preferences,disk}=storage();
+  const state=new Map();
+  const AppStorage={get:key=>state.get(key),setOrCreate:(key,value)=>state.set(key,value)};
+  const original=preferences.getPreferencesSync;
+  preferences.getPreferencesSync=(...args)=>({...original(...args),flush:async()=>{}});
+  const {PocketBridge}=load('PocketBridge',{
+    '@kit.AbilityKit':{},'@kit.ArkWeb':{},'@kit.NotificationKit':{},'@kit.PushKit':{},
+    '@kit.ArkData':{preferences},'@kit.ArkTS':{util:{generateRandomUUID:()=> 'device-id'}},
+    './WindowAppearance':{WindowAppearance:{}},'./NativeExperience':{NativeExperience:{state:()=> '{}'}},
+    './WidgetStore':{WidgetStore:{detailsEnabled:()=>false}}
+  },{AppStorage});
+  const controller={getLastJavascriptProxyCallingFrameUrl:()=> 'https://other.example.com/',getUrl:()=> 'https://dsh.example.com/',runJavaScript:async()=>{}};
+  const bridge=new PocketBridge(context,controller,'https://dsh.example.com',async()=>{});
+  await bridge.performNative('uiMode','native');
+  assert.equal(state.get('uiMode'),'native');assert.equal(disk.get('dsh-pocket').get('uiMode'),'native');
+  await assert.rejects(()=>bridge.performNative('uiMode','unknown'));
+  bridge.request('request','uiMode','compatibility');
+  await Promise.resolve();assert.equal(state.get('uiMode'),'native');
+  await bridge.performNative('themeMode','dark');assert.equal(state.get('nativeThemeMode'),'dark');
+});

@@ -11,6 +11,7 @@ export default class EntryAbility extends UIAbility {
     NativeExperience.changed();
   };
   onCreate(want: Want): void {
+    AppStorage.setOrCreate<boolean>('systemDark', this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', false);
     webview.WebviewController.initializeWebEngine();
     // Debug builds alone expose the standard HDC-forwarded inspection socket.
@@ -50,6 +51,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onConfigurationUpdate(config: Configuration): void {
+    AppStorage.setOrCreate<boolean>('systemDark', config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     this.updateTextScale(config);
     // A manually selected Harness theme takes precedence over an OS change.
     // System-following pages notify us when their own theme changes.

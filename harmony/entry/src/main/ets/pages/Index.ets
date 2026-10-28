@@ -5,6 +5,9 @@ import { webview } from '@kit.ArkWeb';
 import { picker } from '@kit.CoreFileKit';
 import { PocketBridge } from '../services/PocketBridge';
 import { WindowAppearance } from '../services/WindowAppearance';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
+import { NativeWorkspace } from '../components/NativeWorkspace';
+import { NativeSettings } from '../components/NativeSettings';
 import { NativeExperience, ChromeMaterialModifier } from '../services/NativeExperience';
 
 @Entry
@@ -15,6 +18,14 @@ struct Index {
   private store: preferences.Preferences | null = null;
   private bridge: PocketBridge | null = null;
   private presentation: string = '';
+  private nativeClient: NativeHarnessClient = new NativeHarnessClient('');
+  @StorageLink('systemDark') @Watch('applyNativeTheme') private systemDark: boolean = false;
+  @StorageLink('nativeThemeMode') @Watch('applyNativeTheme') private nativeThemeMode: string = 'system';
+  @StorageLink('uiMode') @Watch('modeChanged') private uiMode: string = 'compatibility';
+  @StorageLink('nativeAuthRevision') @Watch('authenticated') private authRevision: number = 0;
+  @State private authSurface: boolean = false;
+  @State private nativeSettings: boolean = false;
+  @State private modePicker: boolean = false;
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
   @StorageLink('nativeDark') private nativeDark: boolean = false;
   @StorageLink('nativeAppActive') @Watch('activityChanged') private appActive: boolean = true;
@@ -38,6 +49,8 @@ struct Index {
     this.presentation = util.TextDecoder.create('utf-8').decodeToString(
       await this.context.resourceManager.getRawFileContent('presentation.js'));
     this.store = await preferences.getPreferences(this.context, { name: 'dsh-pocket' });
+    const savedMode = this.store.getSync('uiMode', 'compatibility') as string;
+    this.uiMode = savedMode === 'native' ? 'native' : 'compatibility';
     this.address = this.store.getSync('origin', '') as string;
     this.mode = this.store.getSync('mode', 'passkey') as string;
     if (this.normalize(this.address)) await this.connect();
@@ -58,8 +71,11 @@ struct Index {
     try {
       if (this.origin && this.origin !== next) throw new Error('请先退出当前连接');
       this.origin = next;
+      this.nativeClient = new NativeHarnessClient(next);
       this.bridge = new PocketBridge(this.context, this.controller, next, async (): Promise<void> => {
         WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+        this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.uncertain.clear();
+        this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
         this.ready = false;
         this.origin = '';
         this.controller = new webview.WebviewController();
@@ -71,6 +87,7 @@ struct Index {
       await this.store?.flush();
       this.error = '';
       this.ready = true;
+      if (this.uiMode === 'native') this.openPocketRoute();
     } finally { this.busy = false; }
   }
 
@@ -79,6 +96,7 @@ struct Index {
   }
 
   private openNotification(): void {
+    if (this.uiMode === 'native' && !this.authSurface) return;
     if (!this.ready || !this.requestedSession || !this.allowed(this.controller.getUrl())) return;
     // Gateway persists the session hint; it does not invent a Harness SPA route.
     this.controller.loadUrl(this.origin + '/pocket/?session=' + encodeURIComponent(this.requestedSession));
@@ -86,7 +104,7 @@ struct Index {
   }
 
   private resumePage(): void {
-    if (!this.ready) return;
+    if (!this.ready || (this.uiMode === 'native' && !this.authSurface)) return;
     try {
       if (this.allowed(this.controller.getUrl())) {
         this.controller.runJavaScript('window.__pocketResumeOverview?.()').catch(() => {});
@@ -96,11 +114,16 @@ struct Index {
 
   private activityChanged(): void {
     if (this.appActive) { this.resumePage(); return; }
+    this.nativeClient.pause();
     try { this.controller.runJavaScript('window.__pocketSuspendOverview?.()').catch(() => {}); } catch (_) {}
   }
 
   private openPocketRoute(): void {
     if (!this.ready || !this.requestedPocketRoute) return;
+    if (this.uiMode === 'native' && !this.authSurface) {
+      this.nativeSettings = this.requestedPocketRoute !== 'workspace';
+      this.requestedPocketRoute = ''; return;
+    }
     try { if (!this.allowed(this.controller.getUrl())) return; } catch (_) { return; }
     const route = this.requestedPocketRoute;
     this.requestedPocketRoute = '';
@@ -108,7 +131,77 @@ struct Index {
     this.controller.loadUrl(this.origin + path);
   }
 
+  private modeChanged(): void {
+    this.nativeClient.pause();
+    this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
+    this.error = '';
+    if (this.uiMode === 'native') {
+      this.applyNativeTheme();
+      try { this.controller.runJavaScript('window.__pocketSuspendOverview?.()').catch(() => {}); } catch (_) {}
+      this.openPocketRoute();
+    }
+  }
+  private applyNativeTheme(): void {
+    if (this.uiMode === 'native' && !this.authSurface) {
+      AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
+      WindowAppearance.apply(this.nativeThemeMode === 'dark' || (this.nativeThemeMode === 'system' && this.systemDark));
+    }
+  }
+  private loginSurface(): void {
+    this.invokeNative('widgetDisconnected', '').catch(() => {});
+    AppStorage.setOrCreate<boolean>('nativeAuthSurface', true);
+    this.authSurface = true;
+  }
+  private authenticated(): void { if (this.uiMode === 'native') { this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.applyNativeTheme(); } }
+  private async selectMode(mode: string): Promise<void> {
+    this.modePicker = false;
+    if (this.bridge) await this.bridge.performNative('uiMode', mode);
+    else {
+      this.uiMode = mode; this.store?.putSync('uiMode', mode); await this.store?.flush();
+    }
+  }
+  private async invokeNative(command: string, value: string): Promise<string> {
+    if (!this.bridge) throw new Error('Not connected');
+    return await this.bridge.performNative(command, value);
+  }
+  private compatibility(): void {
+    if (this.nativeClient.selectedId) AppStorage.setOrCreate<string>('requestedSession', this.nativeClient.selectedId);
+    this.selectMode('compatibility').catch(() => { this.error = '切换失败，请重试'; });
+  }
+  private refreshContent(): void {
+    if (this.uiMode === 'native' && !this.authSurface) {
+      this.nativeSettings = false;
+      AppStorage.setOrCreate<number>('nativeRefreshRevision', (AppStorage.get<number>('nativeRefreshRevision') || 0) + 1);
+    } else this.controller.refresh();
+  }
+
+  @Builder
+  private modeSheet() {
+    Column({ space: 16 }) {
+      Text('界面模式').fontSize(20).fontWeight(FontWeight.Medium).fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+      Button((this.uiMode === 'compatibility' ? '✓  ' : '') + '兼容模式', { type: ButtonType.Normal })
+        .width('100%').height(48).borderRadius(12).fontSize(14)
+        .backgroundColor(this.nativeDark ? '#353638' : '#F5F6F7').fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+        .onClick(() => { this.selectMode('compatibility').catch(() => { this.error = '切换失败，请重试'; }); })
+      Text('使用 Harness 原版 Web 界面，支持完整插件和高级交互。').fontSize(12).fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
+      Button((this.uiMode === 'native' ? '✓  ' : '') + '原生模式（实验）', { type: ButtonType.Normal })
+        .width('100%').height(48).borderRadius(12).fontSize(14)
+        .backgroundColor(this.nativeDark ? '#353638' : '#F5F6F7').fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+        .onClick(() => { this.selectMode('native').catch(() => { this.error = '切换失败，请重试'; }); })
+      Text('会话、文本消息、代码与工具事件、设置使用鸿蒙原生组件。高级内容和审批可切回兼容模式；登录验证共用系统认证页面。切换会重建当前界面，请先保存兼容模式中未发送的草稿。')
+        .fontSize(12).lineHeight(20).fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
+    }.padding(24).width('100%').alignItems(HorizontalAlign.Start)
+  }
+
   onBackPress(): boolean {
+    if (!this.ready) return false;
+    if (this.uiMode === 'native' && !this.authSurface) {
+      if (this.nativeSettings) { this.nativeSettings = false; return true; }
+      if (AppStorage.get<boolean>('nativeWorkspaceCanGoBack') === true) {
+        AppStorage.setOrCreate<number>('nativeBackRevision', (AppStorage.get<number>('nativeBackRevision') || 0) + 1); return true;
+      }
+      return false;
+    }
     if (this.ready && this.controller.accessBackward()) { this.controller.backward(); return true; }
     return false;
   }
@@ -119,16 +212,24 @@ struct Index {
       Text('DSH Harmony').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+      Button(this.uiMode === 'native' ? '原生' : '兼容', { type: ButtonType.Normal })
+        .height(this.titleHeight - 12).padding({ left: 10, right: 10 }).fontSize(12).borderRadius(12)
+        .backgroundColor(Color.Transparent).fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
+        .accessibilityText('切换界面模式').attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
+        .onClick(() => { this.modePicker = true; })
       Button('刷新', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
         .fontSize(13).borderRadius(12).accessibilityText('刷新工作空间').backgroundColor(Color.Transparent)
         .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
         .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
-        .onClick(() => { this.error = ''; this.controller.refresh(); })
+        .onClick(() => { this.error = ''; this.refreshContent(); })
       Button('设置', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
         .fontSize(13).borderRadius(12).accessibilityText('打开应用设置').backgroundColor(Color.Transparent)
         .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
         .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
-        .onClick(() => this.controller.loadUrl(this.origin + '/pocket/'))
+        .onClick(() => {
+          if (this.uiMode === 'native' && !this.authSurface) this.nativeSettings = true;
+          else this.controller.loadUrl(this.origin + '/pocket/');
+        })
     }.padding({ left: 20, right: 12, top: 4, bottom: 4 }).width('100%')
   }
 
@@ -136,43 +237,56 @@ struct Index {
   private pageContent() {
     Column() {
       if (this.ready) {
-        if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).width('100%').color(this.nativeDark ? '#5686FE' : '#4176E6').height(2) }
-        Web({ src: this.origin + '/pocket/?mode=' + this.mode, controller: this.controller })
-          .width('100%').layoutWeight(1)
-          .javaScriptAccess(true).domStorageAccess(true).databaseAccess(true)
-          .keyboardAvoidMode(WebKeyboardAvoidMode.RESIZE_CONTENT)
-          .onRenderExited(() => { this.error = '网页渲染已中断，请点击刷新恢复'; })
-          .fileAccess(false).mixedMode(MixedMode.None)
-          .darkMode(WebDarkMode.Auto).forceDarkAccess(false)
-          .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
-          .onControllerAttached(() => {
-            if (this.bridge !== null) this.controller.registerJavaScriptProxy(this.bridge, 'dshPocket', ['request']);
-          })
-          .onLoadIntercept((event) => {
-            const blocked = !this.allowed(event.data.getRequestUrl());
-            if (blocked) this.error = '已阻止站外跳转；请在系统浏览器打开外部链接';
-            return blocked;
-          })
-          .onWindowNew((event) => {
-            if (this.allowed(event.targetUrl)) this.controller.loadUrl(event.targetUrl);
-          })
-          .onProgressChange((event) => { this.progress = event.newProgress; })
-          .onPageEnd(() => {
-            if (this.allowed(this.controller.getUrl())) this.controller.runJavaScript(this.presentation).catch(() => {});
-            this.openNotification();
-            this.openPocketRoute();
-          })
-          .onErrorReceive((event) => {
-            if (event.request.isMainFrame()) this.error = '加载失败，请检查网络和 HTTPS 证书，然后点击刷新';
-          })
-          .onShowFileSelector((event) => {
-            const options = new picker.DocumentSelectOptions();
-            options.maxSelectNumber = event.fileSelector.getMode() === FileSelectorMode.FileOpenMultipleMode ? 10 : 1;
-            new picker.DocumentViewPicker(this.context).select(options)
-              .then((uris: string[]) => event.result.handleFileList(uris))
-              .catch(() => event.result.handleFileList([]));
-            return true;
-          })
+        if (this.uiMode === 'native' && !this.authSurface) {
+          if (this.nativeSettings) {
+            NativeSettings({ client: this.nativeClient,
+              invoke: (command: string, value: string): Promise<string> => this.invokeNative(command, value),
+              onReturn: (): void => { this.nativeSettings = false; }, onModes: (): void => { this.modePicker = true; },
+              onLogin: (): void => { this.loginSurface(); } })
+          } else {
+            NativeWorkspace({ client: this.nativeClient, onLogin: (): void => { this.loginSurface(); },
+              onSnapshot: async (value: string): Promise<void> => { await this.invokeNative('widgetSnapshot', value); },
+              onCompatibility: (): void => { this.compatibility(); } })
+          }
+        } else {
+          if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).width('100%').color(this.nativeDark ? '#5686FE' : '#4176E6').height(2) }
+          Web({ src: this.origin + '/pocket/?mode=' + this.mode, controller: this.controller })
+            .width('100%').layoutWeight(1)
+            .javaScriptAccess(true).domStorageAccess(true).databaseAccess(true)
+            .keyboardAvoidMode(WebKeyboardAvoidMode.RESIZE_CONTENT)
+            .onRenderExited(() => { this.error = '网页渲染已中断，请点击刷新恢复'; })
+            .fileAccess(false).mixedMode(MixedMode.None)
+            .darkMode(WebDarkMode.Auto).forceDarkAccess(false)
+            .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
+            .onControllerAttached(() => {
+              if (this.bridge !== null) this.controller.registerJavaScriptProxy(this.bridge, 'dshPocket', ['request']);
+            })
+            .onLoadIntercept((event) => {
+              const blocked = !this.allowed(event.data.getRequestUrl());
+              if (blocked) this.error = '已阻止站外跳转；请在系统浏览器打开外部链接';
+              return blocked;
+            })
+            .onWindowNew((event) => {
+              if (this.allowed(event.targetUrl)) this.controller.loadUrl(event.targetUrl);
+            })
+            .onProgressChange((event) => { this.progress = event.newProgress; })
+            .onPageEnd(() => {
+              if (this.allowed(this.controller.getUrl())) this.controller.runJavaScript(this.presentation).catch(() => {});
+              this.openNotification();
+              this.openPocketRoute();
+            })
+            .onErrorReceive((event) => {
+              if (event.request.isMainFrame()) this.error = '加载失败，请检查网络和 HTTPS 证书，然后点击刷新';
+            })
+            .onShowFileSelector((event) => {
+              const options = new picker.DocumentSelectOptions();
+              options.maxSelectNumber = event.fileSelector.getMode() === FileSelectorMode.FileOpenMultipleMode ? 10 : 1;
+              new picker.DocumentViewPicker(this.context).select(options)
+                .then((uris: string[]) => event.result.handleFileList(uris))
+                .catch(() => event.result.handleFileList([]));
+              return true;
+            })
+        }
       } else {
         Scroll() {
           Column({ space: 16 }) {
@@ -223,6 +337,7 @@ struct Index {
     .hideToolBar(true)
     .width('100%').height('100%')
     .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
+    .bindSheet(this.modePicker, this.modeSheet, { height: SheetSize.FIT_CONTENT, showClose: true })
   }
 
 }

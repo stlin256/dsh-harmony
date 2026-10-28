@@ -90,6 +90,12 @@
     } catch (error) { input.checked = !input.checked; $('widget-status').textContent = error.message; }
     finally { input.disabled = false; }
   };
+  $('ui-mode').onchange = async () => {
+    const input = $('ui-mode'); input.disabled = true;
+    try { await native('uiMode', input.value); }
+    catch (error) { $('mode-status').textContent = error.message; }
+    finally { input.disabled = false; }
+  };
   action('sync-widget', syncWidget, 'widget-status');
   action('login', () => passkey(false));
   action('register', () => passkey(true));
@@ -120,12 +126,21 @@
     let section = params.get('section');
     try { section = section || sessionStorage.getItem('pocket-settings-section'); } catch {}
     let nativeReady = false;
+    let nativeUiMode = '';
     if (titles[section]) document.querySelector('[data-section="' + section + '"]').click();
     if (window.dshPocket) {
       try {
         const host = JSON.parse(await native('nativeState'));
         nativeReady = true;
+        if (host.uiMode === 'native' || host.uiMode === 'compatibility') {
+          nativeUiMode = host.uiMode;
+          device = await native('deviceId');
+          try { localStorage.setItem('pocket-device', device); } catch {}
+          $('interface-mode').hidden = false;
+          $('ui-mode').value = host.uiMode;
+        }
         $('native-surfaces').hidden = false;
+
         $('reduce-transparency').checked = host.reduceTransparency;
         $('reduce-motion').checked = host.reduceMotion;
         document.documentElement.dataset.motion = host.reduceMotion ? 'reduced' : 'system';
@@ -137,6 +152,7 @@
     $('widget-details').disabled = !nativeReady || !state.authenticated;
     $('sync-widget').disabled = !nativeReady || !state.authenticated;
     if (window.dshPocket) $('widget-status').textContent = state.authenticated ? '可以同步当前工作空间的匿名状态。' : '请先登录，再同步卡片。';
+    if (nativeUiMode === 'native' && state.authenticated) await native('nativeAuthenticated').catch(() => {});
     if (!state.authenticated) document.querySelector('[data-section=general]').click();
     $('heading').textContent = state.authenticated ? '工作空间已连接' : '登录工作空间';
     $('status').textContent = state.authenticated ? '已准备就绪，可以继续你的任务。' : state.registered ? '使用你的 Passkey 安全登录。' : '首次连接：输入管理员提供的配对密钥，创建 Passkey。';
