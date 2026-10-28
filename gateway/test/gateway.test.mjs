@@ -218,7 +218,9 @@ test('overview tracks concurrent approvals, ignores late events and requires aut
     assert.equal(response.status, 200);
   };
   const overview = async () => (await call('/pocket/api/overview')).json();
+  db.prepare('INSERT INTO devices VALUES (?,?,?)').run('overview-device', 'owner', 'token');
   await publish(0, 'run.started');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
   assert.equal((await overview()).running, 1);
   await publish(1, 'permission.required', 'one');
   await publish(2, 'permission.required', 'two');
@@ -226,6 +228,7 @@ test('overview tracks concurrent approvals, ignores late events and requires aut
   await publish(3, 'permission.resolved', 'one');
   assert.equal((await overview()).waiting, 1);
   await publish(4, 'permission.resolved', 'two');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0, 'resolved approval reminders must be revoked');
   assert.equal((await overview()).running, 1);
   await publish(6, 'run.completed');
   await publish(5, 'permission.required', 'late');

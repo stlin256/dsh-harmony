@@ -18,6 +18,10 @@ export function projectEvent(db, event, now) {
   } else {
     db.prepare('DELETE FROM pending_actions WHERE session = ?').run(event.sessionId);
   }
+  if (event.code !== 'permission.required' && !db.prepare('SELECT 1 FROM pending_actions WHERE session = ? LIMIT 1').get(event.sessionId)) {
+    // A delayed approval reminder must not survive resolution or turn end.
+    db.prepare("DELETE FROM jobs WHERE json_extract(payload, '$.sessionId') = ? AND json_extract(payload, '$.code') = 'permission.required'").run(event.sessionId);
+  }
   return true;
 }
 
