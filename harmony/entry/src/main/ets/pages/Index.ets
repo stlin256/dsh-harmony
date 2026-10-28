@@ -5,6 +5,7 @@ import { webview } from '@kit.ArkWeb';
 import { picker } from '@kit.CoreFileKit';
 import { PocketBridge } from '../services/PocketBridge';
 import { WindowAppearance } from '../services/WindowAppearance';
+import { NativeExperience, ChromeMaterialModifier } from '../services/NativeExperience';
 
 @Entry
 @Component
@@ -14,7 +15,12 @@ struct Index {
   private store: preferences.Preferences | null = null;
   private bridge: PocketBridge | null = null;
   private presentation: string = '';
+  @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
   @StorageLink('nativeDark') private nativeDark: boolean = false;
+  @StorageLink('nativeAppActive') @Watch('activityChanged') private appActive: boolean = true;
+  @StorageLink('nativeExperienceRevision') private experienceRevision: number = 0;
+  @StorageLink('pocketForegroundRevision') @Watch('resumePage') private foregroundRevision: number = 0;
+  @StorageLink('requestedPocketRoute') @Watch('openPocketRoute') private requestedPocketRoute: string = '';
   @State private origin: string = '';
   @State private address: string = '';
   @State private mode: string = 'passkey';
@@ -79,30 +85,63 @@ struct Index {
     this.requestedSession = '';
   }
 
+  private resumePage(): void {
+    if (!this.ready) return;
+    try {
+      if (this.allowed(this.controller.getUrl())) {
+        this.controller.runJavaScript('window.__pocketResumeOverview?.()').catch(() => {});
+      }
+    } catch (_) {}
+  }
+
+  private activityChanged(): void {
+    if (this.appActive) { this.resumePage(); return; }
+    try { this.controller.runJavaScript('window.__pocketSuspendOverview?.()').catch(() => {}); } catch (_) {}
+  }
+
+  private openPocketRoute(): void {
+    if (!this.ready || !this.requestedPocketRoute) return;
+    try { if (!this.allowed(this.controller.getUrl())) return; } catch (_) { return; }
+    const route = this.requestedPocketRoute;
+    this.requestedPocketRoute = '';
+    const path = route === 'workspace' ? '/' : route === 'overview' ? '/pocket/?section=widgets' : '/pocket/';
+    this.controller.loadUrl(this.origin + path);
+  }
+
   onBackPress(): boolean {
     if (this.ready && this.controller.accessBackward()) { this.controller.backward(); return true; }
     return false;
   }
 
-  build() {
+  @Builder
+  private chrome() {
+    Row({ space: 8 }) {
+      Text('DSH Pocket').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+      Button('刷新', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
+        .fontSize(13).borderRadius(12).accessibilityText('刷新工作空间').backgroundColor(Color.Transparent)
+        .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
+        .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
+        .onClick(() => { this.error = ''; this.controller.refresh(); })
+      Button('设置', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
+        .fontSize(13).borderRadius(12).accessibilityText('打开应用设置').backgroundColor(Color.Transparent)
+        .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+        .attributeModifier(new ChromeMaterialModifier(this.experienceRevision))
+        .onClick(() => this.controller.loadUrl(this.origin + '/pocket/'))
+    }.padding({ left: 20, right: 12, top: 4, bottom: 4 }).width('100%')
+  }
+
+  @Builder
+  private pageContent() {
     Column() {
       if (this.ready) {
-        Row({ space: 8 }) {
-          Text('DSH Pocket').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
-            .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-          Button('刷新', { type: ButtonType.Normal }).height(44).padding({ left: 12, right: 12 })
-            .fontSize(13).borderRadius(12).backgroundColor(Color.Transparent)
-            .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
-            .onClick(() => { this.error = ''; this.controller.refresh(); })
-          Button('设置', { type: ButtonType.Normal }).height(44).padding({ left: 12, right: 12 })
-            .fontSize(13).borderRadius(12).backgroundColor(this.nativeDark ? '#353638' : '#F5F6F7')
-            .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-            .onClick(() => this.controller.loadUrl(this.origin + '/pocket/'))
-        }.padding({ left: 20, right: 12, top: 4, bottom: 4 }).width('100%')
         if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).width('100%').color(this.nativeDark ? '#5686FE' : '#4176E6').height(2) }
         Web({ src: this.origin + '/pocket/?mode=' + this.mode, controller: this.controller })
           .width('100%').layoutWeight(1)
           .javaScriptAccess(true).domStorageAccess(true).databaseAccess(true)
+          .keyboardAvoidMode(WebKeyboardAvoidMode.RESIZE_CONTENT)
+          .onRenderExited(() => { this.error = '网页渲染已中断，请点击刷新恢复'; })
           .fileAccess(false).mixedMode(MixedMode.None)
           .darkMode(WebDarkMode.Auto).forceDarkAccess(false)
           .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
@@ -121,6 +160,7 @@ struct Index {
           .onPageEnd(() => {
             if (this.allowed(this.controller.getUrl())) this.controller.runJavaScript(this.presentation).catch(() => {});
             this.openNotification();
+            this.openPocketRoute();
           })
           .onErrorReceive((event) => {
             if (event.request.isMainFrame()) this.error = '加载失败，请检查网络和 HTTPS 证书，然后点击刷新';
@@ -170,4 +210,19 @@ struct Index {
       if (this.error) { Text(this.error).fontColor('#b91c1c').fontSize(13).padding(10) }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
   }
+
+  build() {
+    Navigation() {
+      this.pageContent()
+    }
+    .mode(NavigationMode.Stack)
+    .title({ builder: this.chrome, height: this.titleHeight }, NativeExperience.titleOptions(this.nativeDark, this.experienceRevision))
+    .titleMode(NavigationTitleMode.Mini)
+    .hideTitleBar(!this.ready)
+    .hideBackButton(true)
+    .hideToolBar(true)
+    .width('100%').height('100%')
+    .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
+  }
+
 }

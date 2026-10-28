@@ -15,5 +15,8 @@
     "@simplewebauthn/server": "13.3.3",
     "express": "5.1.0",
     "http-proxy": "1.18.1"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

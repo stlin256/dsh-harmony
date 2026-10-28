@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "widget_quick_name",
+      "value": "工作空间入口"
+    },
+    {
+      "name": "widget_overview_name",
+      "value": "任务状态概览"
+    },
+    {
+      "name": "widget_description",
+      "value": "快捷打开 Harness，查看匿名任务快照，不展示对话和服务器地址"
+    }
+  ]
+}

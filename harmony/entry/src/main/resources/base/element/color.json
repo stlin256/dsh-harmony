@@ -1,1 +1,24 @@
-{ "color": [{ "name": "start_window_background", "value": "#FFFFFF" }] }
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "widget_background",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "widget_primary",
+      "value": "#0F1115"
+    },
+    {
+      "name": "widget_secondary",
+      "value": "#61666B"
+    },
+    {
+      "name": "widget_action",
+      "value": "#F5F6F7"
+    }
+  ]
+}

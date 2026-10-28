@@ -240,3 +240,33 @@ test('overview tracks concurrent approvals, ignores late events and requires aut
   assert.equal((await overview()).running, 0);
   assert.equal((await call('/pocket/api/events', { id: 'bad', sessionId: 'session', code: 'run.started', seq: -1 }, { headers: { authorization: 'Bearer ' + secret } })).status, 400);
 });
+
+test('plugin retries preserve per-session event order before projection', async t => {
+  const listeners = new Map();
+  const originalSecret = process.env.POCKET_EVENT_SECRET;
+  process.env.POCKET_EVENT_SECRET = secret;
+  t.after(() => { if (originalSecret === undefined) delete process.env.POCKET_EVENT_SECRET; else process.env.POCKET_EVENT_SECRET = originalSecret; });
+  let now = Date.now();
+  let tick;
+  const calls = [];
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(globalThis, 'setInterval', callback => { tick = callback; return { unref() {} }; });
+  t.mock.method(globalThis, 'clearInterval', () => {});
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const event = JSON.parse(options.body); calls.push(event.seq);
+    if (calls.length === 1) throw Error('offline');
+    return new Response('{}', { status: 200 });
+  });
+  apply({ on: (name, fn) => listeners.set(name, fn) }, { endpoint: 'https://dsh.example.com/pocket/api/events' });
+  const session = { id: 'session' };
+  listeners.get('session/event')(session, { type: 'turn/start', seq: 0, data: {} });
+  await new Promise(setImmediate);
+  listeners.get('session/event')(session, { type: 'approval/asked', seq: 1, data: { id: 'approval' } });
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, [0], 'later state must wait for failed earlier state');
+  now += 10000;
+  tick();
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, [0, 0, 1]);
+  listeners.get('dispose')();
+});

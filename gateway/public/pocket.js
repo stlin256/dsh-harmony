@@ -2,9 +2,10 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const pending = new Map();
-  const titles = { general: '通用', appearance: '外观与动效', about: '关于' };
+  const titles = { general: '通用', appearance: '外观与动效', widgets: '桌面卡片', about: '关于' };
   for (const tab of document.querySelectorAll('[data-section]')) {
     tab.onclick = () => {
+      try { sessionStorage.setItem('pocket-settings-section', tab.dataset.section); } catch {}
       for (const page of document.querySelectorAll('.settings-page')) page.hidden = page.id !== tab.dataset.section;
       for (const item of document.querySelectorAll('[data-section]')) {
         if (item === tab) item.setAttribute('aria-current', 'page');
@@ -18,6 +19,7 @@
     const reduced = $('reduce-motion').checked;
     document.documentElement.dataset.motion = reduced ? 'reduced' : 'system';
     try { localStorage.setItem('pocket-reduce-motion', String(reduced)); } catch {}
+    if (window.dshPocket) native('reduceMotion', String(reduced)).catch(() => { $('material-status').textContent = '本机动效设置保存失败，请重试'; });
   };
   try {
     const host = localStorage.getItem('pocket-host-dark');
@@ -30,13 +32,13 @@
     pending.delete(id); clearTimeout(item.timer);
     ok ? item.resolve(value) : item.reject(Error(value));
   };
-  function native(command) {
+  function native(command, value = '') {
     if (!window.dshPocket) return Promise.reject(Error('请在 DSH Pocket HarmonyOS 应用中操作'));
     return new Promise((resolve, reject) => {
       const id = crypto.randomUUID();
       const timer = setTimeout(() => { pending.delete(id); reject(Error('系统操作超时，请重试')); }, 60000);
       pending.set(id, { resolve, reject, timer });
-      window.dshPocket.request(id, command);
+      window.dshPocket.request(id, command, value);
     });
   }
   async function api(path, body, method = 'POST') {
@@ -69,6 +71,26 @@
     await api('auth/verify', { id, response });
     location.replace('/pocket/');
   }
+  async function syncWidget() {
+    const snapshot = await api('overview', undefined, 'GET');
+    await native('widgetSnapshot', JSON.stringify(snapshot));
+    $('widget-status').textContent = snapshot.observedAt > 0 ? '桌面快照已更新。快照时间：' + new Date().toLocaleTimeString() : '已同步连接状态；等待 Harness 插件上报任务。';
+  }
+  $('reduce-transparency').onchange = async () => {
+    const input = $('reduce-transparency'); input.disabled = true;
+    try { await native('reduceTransparency', String(input.checked)); }
+    catch (error) { input.checked = !input.checked; $('material-status').textContent = error.message; }
+    finally { input.disabled = false; }
+  };
+  $('widget-details').onchange = async () => {
+    const input = $('widget-details'); input.disabled = true;
+    try {
+      await native('widgetDetails', String(input.checked));
+      $('widget-status').textContent = input.checked ? '已允许匿名数量，点击同步更新卡片。' : '卡片数量已隐藏，旧快照已清理。';
+    } catch (error) { input.checked = !input.checked; $('widget-status').textContent = error.message; }
+    finally { input.disabled = false; }
+  };
+  action('sync-widget', syncWidget, 'widget-status');
   action('login', () => passkey(false));
   action('register', () => passkey(true));
   action('none', async () => { await api('auth/none', {}); location.replace('/'); });
@@ -86,14 +108,36 @@
     $('push-status').textContent = '通知已关闭';
   }, 'push-status');
   async function logout() {
-    await api('logout', {});
+    window.__pocketSuspendOverview?.();
+    try { await api('logout', {}); }
+    catch (error) { window.__pocketResumeOverview?.(); throw error; }
     if (window.dshPocket) await native('clearSession');
     else location.replace('/pocket/');
   }
   action('logout', logout, 'account-status');
   async function initialize() {
     if (params.get('logout') === '1') { await logout(); return; }
+    let section = params.get('section');
+    try { section = section || sessionStorage.getItem('pocket-settings-section'); } catch {}
+    let nativeReady = false;
+    if (titles[section]) document.querySelector('[data-section="' + section + '"]').click();
+    if (window.dshPocket) {
+      try {
+        const host = JSON.parse(await native('nativeState'));
+        nativeReady = true;
+        $('native-surfaces').hidden = false;
+        $('reduce-transparency').checked = host.reduceTransparency;
+        $('reduce-motion').checked = host.reduceMotion;
+        document.documentElement.dataset.motion = host.reduceMotion ? 'reduced' : 'system';
+        $('widget-details').checked = host.widgetDetails;
+        $('material-status').textContent = host.materialEnabled ? '系统材质已启用；实际光效由系统和设备能力决定。' : '当前使用清晰材质；系统版本、省电或透明效果设置可能限制光效。';
+      } catch { $('widget-status').textContent = '读取本机设置失败，可刷新后重试。'; }
+    }
     const state = await api('state', undefined, 'GET');
+    $('widget-details').disabled = !nativeReady || !state.authenticated;
+    $('sync-widget').disabled = !nativeReady || !state.authenticated;
+    if (window.dshPocket) $('widget-status').textContent = state.authenticated ? '可以同步当前工作空间的匿名状态。' : '请先登录，再同步卡片。';
+    if (!state.authenticated) document.querySelector('[data-section=general]').click();
     $('heading').textContent = state.authenticated ? '工作空间已连接' : '登录工作空间';
     $('status').textContent = state.authenticated ? '已准备就绪，可以继续你的任务。' : state.registered ? '使用你的 Passkey 安全登录。' : '首次连接：输入管理员提供的配对密钥，创建 Passkey。';
     $('workspace').hidden = !state.authenticated;
