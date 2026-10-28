@@ -3,6 +3,7 @@ import { NativeMessage, NativeTextBlock } from '../services/NativeSessionModel';
 
 @Component
 export struct NativeMessageView {
+  onCompatibility: () => void = (): void => {};
   @Prop message: NativeMessage = new NativeMessage();
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private reasoningOpen: boolean = false;
@@ -57,6 +58,11 @@ export struct NativeMessageView {
       } else {
         Text(this.message.text).fontSize(12).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
+      }
+      if (this.message.role === 'notice') {
+        Button('在兼容模式中处理', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+          .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .onClick(this.onCompatibility)
       }
       if (!this.message.text && !this.message.reasoning) {
         Text('此消息包含高级内容，请在兼容模式查看。').fontSize(13)

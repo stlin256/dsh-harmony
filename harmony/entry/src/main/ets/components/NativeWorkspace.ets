@@ -243,7 +243,7 @@ export struct NativeWorkspace {
       List({ space: 18, scroller: this.scroller }) {
         if (this.hasMore) { ListItem() { Button('加载更早消息').height(44).onClick(() => { this.older(); }) } }
         LazyForEach(this.source, (message: NativeMessage) => {
-          ListItem() { NativeMessageView({ message: message }) }
+          ListItem() { NativeMessageView({ message: message, onCompatibility: this.onCompatibility }) }
         }, (message: NativeMessage) => message.id)
         if (this.streamReasoning || this.streamText) {
           ListItem() {
