@@ -36,6 +36,10 @@ async function setup(t) {
       ws.on('message',raw=>{
         const frame=JSON.parse(raw); openings.push(frame);
         assert.equal(frame.type,'open');
+        if (frame.endpoint === 'userQuestions/attachWait') {
+          assert.deepEqual(frame.payload.args,{agent:'session',callId:'timed-call'});
+          ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{remainingMs:80}})); return;
+        }
         if (frame.endpoint === '$events') {
           assert.deepEqual(frame.payload, {args:{}});
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'ready',clientId:'client-generation',host:{home:'~'}}}));
@@ -74,7 +78,7 @@ test('native adapter uses official RPC envelopes and keeps upstream credentials 
   assert.equal((await call('/pocket/api/native/sessions',undefined,false)).status,401);
   const sessions=await call('/pocket/api/native/sessions');
   assert.equal(sessions.status,200);
-  assert.deepEqual(JSON.parse(sessions.text),{protocol:1,truncated:false,items:[{id:'session',title:'Native session',running:true,updatedAt:42}]});
+  assert.deepEqual(JSON.parse(sessions.text),{protocol:2,truncated:false,items:[{id:'session',title:'Native session',running:true,updatedAt:42}]});
   assert.equal((await call('/pocket/api/native/create',{requestId:'new-session'})).status,200);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'request',text:'test prompt'})).status,200);
   assert.equal(calls.at(-1).value.method,'session/prompt');
@@ -102,7 +106,7 @@ test('native live channel restores stream baseline and revokes both sockets on l
   assert.equal(frames.find(frame=>frame.type==='snapshot').text,'hel');
   assert.equal(frames.find(frame=>frame.type==='delta').text,'lo');
   assert.equal(frames.find(frame=>frame.type==='state').waiting,true);
-  assert.deepEqual(openings.map(frame=>frame.endpoint),['$events','session/follow','session/observeState']);
+  assert.deepEqual(openings.map(frame=>frame.endpoint),['$events','session/follow','session/observeState','session/observeProjections']);
   const closed=once(ws,'close');
   assert.equal((await call('/pocket/api/logout',{})).status,200);
   await closed;
@@ -207,4 +211,42 @@ test('native question answers validate exact IDs and choices; other scopes deleg
   await until(()=>calls.length>before);
   assert.deepEqual(calls.at(-1).value.payload.args.outcome,{kind:'next'});
   assert.equal(frames.some(frame=>frame.eventId==='other'),false);
+});
+
+test('timed question claims start the deadline and user engagement preserves the wait', async t => {
+  const {call,calls,frames,emit,until,openings} = await live(t);
+  const request={questions:[{id:'q',question:'Choose',options:[{label:'A'}]}],wait:{timed:true,callId:'timed-call'}};
+  emit({type:'waterfall',event:'user-questions/request',eventId:'timed',agentId:'session',request});
+  await until(()=>frames.some(frame=>frame.eventId==='timed'));
+  assert.equal(openings.at(-1).endpoint,'userQuestions/attachWait');
+  const frame=frames.find(frame=>frame.eventId==='timed');
+  assert.equal(frame.remainingMs,80);
+  assert.equal((await call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'timed',engage:true})).status,200);
+  await new Promise(resolve=>setTimeout(resolve,120));
+  assert.equal(calls.some(call=>call.value.payload.args?.eventId==='timed'),false,'engagement pauses the local timeout');
+  assert.equal((await call('/pocket/api/native/answer',{connectionId:frame.connectionId,eventId:'timed',value:{answers:[{id:'q',selected:['A']}]}})).status,200);
+  emit({type:'waterfall',event:'user-questions/request',eventId:'timeout',agentId:'session',request});
+  await until(()=>calls.some(call=>call.value.payload.args?.eventId==='timeout'));
+  assert.equal(calls.at(-1).value.payload.args.outcome.error.code,'ASK_TIMED_OUT');
+});
+
+test('native images keep typed references and admit image-only prompts without text caps', async t => {
+  const {call,calls} = await setup(t);
+  const attachment={attachmentId:'a'.repeat(64),mediaType:'image/png',bytes:42,width:2,height:3,name:'example.png'};
+  const content=[{type:'text',text:'image follows'},{type:'image',attachment}];
+  const history=normalizedHistory([{type:'event',event:{seq:1,type:'user/message',data:{content}}}]);
+  assert.deepEqual(history.messages[0].images,[attachment]);
+  assert.equal((await call('/pocket/api/native/operation',{operation:'attachment',sessionId:'session',attachment})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request,{sessionId:'session',attachment});
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'image-only',text:'',images:[{mediaType:'image/png',data:'AA==',name:'image.png'}]})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request.content,[{type:'image',mediaType:'image/png',data:'AA==',name:'image.png'}]);
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'invalid',text:'',images:[{mediaType:'text/html',data:'AA=='}]})).status,400);
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'empty',text:''})).status,400);
+});
+test('continued question RPC uses agent scope rather than an invented request wrapper', async t => {
+  const {call,calls} = await setup(t);
+  const answer={answers:[{id:'q',selected:[],custom:'continue'}]};
+  assert.equal((await call('/pocket/api/native/operation',{operation:'answerQuestion',sessionId:'session',callId:'call',answer})).status,200);
+  assert.equal(calls.at(-1).value.method,'userQuestions/answer');
+  assert.deepEqual(calls.at(-1).value.payload.args,{agent:'session',callId:'call',answer});
 });

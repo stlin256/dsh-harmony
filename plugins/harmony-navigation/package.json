@@ -1,0 +1,12 @@
+{
+  "name": "@dsh-harmony/navigation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session handoff from DSH Harmony native surfaces to the Harness workspace",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": { ".": "./index.mjs", "./client": "./client.mjs", "./package.json": "./package.json" },
+  "license": "AGPL-3.0-only",
+  "dsh": { "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-workspace"] } },
+  "peerDependencies": { "@deepseek-ai/cordis": "*" }
+}

@@ -232,3 +232,20 @@ test('native history grows past former limits and retains older pages on reconne
   assert.equal(model.streamText.length,200000);
   assert.equal(model.streamReasoning.length,200000);
 });
+
+test('virtual native text windows reconstruct complete Unicode without splitting surrogate pairs', () => {
+  const { NativeTextSource } = load('NativeTextSource', {});
+  const source = new NativeTextSource();
+  const text = 'x'.repeat(4095) + '😀' + '正文😀'.repeat(100000);
+  source.set(text);
+  const parts = Array.from({length:source.totalCount()}, (_,index)=>source.getData(index));
+  assert.equal(parts.join(''),text);
+  assert.ok(parts.every(part=>!/^\p{Surrogate}/u.test(part)&&!/\p{Surrogate}$/u.test(part)));
+});
+test('older pages cannot resurrect history removed by a newer replacement', () => {
+  const { NativeSessionModel } = load('NativeSessionModel', {});
+  const model = new NativeSessionModel();
+  model.apply({type:'snapshot',cursor:100,beforeSeq:90,messages:[{seq:100,id:'event-100',text:'replacement'}],hasMore:true,replacements:[{start:1,end:50}]});
+  model.prepend({messages:[{seq:1,id:'event-1',text:'removed'},{seq:51,id:'event-51',text:'kept'}],beforeSeq:1,hasMore:false});
+  assert.deepEqual(Array.from(model.messages,row=>row.seq),[51,100]);
+});

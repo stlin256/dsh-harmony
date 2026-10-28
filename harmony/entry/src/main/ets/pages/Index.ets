@@ -8,6 +8,7 @@ import { PocketBridge } from '../services/PocketBridge';
 import { WindowAppearance } from '../services/WindowAppearance';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeWorkspace } from '../components/NativeWorkspace';
+import { NativeCompatibilitySurface } from '../components/NativeCompatibilitySurface';
 import { NativeSettings } from '../components/NativeSettings';
 import { NativeExperience, ChromeMaterialModifier } from '../services/NativeExperience';
 
@@ -25,6 +26,7 @@ struct Index {
   @StorageLink('uiMode') @Watch('modeChanged') private uiMode: string = 'compatibility';
   @StorageLink('nativeAuthRevision') @Watch('authenticated') private authRevision: number = 0;
   @State private authSurface: boolean = false;
+  @State private compatibilitySurface: boolean = false;
   @State private nativeSettings: boolean = false;
   @State private modePicker: boolean = false;
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
@@ -75,7 +77,7 @@ struct Index {
       this.nativeClient = new NativeHarnessClient(next);
       this.bridge = new PocketBridge(this.context, this.controller, next, async (): Promise<void> => {
         WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
-        this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.uncertain.clear();
+        this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.images.clear(); this.nativeClient.uncertain.clear();
         this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
         this.ready = false;
         this.origin = '';
@@ -134,7 +136,8 @@ struct Index {
 
   private modeChanged(): void {
     this.getUIContext().setKeyboardAvoidMode(this.uiMode === 'native' ? KeyboardAvoidMode.RESIZE : KeyboardAvoidMode.OFFSET);
-    this.nativeClient.pause();
+    this.nativeClient.pause(); this.compatibilitySurface = false;
+    AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
     this.error = '';
     if (this.uiMode === 'native') {
@@ -167,8 +170,19 @@ struct Index {
     return await this.bridge.performNative(command, value);
   }
   private compatibility(): void {
-    if (this.nativeClient.selectedId) AppStorage.setOrCreate<string>('requestedSession', this.nativeClient.selectedId);
-    this.selectMode('compatibility').catch(() => { this.error = '切换失败，请重试'; });
+    AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', true);
+    this.compatibilitySurface = true;
+  }
+  private closeCompatibility(): void {
+    this.compatibilitySurface = false;
+    AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
+    AppStorage.setOrCreate<number>('nativeRefreshRevision', (AppStorage.get<number>('nativeRefreshRevision') || 0) + 1);
+    this.applyNativeTheme();
+  }
+  @Builder
+  private compatibilitySheet() {
+    NativeCompatibilitySurface({ origin: this.origin, sessionId: this.nativeClient.selectedId,
+      onClose: (): void => { this.closeCompatibility(); } })
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
@@ -197,6 +211,7 @@ struct Index {
 
   onBackPress(): boolean {
     if (!this.ready) return false;
+    if (this.compatibilitySurface) { this.closeCompatibility(); return true; }
     if (this.uiMode === 'native' && !this.authSurface) {
       if (this.nativeSettings) { this.nativeSettings = false; return true; }
       if (AppStorage.get<boolean>('nativeWorkspaceCanGoBack') === true) {
@@ -325,6 +340,8 @@ struct Index {
       }
       if (this.error) { Text(this.error).fontColor('#b91c1c').fontSize(13).padding(10) }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
+      .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: true,
+        onDisappear: (): void => { this.closeCompatibility(); } })
   }
 
   build() {

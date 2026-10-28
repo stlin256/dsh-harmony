@@ -13,12 +13,14 @@ export class GatewayState {
   authenticated: boolean = false;
   pushConfigured: boolean = false;
 }
+export class NativeImageDraft { id: string = ''; name: string = ''; mediaType: string = ''; data: string = ''; }
 export class NativeCreatedSession { id: string = ''; }
 
 export class NativeHarnessClient {
   private origin: string;
   private socket: webSocket.WebSocket | null = null;
   private generation: number = 0;
+  readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
   selectedId: string = '';
@@ -88,11 +90,11 @@ export class NativeHarnessClient {
     return JSON.parse(await this.request('/pocket/api/native/page', http.RequestMethod.POST,
       JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))) as NativeFrame;
   }
-  async prompt(id: string, text: string, mode: string = 'queue'): Promise<void> {
+  async prompt(id: string, text: string, mode: string = 'queue', images: NativeImageDraft[] = []): Promise<void> {
     this.uncertain.add(id);
     try {
       await this.request('/pocket/api/native/prompt', http.RequestMethod.POST,
-        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode }));
+        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode, images: images }));
     } catch (error) {
       if (error instanceof NativeHttpError && error.status >= 400 && error.status < 500) this.uncertain.delete(id);
       throw error;

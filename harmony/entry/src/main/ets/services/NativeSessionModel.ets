@@ -3,7 +3,12 @@ export class NativeTextBlock {
   text: string = '';
   language: string = '';
 }
+export class NativeImageAttachment {
+  attachmentId: string = ''; mediaType: string = ''; bytes: number = 0;
+  width: number = 0; height: number = 0; name: string = '';
+}
 export class NativeMessage {
+  images: NativeImageAttachment[] = [];
   id: string = '';
   seq: number = 0;
   role: string = '';
@@ -36,7 +41,11 @@ export class NativeInteractionRequest {
   questions: NativeQuestion[] = [];
 }
 export class NativeReplacement { start: number = -1; end: number = -1; }
+export class NativePendingQuestion { callId: string = ''; state: string = ''; questions: NativeQuestion[] = []; }
 export class NativeFrame {
+  questions: NativePendingQuestion[] = [];
+  callId: string = '';
+  remainingMs: number = -1;
   connectionId: string = '';
   eventId: string = '';
   interaction: string = '';
@@ -73,14 +82,25 @@ export class NativeSessionModel {
   private attemptId: string = '';
   private nextIndex: number = 0;
   private cursor: number = -1;
+  private replacements: NativeReplacement[] = [];
+
+  private remember(ranges: NativeReplacement[]): void {
+    ranges.forEach((range: NativeReplacement) => {
+      if (!this.replacements.some((existing: NativeReplacement) => existing.start === range.start && existing.end === range.end)) this.replacements.push(range);
+    });
+  }
+  private visible(item: NativeMessage): boolean {
+    return !this.replacements.some((range: NativeReplacement) => item.seq >= range.start && item.seq <= range.end);
+  }
 
   apply(frame: NativeFrame): void {
     if (frame.type === 'snapshot') {
       // Retain loaded history on foreground/reconnect, applying replacement ranges.
+      this.remember(frame.replacements || []);
       const boundary = frame.beforeSeq === undefined ? 0 : frame.beforeSeq;
       const older = this.messages.filter((item: NativeMessage) => item.seq < boundary &&
-        !(frame.replacements || []).some((range: NativeReplacement) => item.seq >= range.start && item.seq <= range.end));
-      this.messages = older.concat(frame.messages || []);
+        this.visible(item));
+      this.messages = older.concat(frame.messages || []).filter((item: NativeMessage) => this.visible(item));
       if (older.length === 0) { this.hasMore = frame.hasMore === true; this.historyBefore = boundary; }
       this.historyCut = frame.cursor;
       this.cursor = frame.cursor;
@@ -95,7 +115,9 @@ export class NativeSessionModel {
       if (!Number.isSafeInteger(frame.seq) || frame.seq <= this.cursor) return;
       this.cursor = frame.seq;
       if (frame.replaceStart >= 0 && frame.replaceEnd >= frame.replaceStart) {
-        this.messages = this.messages.filter((item: NativeMessage) => item.seq < frame.replaceStart || item.seq > frame.replaceEnd);
+        const range = new NativeReplacement(); range.start = frame.replaceStart; range.end = frame.replaceEnd;
+        this.remember([range]);
+        this.messages = this.messages.filter((item: NativeMessage) => this.visible(item));
       }
       if (frame.message) {
         this.messages = this.messages.concat([frame.message]);
@@ -117,8 +139,9 @@ export class NativeSessionModel {
   }
 
   prepend(page: NativeFrame): void {
+    this.remember(page.replacements || []);
     const existing: Set<number> = new Set<number>(this.messages.map((item: NativeMessage) => item.seq));
-    this.messages = page.messages.filter((item: NativeMessage) => !existing.has(item.seq)).concat(this.messages);
+    this.messages = page.messages.filter((item: NativeMessage) => !existing.has(item.seq)).concat(this.messages).filter((item: NativeMessage) => this.visible(item));
     this.hasMore = page.hasMore;
     this.historyBefore = page.beforeSeq;
   }

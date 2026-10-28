@@ -1,8 +1,13 @@
+import { NativeTextContent } from './NativeTextContent';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
+import { NativeImageView } from './NativeImageView';
 import { NativeExperience } from '../services/NativeExperience';
-import { NativeMessage, NativeTextBlock } from '../services/NativeSessionModel';
+import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
 
 @Component
 export struct NativeMessageView {
+  client: NativeHarnessClient = new NativeHarnessClient('');
+  sessionId: string = '';
   onCompatibility: () => void = (): void => {};
   @Prop message: NativeMessage = new NativeMessage();
   @StorageLink('nativeDark') private dark: boolean = false;
@@ -24,8 +29,7 @@ export struct NativeMessageView {
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen; }); })
         if (this.reasoningOpen) {
-          Text(this.message.reasoning).fontSize(13).lineHeight('21fp').copyOption(CopyOptions.InApp)
-            .fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          NativeTextContent({ text: this.message.reasoning })
         }
       }
       if (this.message.role === 'tool') {
@@ -39,8 +43,7 @@ export struct NativeMessageView {
           if (block.kind === 'code') {
             Column({ space: 8 }) {
               Text(block.language || '代码').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              Text(block.text).fontFamily('monospace').fontSize(12).lineHeight('20fp')
-                .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+              NativeTextContent({ text: block.text, monospace: true })
             }.padding(12).width('100%').alignItems(HorizontalAlign.Start)
               .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
           } else if (block.kind === 'heading') {
@@ -51,16 +54,18 @@ export struct NativeMessageView {
               .backgroundColor(this.dark ? '#353638' : '#F5F6F7')
               .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           } else {
-            Text(block.text).fontSize(14).lineHeight('23fp').copyOption(CopyOptions.InApp)
-              .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            NativeTextContent({ text: block.text })
           }
         }, (_block: NativeTextBlock, index: number) => index.toString())
       } else {
         Text(this.message.text).fontSize(12).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
+      ForEach(this.message.images || [], (attachment: NativeImageAttachment) => {
+        NativeImageView({ client: this.client, sessionId: this.sessionId, attachment })
+      }, (attachment: NativeImageAttachment) => attachment.attachmentId)
       if (this.message.role === 'notice') {
-        Button('在兼容模式中处理', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+        Button('打开完整交互', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(this.onCompatibility)
       }

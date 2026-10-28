@@ -11,16 +11,29 @@ export struct NativeInteraction {
   onDone: () => void = (): void => {};
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private answers: Answer[] = [];
+  @State private remaining: number = -1;
+  private countdown: number = -1;
+  private engaged: boolean = false;
   @State private busy: boolean = false;
   @State private unconfirmed: boolean = false;
   @State private error: string = '';
 
   aboutToAppear(): void {
+    this.remaining = this.frame.remainingMs === undefined ? -1 : this.frame.remainingMs;
+    if (this.remaining >= 0) this.countdown = setInterval(() => { this.remaining = Math.max(0, this.remaining - 1000); }, 1000);
     this.answers = (this.frame.request.questions || []).map((question: NativeQuestion) => {
       const answer = new Answer(); answer.id = question.id; return answer;
     });
   }
+  aboutToDisappear(): void { clearInterval(this.countdown); }
+  private engage(): void {
+    if (this.engaged || this.remaining < 0 || this.frame.callId) return;
+    this.engaged = true; clearInterval(this.countdown); this.remaining = -1;
+    this.client.answer(JSON.stringify({ connectionId: this.frame.connectionId, eventId: this.frame.eventId, engage: true }))
+      .catch(() => { this.unconfirmed = true; this.error = '问题状态已变化，请刷新核对'; });
+  }
   private toggle(question: NativeQuestion, label: string): void {
+    this.engage();
     this.answers = this.answers.map((answer: Answer) => {
       if (answer.id !== question.id) return answer;
       const next = new Answer(); next.id = answer.id; next.custom = answer.custom;
@@ -30,6 +43,7 @@ export struct NativeInteraction {
     });
   }
   private custom(id: string, text: string): void {
+    this.engage();
     this.answers = this.answers.map((answer: Answer) => {
       if (answer.id !== id) return answer;
       const next = new Answer(); next.id = answer.id; next.selected = answer.selected; next.custom = text; return next;
@@ -42,7 +56,12 @@ export struct NativeInteraction {
     if (this.busy || this.unconfirmed) return;
     this.busy = true; this.error = '';
     try {
-      await this.client.answer(JSON.stringify({ connectionId: this.frame.connectionId, eventId: this.frame.eventId,
+      if (this.frame.callId) {
+        if (!delegate) {
+          const result = await this.client.operation(JSON.stringify({ operation: 'answerQuestion', sessionId: this.frame.connectionId, callId: this.frame.callId, answer: { answers: this.answers } }));
+          if (result !== 'true') throw new Error('Question no longer answerable');
+        }
+      } else await this.client.answer(JSON.stringify({ connectionId: this.frame.connectionId, eventId: this.frame.eventId,
         delegate, value: this.frame.interaction === 'approval/request' ? value : { answers: this.answers } }));
       this.onDone();
     } catch (_) {
@@ -80,15 +99,16 @@ export struct NativeInteraction {
                 }, (option: NativeOption) => option.label)
                 if (question.intent?.kind !== 'approval') {
                   TextArea({ placeholder: question.multiSelect ? '补充回答（可选）' : '自定义回答' }).height(80)
-                    .onChange((text: string) => { this.custom(question.id, text); })
+                    .onFocus(() => { this.engage(); }).onChange((text: string) => { this.custom(question.id, text); })
                 }
               }.width('100%').alignItems(HorizontalAlign.Start)
             }, (question: NativeQuestion) => question.id)
             Button('提交回答').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit(''); })
           }
-          Button('交给其他客户端处理').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('', true); })
+          Button(this.frame.callId ? '稍后回答' : '交给其他客户端处理').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('', true); })
         }.width('100%').alignItems(HorizontalAlign.Start)
       }.width('100%').constraintSize({ maxHeight: 320 })
+      if (this.remaining >= 0) { Text('等待回答 · ' + Math.ceil(this.remaining / 1000) + ' 秒；开始作答后暂停倒计时').fontSize(12) }
       if (this.error) { Text(this.error).fontSize(12).fontColor(this.dark ? '#FF9393' : '#C53030') }
     }.padding(16).width('100%').alignItems(HorizontalAlign.Start).borderRadius(16)
       .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7').foregroundColor(this.dark ? '#F9FAFB' : '#0F1115')
