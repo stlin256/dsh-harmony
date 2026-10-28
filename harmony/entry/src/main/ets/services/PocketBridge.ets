@@ -4,8 +4,18 @@ import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
 
 export class PocketBridge {
-  constructor(private context: common.UIAbilityContext,
-    private controller: webview.WebviewController, private origin: string) {}
+  private context: common.UIAbilityContext;
+  private controller: webview.WebviewController;
+  private origin: string;
+  private onLogout: () => Promise<void>;
+
+  constructor(context: common.UIAbilityContext, controller: webview.WebviewController,
+    origin: string, onLogout: () => Promise<void>) {
+    this.context = context;
+    this.controller = controller;
+    this.origin = origin;
+    this.onLogout = onLogout;
+  }
 
   request(id: string, command: string): void {
     const caller = this.controller.getLastJavascriptProxyCallingFrameUrl();
@@ -27,9 +37,10 @@ export class PocketBridge {
     if (command === 'disablePush') { await pushService.deleteToken(); return ''; }
     if (command === 'clearSession') {
       // The web side revokes its endpoint and authenticated cookie first.
-      await pushService.deleteToken();
+      try { await pushService.deleteToken(); } catch (_) {}
       await webview.WebCookieManager.clearAllCookies();
       webview.WebStorage.deleteAllData();
+      await this.onLogout();
       return '';
     }
     throw new Error('Unknown command');

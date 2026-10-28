@@ -1,0 +1,5 @@
+{
+  "name": "@dsh-pocket/notify", "version": "0.1.0", "private": true,
+  "type": "module", "main": "index.mjs", "license": "AGPL-3.0-only",
+  "peerDependencies": { "@deepseek-ai/cordis": "*" }
+}

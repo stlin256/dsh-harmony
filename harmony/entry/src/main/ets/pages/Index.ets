@@ -46,7 +46,13 @@ struct Index {
     try {
       if (this.origin && this.origin !== next) throw new Error('请先退出当前连接');
       this.origin = next;
-      this.bridge = new PocketBridge(this.context, this.controller, next);
+      this.bridge = new PocketBridge(this.context, this.controller, next, async (): Promise<void> => {
+        this.ready = false;
+        this.origin = '';
+        this.controller = new webview.WebviewController();
+        this.store?.putSync('origin', '');
+        await this.store?.flush();
+      });
       this.store?.putSync('origin', next);
       this.store?.putSync('mode', this.mode);
       await this.store?.flush();
@@ -67,17 +73,8 @@ struct Index {
   }
 
   private async disconnect(): Promise<void> {
-    // Do not silently strand a push endpoint: revoke authenticated device registrations first.
-    this.controller.runJavaScript("fetch('/pocket/api/logout',{method:'POST'}).then(r=>{if(!r.ok)throw Error();return true})")
-      .then(async () => {
-        await webview.WebCookieManager.clearAllCookies();
-        webview.WebStorage.deleteAllData();
-        this.ready = false;
-        this.origin = '';
-        this.controller = new webview.WebviewController();
-        this.store?.putSync('origin', '');
-        await this.store?.flush();
-      }).catch(() => { this.error = '退出失败，请在网页通知设置中重试'; });
+    // Complete server-side revocation in the page before asking native to clear data.
+    this.controller.loadUrl(this.origin + '/pocket/?logout=1');
   }
 
   onBackPress(): boolean {

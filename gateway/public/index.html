@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>DSH Pocket</title><link rel="stylesheet" href="/pocket/style.css"><script src="/pocket/vendor.js" defer></script><script src="/pocket/pocket.js" defer></script></head>
+<body><main><header><span class="logo">D</span><div><h1>DSH Pocket</h1><p>你的随身工作空间</p></div></header>
+<section><h2 id="heading">连接 DeepSeek Harness</h2><p id="status" role="status">正在检查连接…</p>
+<label id="secret-label" hidden>首次配对密钥<input id="secret" type="password" autocomplete="off" placeholder="由服务管理员提供"></label>
+<div class="actions"><button id="login" hidden>使用 Passkey 登录</button><button id="register" hidden>创建 Passkey</button><button id="none" hidden>进入工作空间</button><a id="workspace" href="/" hidden>打开工作空间 ↗</a></div>
+<p id="compat" hidden>当前 WebView 无法使用 Passkey。请升级系统，并确认签名包含 FIDO2 权限；可在支持 Passkey 的浏览器中验证网关配置。</p></section>
+<section id="notifications" hidden><h2>任务通知</h2><p>任务完成、失败或需要确认时发送通知。锁屏上仅显示通用提示。</p><div class="actions"><button id="enable">开启通知</button><button id="disable" class="secondary">关闭通知</button><button id="logout" class="secondary">退出登录</button></div><p id="push-status" role="status"></p></section>
+<section id="session" hidden><h2>任务有新进展</h2><p>会话标识：<code id="session-id"></code></p><p>打开工作空间，从会话列表选择对应任务。</p><a href="/">查看工作空间 ↗</a></section>
+<footer>DSH Pocket · HarmonyOS companion<br>原版 Harness 界面 · 系统 Passkey · Huawei Push</footer></main></body></html>
