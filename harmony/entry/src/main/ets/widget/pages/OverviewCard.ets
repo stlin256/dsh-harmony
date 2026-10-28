@@ -12,14 +12,14 @@ struct OverviewCard {
 
   @Builder
   metric(value: string, label: string) {
-    Column({ space: 4 }) {
-      Text(value).fontSize(24).fontWeight(FontWeight.Medium).fontColor($r('app.color.widget_primary'))
-      Text(label).fontSize(11).fontColor($r('app.color.widget_secondary'))
+    Column({ space: 2 }) {
+      Text(value).fontSize(22).fontWeight(FontWeight.Medium).fontColor($r('app.color.widget_primary'))
+      Text(label).fontSize(10).fontColor($r('app.color.widget_secondary'))
     }.layoutWeight(1).alignItems(HorizontalAlign.Start)
   }
 
   build() {
-    Column({ space: 10 }) {
+    Column({ space: 6 }) {
       Row() {
         Text('DSH Pocket').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.widget_primary'))
         Blank()
@@ -41,16 +41,16 @@ struct OverviewCard {
       Row({ space: 8 }) {
         FormLink({ action: 'router', abilityName: 'EntryAbility', params: { pocketRoute: 'workspace' } }) {
           Text('打开工作空间').fontSize(12).fontColor($r('app.color.widget_primary'))
-            .width('100%').height(36).textAlign(TextAlign.Center)
+            .width('100%').height(44).textAlign(TextAlign.Center)
             .backgroundColor($r('app.color.widget_action')).borderRadius(12)
         }.layoutWeight(1).accessibilityText('打开 Harness 工作空间')
         FormLink({ action: 'router', abilityName: 'EntryAbility', params: { pocketRoute: 'overview' } }) {
           Text('同步状态').fontSize(12).fontColor($r('app.color.widget_primary'))
-            .width('100%').height(36).textAlign(TextAlign.Center)
+            .width('100%').height(44).textAlign(TextAlign.Center)
             .backgroundColor($r('app.color.widget_action')).borderRadius(12)
         }.layoutWeight(1).accessibilityText('打开应用并同步任务状态')
       }.width('100%')
-    }.width('100%').height('100%').padding(16).alignItems(HorizontalAlign.Start)
+    }.width('100%').height('100%').padding(12).alignItems(HorizontalAlign.Start)
       .backgroundColor($r('app.color.widget_background')).borderRadius(24)
   }
 }
