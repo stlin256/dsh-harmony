@@ -74,8 +74,13 @@ export class NativeHarnessClient {
   }
   async prompt(id: string, text: string): Promise<void> {
     this.uncertain.add(id);
-    await this.request('/pocket/api/native/prompt', http.RequestMethod.POST,
-      JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text }));
+    try {
+      await this.request('/pocket/api/native/prompt', http.RequestMethod.POST,
+        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text }));
+    } catch (error) {
+      if (error instanceof NativeHttpError && error.status >= 400 && error.status < 500) this.uncertain.delete(id);
+      throw error;
+    }
     this.uncertain.delete(id);
   }
   async cancel(id: string): Promise<void> {

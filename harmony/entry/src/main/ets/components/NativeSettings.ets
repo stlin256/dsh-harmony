@@ -82,7 +82,7 @@ export struct NativeSettings {
   @Builder
   private heading(title: string, detail: string) {
     Text(title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-    Text(detail).fontSize(12).lineHeight(20).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+    Text(detail).fontSize(12).lineHeight('20fp').fontColor(this.dark ? '#CFD3D6' : '#61666B')
   }
   @Builder
   private actionButton(label: string, command: string) {
@@ -136,7 +136,7 @@ export struct NativeSettings {
         Divider().color(this.dark ? '#353638' : '#EBEEF2')
         this.heading('连接管理', '退出会撤销登录和通知注册，并清除本机网页数据及桌面快照。')
         this.actionButton('退出当前连接', 'logout')
-        if (this.status) { Text(this.status).fontSize(12).lineHeight(20).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
+        if (this.status) { Text(this.status).fontSize(12).lineHeight('20fp').fontColor(this.dark ? '#CFD3D6' : '#61666B') }
         Text('DSH Harmony · 原生模式（实验）').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }.padding(24).width('100%').constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
     }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')

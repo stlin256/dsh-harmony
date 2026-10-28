@@ -23,7 +23,7 @@ export struct NativeMessageView {
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen; }); })
         if (this.reasoningOpen) {
-          Text(this.message.reasoning).fontSize(13).lineHeight(21).copyOption(CopyOptions.InApp)
+          Text(this.message.reasoning).fontSize(13).lineHeight('21fp').copyOption(CopyOptions.InApp)
             .fontColor(this.dark ? '#CFD3D6' : '#61666B')
         }
       }
@@ -38,19 +38,19 @@ export struct NativeMessageView {
           if (block.kind === 'code') {
             Column({ space: 8 }) {
               Text(block.language || '代码').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              Text(block.text).fontFamily('monospace').fontSize(12).lineHeight(20)
+              Text(block.text).fontFamily('monospace').fontSize(12).lineHeight('20fp')
                 .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
             }.padding(12).width('100%').alignItems(HorizontalAlign.Start)
               .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
           } else if (block.kind === 'heading') {
-            Text(block.text).fontSize(18).lineHeight(28).fontWeight(FontWeight.Medium)
+            Text(block.text).fontSize(18).lineHeight('28fp').fontWeight(FontWeight.Medium)
               .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           } else if (block.kind === 'quote') {
-            Text(block.text).fontSize(13).lineHeight(22).padding(12).borderRadius(12)
+            Text(block.text).fontSize(13).lineHeight('22fp').padding(12).borderRadius(12)
               .backgroundColor(this.dark ? '#353638' : '#F5F6F7')
               .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           } else {
-            Text(block.text).fontSize(14).lineHeight(23).copyOption(CopyOptions.InApp)
+            Text(block.text).fontSize(14).lineHeight('23fp').copyOption(CopyOptions.InApp)
               .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           }
         }, (_block: NativeTextBlock, index: number) => index.toString())

@@ -1,6 +1,7 @@
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
+import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
 import { picker } from '@kit.CoreFileKit';
 import { PocketBridge } from '../services/PocketBridge';
@@ -132,6 +133,7 @@ struct Index {
   }
 
   private modeChanged(): void {
+    this.getUIContext().setKeyboardAvoidMode(this.uiMode === 'native' ? KeyboardAvoidMode.RESIZE : KeyboardAvoidMode.OFFSET);
     this.nativeClient.pause();
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
     this.error = '';

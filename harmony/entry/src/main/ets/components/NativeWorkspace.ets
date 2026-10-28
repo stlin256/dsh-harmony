@@ -181,7 +181,7 @@ export struct NativeWorkspace {
       await this.client.prompt(id, text);
       this.client.drafts.set(id, '');
       if (this.selected === id) this.draft = '';
-    } catch (error) { this.uncertain = true; this.handleError(error as Error); }
+    } catch (error) { this.uncertain = this.client.uncertain.has(id); this.handleError(error as Error); }
     finally { this.sending = false; }
   }
   private async older(): Promise<void> {
@@ -250,7 +250,7 @@ export struct NativeWorkspace {
             Column({ space: 8 }) {
               Text('DeepSeek · 正在回复').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
               if (this.streamReasoning) { Text('正在思考…').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
-              Text(this.streamText).fontSize(14).lineHeight(23).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+              Text(this.streamText).fontSize(14).lineHeight('23fp').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
                 .copyOption(CopyOptions.InApp)
             }.width('100%').alignItems(HorizontalAlign.Start)
           }

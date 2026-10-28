@@ -174,6 +174,9 @@ test('native transport shares only gateway cookies, disables redirects and never
   await assert.rejects(()=>client.prompt('session','hello'));
   assert.equal(calls.length,before+1,'a failed prompt must never be automatically replayed');
   assert.equal(client.uncertain.has('session'),true);
+  code=401;
+  await assert.rejects(()=>client.prompt('session','hello'));
+  assert.equal(client.uncertain.has('session'),false,'a gateway authentication rejection never admitted the prompt');
   await assert.rejects(()=>client.request('/pocket/api/../../other'));
   let release;
   cookie=new Promise(resolve=>{release=resolve;});
