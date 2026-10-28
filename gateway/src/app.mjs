@@ -104,7 +104,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     const rows = db.prepare('SELECT * FROM credentials').all();
     if (registering && (rows.length || !equal(req.body?.secret, bootstrapSecret))) return res.sendStatus(403);
     if (!registering && !rows.length) return res.status(409).json({ error: '请先注册 Passkey' });
-    const options = registering ? await generateRegistrationOptions({ rpName: 'DSH Pocket', rpID: publicURL.hostname,
+    const options = registering ? await generateRegistrationOptions({ rpName: 'DSH Harmony', rpID: publicURL.hostname,
       userID: new Uint8Array(Buffer.from('dsh-pocket-owner')), userName: 'owner', attestationType: 'none',
       authenticatorSelection: { residentKey: 'required', userVerification: 'required' } }) :
       await generateAuthenticationOptions({ rpID: publicURL.hostname, userVerification: 'required',

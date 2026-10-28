@@ -116,7 +116,7 @@ struct Index {
   @Builder
   private chrome() {
     Row({ space: 8 }) {
-      Text('DSH Pocket').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
+      Text('DSH Harmony').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
         .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
         .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
       Button('刷新', { type: ButtonType.Normal }).height(this.titleHeight - 12).padding({ left: 12, right: 12 })
@@ -176,7 +176,7 @@ struct Index {
       } else {
         Scroll() {
           Column({ space: 16 }) {
-            Text('DSH Pocket').fontSize(28).fontWeight(FontWeight.Medium)
+            Text('DSH Harmony').fontSize(28).fontWeight(FontWeight.Medium)
               .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
             Text('连接你的 DeepSeek Harness 工作空间').fontSize(14)
               .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')

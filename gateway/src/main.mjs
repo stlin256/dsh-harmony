@@ -32,7 +32,7 @@ const tick = async () => {
 const timer = setInterval(tick, 5000);
 // Bind to loopback. Put an HTTPS reverse proxy in front, preserving Host and Origin.
 server.listen(Number(env.PORT || 8787), '127.0.0.1', () => {
-  console.log('DSH Pocket gateway ready');
+  console.log('DSH Harmony gateway ready');
   void tick();
 });
 async function shutdown() {

@@ -33,7 +33,7 @@
     ok ? item.resolve(value) : item.reject(Error(value));
   };
   function native(command, value = '') {
-    if (!window.dshPocket) return Promise.reject(Error('请在 DSH Pocket HarmonyOS 应用中操作'));
+    if (!window.dshPocket) return Promise.reject(Error('请在 DSH Harmony HarmonyOS 应用中操作'));
     return new Promise((resolve, reject) => {
       const id = crypto.randomUUID();
       const timer = setTimeout(() => { pending.delete(id); reject(Error('系统操作超时，请重试')); }, 60000);

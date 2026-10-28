@@ -21,7 +21,7 @@ struct OverviewCard {
   build() {
     Column({ space: 6 }) {
       Row() {
-        Text('DSH Pocket').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.widget_primary'))
+        Text('DSH Harmony').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.widget_primary'))
         Blank()
         Text(this.stamp).fontSize(10).fontColor($r('app.color.widget_secondary')).maxLines(1)
       }.width('100%')
