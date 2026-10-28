@@ -1,0 +1,25 @@
+name: Source checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: gateway/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: gateway
+      - run: npm test
+        working-directory: gateway
+      - run: npm audit --audit-level=low
+        working-directory: gateway
+      - run: node scripts/check-publication.mjs

@@ -47,7 +47,9 @@ export class PocketBridge {
   }
 
   private reply(id: string, ok: boolean, value: string): void {
-    if (!this.trusted(this.controller.getUrl())) return;
+    try {
+      if (!this.trusted(this.controller.getUrl())) return;
+    } catch (_) { return; }
     this.controller.runJavaScript('if(location.origin===' + JSON.stringify(this.origin) +
       ')window.__pocketReply?.(' + JSON.stringify(id) + ',' + (ok ? 'true' : 'false') + ',' +
       JSON.stringify(value) + ')').catch(() => {});

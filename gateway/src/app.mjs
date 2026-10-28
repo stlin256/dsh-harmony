@@ -6,7 +6,11 @@ import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthen
 
 const random = () => randomBytes(32).toString('base64url');
 const hash = value => createHash('sha256').update(value).digest('hex');
-const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const equal = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const left = Buffer.from(a); const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+};
 const cookie = req => /(?:^|;\s*)pocket=([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie || '')?.[1];
 const SESSION_TTL = 30 * 86400000;
 

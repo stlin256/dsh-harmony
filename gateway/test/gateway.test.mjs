@@ -152,3 +152,59 @@ test('plugin routes real Harness events without message content; dispose aborts 
     else process.env.POCKET_EVENT_SECRET = oldSecret;
   }
 });
+
+test('reverse proxy preserves POST streams and isolates upstream cookies', async t => {
+  let observed;
+  const upstream = createServer((req, res) => {
+    const chunks = [];
+    req.on('data', value => chunks.push(value));
+    req.on('end', () => {
+      observed = { headers: req.headers, body: Buffer.concat(chunks).toString() };
+      res.setHeader('Set-Cookie', 'harness-secret=never-forward');
+      res.end('stream-response');
+    });
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => { upstream.closeAllConnections(); upstream.close(); });
+  const { call } = await fixture(t, { mode: 'none', allowNoAuth: true,
+    upstream: `http://127.0.0.1:${upstream.address().port}`, upstreamCookie: 'harness=server-only' });
+  const response = await call('/api', { message: 'streamed-payload' }, { headers: { cookie: 'pocket=client', authorization: 'Bearer client' } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'stream-response');
+  assert.equal(observed.body, '{"message":"streamed-payload"}');
+  assert.equal(observed.headers.cookie, 'harness=server-only');
+  assert.equal(observed.headers.authorization, undefined);
+  assert.equal(observed.headers.origin, `http://127.0.0.1:${upstream.address().port}`);
+  assert.equal(response.headers.get('set-cookie'), undefined);
+  assert.equal((await call('/?token=client-supplied')).status, 403);
+});
+
+test('WebSocket upgrade denies unauthenticated and foreign-origin clients', async t => {
+  const { pocket } = await fixture(t);
+  let denied = 0;
+  pocket.upgrade({ headers: { host: 'dsh.example.com', origin }, url: '/api' }, { destroy: () => { denied++; } }, Buffer.alloc(0));
+  pocket.upgrade({ headers: { host: 'dsh.example.com', origin: 'https://other.example.com' }, url: '/api' }, { destroy: () => { denied++; } }, Buffer.alloc(0));
+  assert.equal(denied, 2);
+});
+
+test('SQLite outbox survives restart and removes expired deliveries', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const directory = await mkdtemp(join(tmpdir(), 'pocket-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const filename = join(directory, 'queue.sqlite');
+  let db = openStore(filename);
+  db.prepare('INSERT INTO devices VALUES (?,?,?)').run('device', 'owner', 'test-token');
+  const add = db.prepare('INSERT INTO jobs(device,payload,due,expires) VALUES (?,?,?,?)');
+  add.run('device', '{"code":"run.completed","sessionId":"session"}', 0, Date.now() + 60000);
+  add.run('device', '{}', 0, 1);
+  db.close();
+  db = openStore(filename);
+  try {
+    let delivered = 0;
+    await flushJobs(db, async () => { delivered++; });
+    assert.equal(delivered, 1);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
+  } finally { db.close(); }
+});
