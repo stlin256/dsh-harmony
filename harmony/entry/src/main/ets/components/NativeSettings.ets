@@ -15,6 +15,7 @@ export struct NativeSettings {
   onReturn: () => void = (): void => {};
   onModes: () => void = (): void => {};
   onLogin: () => void = (): void => {};
+  @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private themeMode: string = 'system';
   @State private reduceMotion: boolean = false;
@@ -22,16 +23,36 @@ export struct NativeSettings {
   @State private widgetDetails: boolean = false;
   @State private busy: boolean = true;
   @State private status: string = '';
+  private mounted: boolean = false;
+  private widgetTimer: number = -1;
 
   aboutToAppear(): void {
+    this.mounted = true;
     this.initialize().catch(() => { this.status = '读取设置失败，请返回后重试'; this.busy = false; });
+  }
+  aboutToDisappear(): void { this.mounted = false; clearTimeout(this.widgetTimer); }
+  private activityChanged(): void {
+    clearTimeout(this.widgetTimer);
+    if (this.active) this.syncPassive();
+  }
+  private async syncPassive(): Promise<void> {
+    clearTimeout(this.widgetTimer);
+    if (!this.mounted || !this.active) return;
+    try {
+      const state = await this.client.state();
+      if (!this.mounted || !this.active) return;
+      if (!state.authenticated) { this.onLogin(); return; }
+      const value = await this.client.request('/pocket/api/overview');
+      if (this.mounted && this.active) await this.invoke('widgetSnapshot', value);
+    } catch (_) {}
+    finally { if (this.mounted && this.active) this.widgetTimer = setTimeout(() => { this.syncPassive(); }, 60000); }
   }
   private async initialize(): Promise<void> {
     const state = JSON.parse(await this.invoke('nativeState', '')) as SettingsState;
     this.themeMode = state.themeMode || 'system';
     this.reduceMotion = state.reduceMotion; this.reduceTransparency = state.reduceTransparency; this.widgetDetails = state.widgetDetails;
     this.busy = false;
-    await this.action('sync');
+    await this.syncPassive();
   }
   private async theme(value: string): Promise<void> {
     if (this.busy) return;
