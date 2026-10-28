@@ -13,7 +13,7 @@ export class WindowAppearance {
   static apply(dark: boolean): void {
     AppStorage.setOrCreate<boolean>('nativeDark', dark);
     if (WindowAppearance.mainWindow === null) return;
-    WindowAppearance.mainWindow.setWindowBackgroundColor(dark ? '#141414' : '#f6f4ef');
+    WindowAppearance.mainWindow.setWindowBackgroundColor(dark ? '#151517' : '#FFFFFF');
     WindowAppearance.mainWindow.setWindowSystemBarProperties({
       statusBarColor: '#00000000',
       navigationBarColor: '#00000000',

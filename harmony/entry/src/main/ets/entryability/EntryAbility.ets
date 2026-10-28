@@ -5,6 +5,7 @@ import { WindowAppearance } from '../services/WindowAppearance';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want): void {
+    AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', false);
     webview.WebviewController.initializeWebEngine();
     // Debug builds alone expose the standard HDC-forwarded inspection socket.
     if (this.context.applicationInfo.debug) webview.WebviewController.setWebDebuggingAccess(true);
@@ -25,7 +26,11 @@ export default class EntryAbility extends UIAbility {
   }
 
   onConfigurationUpdate(config: Configuration): void {
-    WindowAppearance.apply(config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+    // A manually selected Harness theme takes precedence over an OS change.
+    // System-following pages notify us when their own theme changes.
+    if (AppStorage.get<boolean>('pocketPageThemeKnown') !== true) {
+      WindowAppearance.apply(config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+    }
   }
 
   onDestroy(): void { WindowAppearance.mainWindow = null; }

@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { webview } from '@kit.ArkWeb';
 import { notificationManager } from '@kit.NotificationKit';
 import { pushService } from '@kit.PushKit';
+import { WindowAppearance } from './WindowAppearance';
 
 export class PocketBridge {
   private context: common.UIAbilityContext;
@@ -30,6 +31,11 @@ export class PocketBridge {
   }
 
   private async dispatch(command: string): Promise<string> {
+    if (command === 'appearanceDark' || command === 'appearanceLight') {
+      AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
+      WindowAppearance.apply(command === 'appearanceDark');
+      return '';
+    }
     if (command === 'enablePush') {
       await notificationManager.requestEnableNotification(this.context);
       return await pushService.getToken();
@@ -40,6 +46,7 @@ export class PocketBridge {
       try { await pushService.deleteToken(); } catch (_) {}
       await webview.WebCookieManager.clearAllCookies();
       webview.WebStorage.deleteAllData();
+      AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', false);
       await this.onLogout();
       return '';
     }
