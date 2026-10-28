@@ -235,7 +235,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   native.routes(app, requireAuth);
   const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
   const vendor = resolve(dirname(createRequire(import.meta.url).resolve('@simplewebauthn/browser')), '../dist/bundle/index.umd.min.js');
-  app.get('/pocket/vendor.js', (_req, res) => res.sendFile(vendor));
+  app.get('/pocket/vendor.js', (_req, res) => res.sendFile(vendor, { dotfiles: 'allow' }));
   app.use('/pocket', (_req, res, next) => {
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"); next();
   });
