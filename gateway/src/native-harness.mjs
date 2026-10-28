@@ -159,13 +159,22 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         alive = false; client.ping();
       }, 30000);
       heartbeat.unref();
+      let delivery = Promise.resolve();
+      let queued = 0;
       const send = value => {
         if (client.readyState !== WebSocket.OPEN) return;
         const text = Buffer.from(JSON.stringify(value));
-        // WebSocket fragmentation bounds individual transport frames without truncating content.
-        for (let offset = 0; offset < text.length; offset += 32768) {
-          client.send(text.slice(offset, offset + 32768), { binary: false, fin: offset + 32768 >= text.length });
-        }
+        queued++; upstream.pause();
+        // Serialize fragments and await each socket write. A slow phone applies
+        // backpressure to the source instead of losing content or queueing all bytes.
+        delivery = delivery.then(async () => {
+          for (let offset = 0; offset < text.length && client.readyState === WebSocket.OPEN; offset += 32768) {
+            await new Promise((resolve, reject) => client.send(text.subarray(offset, offset + 32768),
+              { binary: false, fin: offset + 32768 >= text.length }, error => error ? reject(error) : resolve()));
+          }
+        }).catch(() => { client.close(1011, 'Delivery interrupted'); }).finally(() => {
+          queued--; if (queued === 0 && upstream.readyState === WebSocket.OPEN) upstream.resume();
+        });
       };
       const opening = setTimeout(() => { send({ type: 'error', message: '等待会话快照超时，请重新连接' }); client.close(1011); }, 15000);
       opening.unref();

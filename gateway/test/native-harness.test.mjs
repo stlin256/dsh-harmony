@@ -9,7 +9,7 @@ import { createApp } from '../src/app.mjs';
 import { normalizeFollow, normalizedHistory, richBlocks } from '../src/native-protocol.mjs';
 
 const origin = 'https://dsh.example.com';
-async function setup(t) {
+async function setup(t, options = {}) {
   const calls = [];
   const backend = createServer(async (req, res) => {
     const chunks = []; for await (const part of req) chunks.push(part);
@@ -48,7 +48,7 @@ async function setup(t) {
         assert.equal(frame.payload.args.request.sessionId || frame.payload.args.request.address.sessionId,'session');
         if(frame.endpoint==='session/follow') {
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'snapshot',cursor:0,hasMore:false,
-            records:[{type:'event',event:{seq:0,type:'user/message',data:{content:[{type:'text',text:'hello'}]}}}],
+            records:[{type:'event',event:{seq:0,type:'user/message',data:{content:[{type:'text',text:options.text || 'hello'}]}}}],
             assistantStream:{activeAttempt:{attemptId:'attempt',nextIndex:2,stream:[{type:'text-chunks',texts:['he','l']}]}}}}));
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'assistant-stream',frame:{type:'chunk',attemptId:'attempt',index:2,chunk:{type:'text-delta',text:'lo'}}}}));
         } else if(frame.endpoint==='session/observeState') ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{running:true,pendingInput:['approval']}}));
@@ -164,14 +164,14 @@ test('advanced native commands use exact public Session contracts and reject arb
   assert.equal(calls.at(-1).value.payload.args.request.mode,'steer');
 });
 
-async function live(t) {
-  const setupResult = await setup(t);
+async function live(t, options = {}) {
+  const setupResult = await setup(t, options);
   const ws = setupResult.connect();
   const frames = [];
   ws.on('message', raw => frames.push(JSON.parse(raw)));
   await once(ws,'open');
   const until = async predicate => {
-    for (let i=0;i<200;i++) { if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5)); }
+    for (let i=0;i<1000;i++) { if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5)); }
     throw Error('fixture condition timed out');
   };
   await until(()=>frames.some(frame=>frame.type==='snapshot'));
@@ -249,4 +249,12 @@ test('continued question RPC uses agent scope rather than an invented request wr
   assert.equal((await call('/pocket/api/native/operation',{operation:'answerQuestion',sessionId:'session',callId:'call',answer})).status,200);
   assert.equal(calls.at(-1).value.method,'userQuestions/answer');
   assert.deepEqual(calls.at(-1).value.payload.args,{agent:'session',callId:'call',answer});
+});
+
+test('live transport delivers a complete Unicode record above former upstream and downstream ceilings', async t => {
+  const text='内容😀'.repeat(800000);
+  const {frames} = await live(t,{text});
+  const snapshot=frames.find(frame=>frame.type==='snapshot');
+  assert.equal(snapshot.messages[0].text,text);
+  assert.equal(snapshot.messages[0].blocks[0].text,text);
 });

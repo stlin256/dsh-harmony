@@ -43,6 +43,6 @@ export struct NativeTextContent {
         Button('阅读全文 · ' + this.text.length + ' 字符').height(44).onClick(() => { this.reading = true; this.copied = false; })
       }
     }.width('100%').alignItems(HorizontalAlign.Start)
-      .bindContentCover(this.reading, this.reader, { modalTransition: ModalTransition.DEFAULT })
+      .bindContentCover(this.reading, this.reader, { modalTransition: ModalTransition.DEFAULT, onDisappear: (): void => { this.reading = false; } })
   }
 }

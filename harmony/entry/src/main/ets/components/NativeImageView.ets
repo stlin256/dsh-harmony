@@ -60,6 +60,6 @@ export struct NativeImageView {
           .height(48).enabled(!this.loading).onClick(() => { this.load(); })
       }
     }.width('100%').alignItems(HorizontalAlign.Start)
-      .bindContentCover(this.preview, this.fullImage, { modalTransition: ModalTransition.DEFAULT })
+      .bindContentCover(this.preview, this.fullImage, { modalTransition: ModalTransition.DEFAULT, onDisappear: (): void => { this.preview = false; } })
   }
 }

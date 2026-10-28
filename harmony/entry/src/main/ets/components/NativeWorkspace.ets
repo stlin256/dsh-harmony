@@ -225,7 +225,7 @@ export struct NativeWorkspace {
       this.client.drafts.set(id, ''); this.client.images.delete(id);
       if (this.selected === id) this.images = [];
       if (this.selected === id) this.draft = '';
-    } catch (error) { this.uncertain = this.client.uncertain.has(id); this.handleError(error as Error); }
+    } catch (error) { if (this.selected === id) { this.uncertain = this.client.uncertain.has(id); this.handleError(error as Error); } }
     finally { this.sending = false; }
   }
   private async attach(): Promise<void> {

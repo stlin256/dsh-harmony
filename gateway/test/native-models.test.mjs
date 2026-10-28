@@ -149,14 +149,14 @@ test('native session reducer restores streams, deduplicates replay and replaces 
 
 test('native transport shares only gateway cookies, disables redirects and never retries prompts', async () => {
   const calls = [], configured = [];
-  let code = 200, made = 0;
+  let code = 200, made = 0, streamBody = '{}';
   let cookie = Promise.resolve('other=hidden; pocket=' + 'a'.repeat(43));
   const socketCallbacks = new Map();
   const socket = { on: (event, callback) => socketCallbacks.set(event, callback), off: event => socketCallbacks.delete(event),
     connect: async () => true, close: async () => true };
   const network = { http: { RequestMethod: { GET:'GET',POST:'POST' }, HttpDataType:{STRING:'string'}, createHttp:()=>({
     on(event, callback) { this[event] = callback; },
-    async requestInStream(url, options) { calls.push({url,options}); const encoded = new TextEncoder().encode('{}'); this.dataReceive(encoded.buffer); this.dataEnd(); return code; },
+    async requestInStream(url, options) { calls.push({url,options}); const encoded = new TextEncoder().encode(streamBody); this.dataReceive(encoded.buffer); this.dataEnd(); return code; },
     async request(url, options) { calls.push({url,options}); return {responseCode:code,header:{'set-cookie':'pocket='+'b'.repeat(43)+'; Path=/; Secure; HttpOnly'},result:'{}'}; }, destroy(){} }) },
     webSocket:{createWebSocket:()=>{made++;return socket;}} };
   const {NativeHarnessClient}=load('NativeHarnessClient',{
@@ -171,6 +171,9 @@ test('native transport shares only gateway cookies, disables redirects and never
   assert.equal(configured.length,0,'ordinary responses must not overwrite the shared login cookie');
   await client.request('/pocket/api/auth/none','POST','{}');
   assert.equal(configured[0][2],false);assert.equal(configured[0][3],true);
+  streamBody = JSON.stringify({text:'完整😀'.repeat(400000)});
+  assert.equal(await client.operation('{}'),streamBody,'native HTTP must not clip responses above the old 2MB ceiling');
+  streamBody = '{}';
   code=502;
   const before=calls.length;
   await assert.rejects(()=>client.prompt('session','hello'));
