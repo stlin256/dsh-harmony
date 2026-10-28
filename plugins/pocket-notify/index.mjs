@@ -2,14 +2,20 @@
 export const name = 'dsh-pocket-notify';
 export function routingEvent(session, event) {
   if (!/^[A-Za-z0-9_-]{1,160}$/.test(session.id)) return null;
+  if (!Number.isSafeInteger(event.seq) || event.seq < 0) return null;
   let code;
-  if (event.type === 'turn/end') {
+  if (event.type === 'turn/start') code = 'run.started';
+  else if (event.type === 'turn/end') {
     if (event.data.reason.kind === 'completed') code = 'run.completed';
     else if (event.data.reason.kind === 'error') code = 'run.failed';
-    else return null; // User cancellation is not a task completion.
+    else code = 'run.stopped'; // Update state without sending a completion push.
   } else if (event.type === 'approval/asked') code = 'permission.required';
+  else if (event.type === 'approval/decided') code = 'permission.resolved';
   else return null;
-  return { id: `${session.id}:${event.seq}:${code}`, sessionId: session.id, code };
+  const approvalId = code.startsWith('permission.') ? event.data.id : undefined;
+  if (code.startsWith('permission.') && (typeof approvalId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(approvalId))) return null;
+  return { id: `${session.id}:${event.seq}:${code}`, sessionId: session.id, code, seq: event.seq,
+    ...(approvalId === undefined ? {} : { approvalId }) };
 }
 
 export function apply(ctx, config = {}) {
@@ -26,10 +32,12 @@ export function apply(ctx, config = {}) {
     if (disposed || draining) return;
     draining = true;
     try {
+      const blockedSessions = new Set();
       for (const [id, item] of queue) {
         if (disposed) break;
+        if (blockedSessions.has(item.event.sessionId)) continue;
         if (item.expires <= Date.now()) { queue.delete(id); continue; }
-        if (item.due > Date.now()) continue;
+        if (item.due > Date.now()) { blockedSessions.add(item.event.sessionId); continue; }
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
         active.add(controller);
@@ -40,6 +48,7 @@ export function apply(ctx, config = {}) {
           await response.body?.cancel();
           queue.delete(id);
         } catch {
+          blockedSessions.add(item.event.sessionId);
           item.attempts++;
           item.due = Date.now() + Math.min(60000, 1000 * 2 ** item.attempts);
         } finally { clearTimeout(timeout); active.delete(controller); }

@@ -136,10 +136,10 @@ test('device binding, event deduplication, outbox retry and logout revocation', 
 
 test('plugin routes real Harness events without message content; dispose aborts network', () => {
   const session = { id: 'session' };
-  assert.deepEqual(routingEvent(session, { type: 'turn/end', seq: 4, data: { reason: { kind: 'completed' }, private: 'secret' } }), { id: 'session:4:run.completed', sessionId: 'session', code: 'run.completed' });
-  assert.equal(routingEvent(session, { type: 'turn/end', data: { reason: { kind: 'cancelled' } } }), null);
+  assert.deepEqual(routingEvent(session, { type: 'turn/end', seq: 4, data: { reason: { kind: 'completed' }, private: 'secret' } }), { id: 'session:4:run.completed', sessionId: 'session', code: 'run.completed', seq: 4 });
+  assert.equal(routingEvent(session, { type: 'turn/end', seq: 5, data: { reason: { kind: 'cancelled' } } }).code, 'run.stopped');
   assert.equal(routingEvent(session, { type: 'assistant/message' }), null);
-  assert.equal(routingEvent(session, { type: 'approval/asked', seq: 9 }).code, 'permission.required');
+  assert.equal(routingEvent(session, { type: 'approval/asked', seq: 9, data: { id: 'approval-id' } }).code, 'permission.required');
   const listeners = new Map();
   const oldSecret = process.env.POCKET_EVENT_SECRET;
   process.env.POCKET_EVENT_SECRET = secret;
@@ -207,4 +207,36 @@ test('SQLite outbox survives restart and removes expired deliveries', async t =>
     assert.equal(delivered, 1);
     assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
   } finally { db.close(); }
+});
+
+test('overview tracks concurrent approvals, ignores late events and requires authentication', async t => {
+  const locked = await fixture(t);
+  assert.equal((await locked.call('/pocket/api/overview')).status, 401);
+  const { db, call } = await fixture(t, { mode: 'none', allowNoAuth: true });
+  const publish = async (seq, code, approvalId) => {
+    const response = await call('/pocket/api/events', { id: `session:${seq}:${code}`, sessionId: 'session', seq, code, ...(approvalId ? { approvalId } : {}) }, { headers: { authorization: 'Bearer ' + secret } });
+    assert.equal(response.status, 200);
+  };
+  const overview = async () => (await call('/pocket/api/overview')).json();
+  await publish(0, 'run.started');
+  assert.equal((await overview()).running, 1);
+  await publish(1, 'permission.required', 'one');
+  await publish(2, 'permission.required', 'two');
+  assert.equal((await overview()).waiting, 1);
+  await publish(3, 'permission.resolved', 'one');
+  assert.equal((await overview()).waiting, 1);
+  await publish(4, 'permission.resolved', 'two');
+  assert.equal((await overview()).running, 1);
+  await publish(6, 'run.completed');
+  await publish(5, 'permission.required', 'late');
+  const result = await overview();
+  assert.equal(result.completed, 1);
+  assert.equal(result.waiting, 0);
+  assert.equal(result.running, 0);
+  assert.equal('sessionId' in result, false);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM pending_actions').get().n, 0);
+  await publish(7, 'run.started');
+  await publish(8, 'run.stopped');
+  assert.equal((await overview()).running, 0);
+  assert.equal((await call('/pocket/api/events', { id: 'bad', sessionId: 'session', code: 'run.started', seq: -1 }, { headers: { authorization: 'Bearer ' + secret } })).status, 400);
 });

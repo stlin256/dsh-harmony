@@ -1,4 +1,5 @@
 import express from 'express';
+import { eventCodes, notificationCodes, projectEvent, readOverview } from './overview.mjs';
 import httpProxy from 'http-proxy';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -166,15 +167,19 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     }
     setCookie(res, '', 0); res.json({ ok: true });
   });
+  app.get('/pocket/api/overview', requireAuth, (_req, res) => res.json(readOverview(db)));
   app.post('/pocket/api/events', (req, res) => {
     if (!equal(req.headers.authorization, 'Bearer ' + eventSecret)) return res.sendStatus(401);
     const { id, sessionId, code } = req.body || {};
-    if (!/^[A-Za-z0-9_:.-]{1,240}$/.test(id) || !/^[A-Za-z0-9_-]{1,160}$/.test(sessionId) || !['run.completed', 'run.failed', 'permission.required'].includes(code)) return res.sendStatus(400);
+    if (!/^[A-Za-z0-9_:.-]{1,240}$/.test(id) || !/^[A-Za-z0-9_-]{1,160}$/.test(sessionId) || !eventCodes.includes(code)) return res.sendStatus(400);
+    const { seq, approvalId } = req.body;
+    if (seq !== undefined && (!Number.isSafeInteger(seq) || seq < 0)) return res.sendStatus(400);
+    if (seq !== undefined && code.startsWith('permission.') && (typeof approvalId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(approvalId))) return res.sendStatus(400);
     const now = Date.now();
     db.exec('BEGIN IMMEDIATE');
     try {
       const inserted = db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?)').run(id, now);
-      if (inserted.changes) {
+      if (inserted.changes && projectEvent(db, { sessionId, code, seq, approvalId }, now) && notificationCodes.includes(code)) {
         const payload = JSON.stringify({ sessionId, code });
         for (const device of db.prepare('SELECT id FROM devices').all()) {
           db.prepare('INSERT INTO jobs(device,payload,due,expires) VALUES (?,?,?,?)').run(device.id, payload, now, now + 3600000);
@@ -225,6 +230,8 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     db.prepare('DELETE FROM devices WHERE owner IN (SELECT id FROM sessions WHERE expires <= ?)').run(now);
     db.prepare('DELETE FROM sessions WHERE expires <= ?').run(now);
     db.prepare('DELETE FROM events WHERE created < ?').run(now - 7 * 86400000);
+    db.prepare('DELETE FROM task_states WHERE updated < ?').run(now - 30 * 86400000);
+    db.prepare('DELETE FROM pending_actions WHERE session NOT IN (SELECT session FROM task_states)').run();
   }
   return { app, upgrade, cleanup, close: () => { for (const set of sockets.values()) for (const socket of set) socket.destroy(); proxy.close(); } };
 }
