@@ -1,4 +1,6 @@
+import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeTextContent } from './NativeTextContent';
+import { DSHIcon } from './DSHIcon';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeImageView } from './NativeImageView';
 import { NativeExperience } from '../services/NativeExperience';
@@ -13,6 +15,14 @@ export struct NativeMessageView {
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private reasoningOpen: boolean = false;
   @State private toolOpen: boolean = false;
+  @State private copied: boolean = false;
+
+  private copyMessage(): void {
+    const text = this.message.text || this.message.blocks.map((block: NativeTextBlock) => block.text).join('\n');
+    if (!text) return;
+    pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text))
+      .then(() => { this.copied = true; }).catch(() => { this.copied = false; });
+  }
 
   private animate(action: () => void): void {
     if (NativeExperience.reducedMotion()) action();
@@ -20,12 +30,19 @@ export struct NativeMessageView {
   }
 
   build() {
-    Column({ space: 10 }) {
-      Text(this.message.label).fontSize(12).fontWeight(FontWeight.Medium)
-        .fontColor(this.dark ? '#CFD3D6' : '#61666B')
+    Column({ space: 6 }) {
+      if (this.message.role !== 'user' && this.message.role !== 'assistant' && this.message.role !== 'tool') {
+        Text(this.message.label).fontSize(12).fontWeight(FontWeight.Medium)
+          .fontColor(this.dark ? '#CFD3D6' : '#61666B')
+      }
       if (this.message.reasoning) {
-        Button(this.reasoningOpen ? '收起思考过程' : '查看思考过程', { type: ButtonType.Normal })
-          .height(44).fontSize(12).borderRadius(12)
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 6 }) {
+            DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
+              .rotate({ angle: this.reasoningOpen ? -90 : 180 })
+            Text('思考过程').fontSize(12)
+          }
+        }.height(30).fontSize(12).borderRadius(8)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen; }); })
         if (this.reasoningOpen) {
@@ -33,8 +50,13 @@ export struct NativeMessageView {
         }
       }
       if (this.message.role === 'tool') {
-        Button(this.toolOpen ? '收起执行详情' : '查看执行详情', { type: ButtonType.Normal })
-          .height(44).fontSize(12).borderRadius(12).backgroundColor(Color.Transparent)
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 6 }) {
+            DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
+              .rotate({ angle: this.toolOpen ? -90 : 180 })
+            Text(this.message.label).fontSize(12).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+        }.height(30).fontSize(12).borderRadius(8).backgroundColor(Color.Transparent)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.animate(() => { this.toolOpen = !this.toolOpen; }); })
       }
@@ -44,7 +66,7 @@ export struct NativeMessageView {
             Column({ space: 8 }) {
               Text(block.language || '代码').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
               NativeTextContent({ text: block.text, monospace: true })
-            }.padding(12).width('100%').alignItems(HorizontalAlign.Start)
+            }.padding(10).width('100%').alignItems(HorizontalAlign.Start)
               .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
           } else if (block.kind === 'heading') {
             Text(block.text).fontSize(18).lineHeight('28fp').fontWeight(FontWeight.Medium)
@@ -57,15 +79,12 @@ export struct NativeMessageView {
             NativeTextContent({ text: block.text })
           }
         }, (_block: NativeTextBlock, index: number) => index.toString())
-      } else {
-        Text(this.message.text).fontSize(12).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
       ForEach(this.message.images || [], (attachment: NativeImageAttachment) => {
         NativeImageView({ client: this.client, sessionId: this.sessionId, attachment })
       }, (attachment: NativeImageAttachment) => attachment.attachmentId)
       if (this.message.role === 'notice') {
-        Button('打开完整交互', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+        Button('打开完整交互', { type: ButtonType.Normal }).height(36).fontSize(12).borderRadius(10)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(this.onCompatibility)
       }
@@ -73,8 +92,17 @@ export struct NativeMessageView {
         Text('此消息包含高级内容，请在兼容模式查看。').fontSize(13)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
-    }.alignItems(HorizontalAlign.Start).width('100%')
-      .padding(this.message.role === 'user' || this.message.role === 'tool' ? 16 : 4)
+      if ((this.message.role === 'user' || this.message.role === 'assistant') && this.message.text) {
+        Row() {
+          Blank()
+          Button({ type: ButtonType.Normal }) {
+            DSHIcon({ glyph: this.copied ? 'check-outline' : 'copy-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 14 })
+          }.width(28).height(28).borderRadius(14).backgroundColor(Color.Transparent)
+            .accessibilityText(this.copied ? '已复制' : '复制消息').onClick(() => { this.copyMessage(); })
+        }.width('100%')
+      }
+    }.alignItems(HorizontalAlign.Start).width(this.message.role === 'user' ? '82%' : '100%')
+      .padding(this.message.role === 'user' || this.message.role === 'tool' ? 12 : 2)
       .backgroundColor(this.message.role === 'user' || this.message.role === 'tool' ? this.dark ? '#2C2C2E' : '#F5F6F7' : Color.Transparent)
       .borderRadius(16)
   }

@@ -29,6 +29,7 @@ Configure binding, trusted hosts, port forwarding and TLS for your environment. 
 
 - Original Web workspace, plugins and advanced interactions in compatibility mode.
 - Experimental native sessions, text/images, tools, models, queues, approvals, questions and live output. See [interface modes](docs/UI-MODES.md) and [coverage](docs/NATIVE-COVERAGE.md).
+- Native chat uses DSH glyphs and a compact layout, formats message text, hides empty sessions, and retains loaded history across reconnects.
 - Local theme, motion and connection settings; a failed or offline login can still be exited.
 - Entry and task overview widgets with task names and timestamped local snapshots.
 - Task/approval collection and a durable SQLite notification queue. The personal Push Kit build supports notification levels; the AppGallery build omits Push Kit and can optionally monitor active tasks in the background.

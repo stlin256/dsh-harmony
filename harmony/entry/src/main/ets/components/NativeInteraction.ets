@@ -102,24 +102,31 @@ export struct NativeInteraction {
       this.onDone();
     } catch (_) {
       this.unconfirmed = true;
-      this.error = '决定结果未确认，请刷新核对请求状态；不会重复提交。';
+      this.error = '提交结果未确认，请刷新';
     } finally { this.busy = false; }
   }
   build() {
-    Column({ space: 10 }) {
-      Text(this.frame.interaction === 'approval/request' ? '需要你的审批' : '需要你的回答').fontSize(16).fontWeight(FontWeight.Medium)
+    Column({ space: 8 }) {
+      Row({ space: 7 }) {
+        Circle().width(7).height(7).fill(this.dark ? '#F0B84A' : '#A56A00')
+        Text(this.frame.interaction === 'approval/request' ? '需要你的审批' : '需要你的回答').fontSize(15).fontWeight(FontWeight.Medium)
+      }
       Scroll() {
-        Column({ space: 12 }) {
+        Column({ space: 10 }) {
           if (this.frame.interaction === 'approval/request') {
             Text(this.frame.request.toolName).fontSize(14).fontWeight(FontWeight.Medium)
             Text(this.frame.request.reason || this.frame.request.displayReason?.zh || this.frame.request.displayReason?.en || '').fontSize(14).copyOption(CopyOptions.InApp)
-            Row({ space: 12 }) {
-              Button('拒绝').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('rejected'); })
-              Button('允许一次').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('allowed-once'); })
+            Row({ space: 8 }) {
+              Button('拒绝').height(38).borderRadius(9).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
+                .fontColor(this.dark ? '#F9FAFB' : '#0F1115').enabled(!this.busy && !this.unconfirmed)
+                .onClick(() => { this.submit('rejected'); })
+              Button('允许一次').height(38).borderRadius(9).backgroundColor(this.dark ? '#679EFE' : '#3964FE')
+                .fontColor('#FFFFFF').enabled(!this.busy && !this.unconfirmed)
+                .onClick(() => { this.submit('allowed-once'); })
             }
           } else {
             ForEach(this.frame.request.questions, (question: NativeQuestion) => {
-              Column({ space: 8 }) {
+              Column({ space: 6 }) {
                 if (question.header) { Text(question.header).fontSize(12) }
                 Text(question.question).fontSize(15).fontWeight(FontWeight.Medium)
                 if (question.detail) { Text(question.detail).fontSize(13).copyOption(CopyOptions.InApp) }
@@ -128,25 +135,28 @@ export struct NativeInteraction {
                     Column({ space: 4 }) {
                       Text((this.selected(question.id, option.label) ? '✓ ' : '') + option.label).fontSize(14)
                       if (option.description) { Text(option.description).fontSize(12) }
-                    }.alignItems(HorizontalAlign.Start).width('100%').padding(10)
+                    }.alignItems(HorizontalAlign.Start).width('100%').padding(8)
                   }.borderRadius(12).backgroundColor(this.selected(question.id, option.label) ? this.dark ? '#484A50' : '#DDE3ED' : this.dark ? '#353638' : '#F5F6F7')
                     .fontColor(this.dark ? '#F9FAFB' : '#0F1115').enabled(!this.busy && !this.unconfirmed)
                     .onClick(() => { this.toggle(question, option.label); })
                 }, (option: NativeOption) => option.label)
                 if (question.intent?.kind !== 'approval') {
-                  TextArea({ placeholder: question.multiSelect ? '补充回答（可选）' : '自定义回答' }).height(80)
+                  TextArea({ placeholder: question.multiSelect ? '补充回答（可选）' : '自定义回答' }).height(68)
                     .onFocus(() => { this.engage(); }).onChange((text: string) => { this.custom(question.id, text); })
                 }
               }.width('100%').alignItems(HorizontalAlign.Start)
             }, (question: NativeQuestion) => question.id)
-            Button('提交回答').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit(''); })
+            Button('提交回答').height(38).borderRadius(9).backgroundColor(this.dark ? '#679EFE' : '#3964FE')
+              .fontColor('#FFFFFF').enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit(''); })
           }
-          Button(this.frame.callId ? '稍后回答' : '交给其他客户端处理').height(44).enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('', true); })
+          Button(this.frame.callId ? '稍后回答' : '交给其他客户端处理').height(38).borderRadius(9)
+            .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+            .enabled(!this.busy && !this.unconfirmed).onClick(() => { this.submit('', true); })
         }.width('100%').alignItems(HorizontalAlign.Start)
       }.width('100%').constraintSize({ maxHeight: 320 })
-      if (this.remaining >= 0) { Text('等待回答 · ' + Math.ceil(this.remaining / 1000) + ' 秒；开始作答后暂停倒计时').fontSize(12) }
+      if (this.remaining >= 0) { Text('剩余 ' + Math.ceil(this.remaining / 1000) + ' 秒').fontSize(12) }
       if (this.error) { Text(this.error).fontSize(12).fontColor(this.dark ? '#FF9393' : '#C53030') }
-    }.padding(16).width('100%').alignItems(HorizontalAlign.Start).borderRadius(16)
+    }.padding(12).width('100%').alignItems(HorizontalAlign.Start).borderRadius(14)
       .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7').foregroundColor(this.dark ? '#F9FAFB' : '#0F1115')
   }
 }

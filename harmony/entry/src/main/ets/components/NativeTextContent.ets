@@ -1,5 +1,6 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeTextSource } from '../services/NativeTextSource';
+import { NativeInlineText } from './NativeInlineText';
 
 /** Full text is retained. Very long bodies open a virtualised native reader. */
 @Component
@@ -12,6 +13,16 @@ export struct NativeTextContent {
   private source: NativeTextSource = new NativeTextSource();
   aboutToAppear(): void { this.changed(); }
   private changed(): void { this.source.set(this.text); }
+  @Builder
+  private body(value: string) {
+    if (this.monospace) {
+      Text(value).width('100%').fontSize(12).lineHeight('22fp')
+        .fontFamily('Noto Sans Mono, monospace').copyOption(CopyOptions.InApp)
+        .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+    } else {
+      NativeInlineText({ text: value })
+    }
+  }
   @Builder
   private reader() {
     Column({ space: 12 }) {
@@ -26,9 +37,7 @@ export struct NativeTextContent {
       List() {
         LazyForEach(this.source, (part: string) => {
           ListItem() {
-            Text(part).width('100%').fontSize(this.monospace ? 12 : 14).lineHeight('23fp')
-              .fontFamily(this.monospace ? 'monospace' : 'sans-serif').copyOption(CopyOptions.InApp)
-              .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            this.body(part)
           }
         }, (_part: string, index: number) => index.toString())
       }.layoutWeight(1).width('100%').cachedCount(4)
@@ -36,9 +45,7 @@ export struct NativeTextContent {
   }
   build() {
     Column({ space: 8 }) {
-      Text(this.text.length > 8192 ? this.source.getData(0) : this.text)
-        .fontFamily(this.monospace ? 'monospace' : 'sans-serif').fontSize(this.monospace ? 12 : 14).lineHeight('23fp')
-        .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+      this.body(this.text.length > 8192 ? this.source.getData(0) : this.text)
       if (this.text.length > 8192) {
         Button('阅读全文 · ' + this.text.length + ' 字符').height(44).onClick(() => { this.reading = true; this.copied = false; })
       }

@@ -13,10 +13,12 @@ export class WindowAppearance {
   static apply(dark: boolean): void {
     AppStorage.setOrCreate<boolean>('nativeDark', dark);
     if (WindowAppearance.mainWindow === null) return;
-    WindowAppearance.mainWindow.setWindowBackgroundColor(dark ? '#151517' : '#FFFFFF');
+    const surface = dark ? '#151517' : '#FFFFFF';
     WindowAppearance.mainWindow.setWindowSystemBarProperties({
-      statusBarColor: '#00000000',
-      navigationBarColor: '#00000000',
+      // Keep both system bars visible, but paint their inset areas with the
+      // page surface so the gesture handle doesn't sit in a contrasting strip.
+      statusBarColor: surface,
+      navigationBarColor: surface,
       statusBarContentColor: dark ? '#FFFFFF' : '#000000',
       navigationBarContentColor: dark ? '#FFFFFF' : '#000000'
     }).catch(() => {});

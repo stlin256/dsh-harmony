@@ -44,7 +44,7 @@ export function normalizeRecord(record) {
   else if (event.type === 'tool/result') { role = 'tool'; label = data.message?.isError ? '工具执行失败' : '工具结果'; content = textBlocks(data.message?.content); }
   else if (event.type === 'approval/asked') { role = 'notice'; label = '需要审批'; content = { text: '请切换到兼容模式处理此审批。', reasoning: '' }; }
   else if (event.type === 'turn/end' && data.reason?.kind === 'error') { role = 'notice'; label = '执行失败'; content = { text: fullText(data.reason.error?.message || '请检查服务端配置后重试'), reasoning: '' }; }
-  else { role = 'detail'; label = event.type; content = { text: fullText(data), reasoning: '' }; }
+  else return null;
   const parts = event.type === 'user/message' ? data.content : event.type === 'assistant/message' || event.type === 'tool/result' ? data.message?.content : [];
   const images = Array.isArray(parts) ? parts.filter(part => part?.type === 'image' && part.attachment).map(part => part.attachment) : [];
   return { images, id: 'event-' + event.seq, seq: event.seq, role, label, text: content.text, reasoning: content.reasoning,

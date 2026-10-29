@@ -18,7 +18,7 @@ async function setup(t, options = {}) {
     let result;
     if (value.method === 'session/list') {
       assert.deepEqual(value.payload.args, { _request: {} }, 'source _request parameter must keep its exact wire name');
-      result = { items: [{ sessionId:'session', running:true, updatedAt:42, projections:{values:{title:'Native session'}} }] };
+      result = { items: [{ sessionId:'session', blank:false, running:true, updatedAt:42, projections:{values:{title:'Native session'}} }] };
     } else if (value.method === 'session/create') result = {sessionId:value.payload.args.request.sessionId};
     else if (value.method === 'session/page') result = { records:[{type:'event',event:{seq:0,type:'user/message',data:{content:[{type:'text',text:'older'}]}}}], cursor:3,hasMore:false };
     else result = {accepted:true};
@@ -106,7 +106,7 @@ test('native adapter uses official RPC envelopes and keeps upstream credentials 
   assert.equal((await call('/pocket/api/native/sessions',undefined,false)).status,401);
   const sessions=await call('/pocket/api/native/sessions');
   assert.equal(sessions.status,200);
-  assert.deepEqual(JSON.parse(sessions.text),{protocol:2,truncated:false,items:[{id:'session',title:'Native session',running:true,updatedAt:42}]});
+  assert.deepEqual(JSON.parse(sessions.text),{protocol:2,truncated:false,items:[{id:'session',title:'Native session',blank:false,running:true,updatedAt:42}]});
   assert.equal((await call('/pocket/api/native/create',{requestId:'new-session'})).status,200);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'request',text:'test prompt'})).status,200);
   assert.equal(calls.at(-1).value.method,'session/prompt');
@@ -170,7 +170,7 @@ test('native history and stream preserve arbitrarily long Unicode content withou
   const snapshot = normalizeFollow({type:'snapshot',cursor:2,hasMore:true,records:[],assistantStream:{activeAttempt:{attemptId:'a',nextIndex:1,stream:[{type:'text-chunks',texts:[text]}]}}});
   assert.equal(snapshot.text, text);
   const unknown = normalizedHistory([{type:'event',event:{seq:3,type:'custom/record',data:{text}}}]);
-  assert.equal(JSON.parse(unknown.messages[0].text).text, text);
+  assert.equal(unknown.messages.length, 0, 'internal protocol events are not rendered as chat messages');
 });
 
 test('advanced native commands use exact public Session contracts and reject arbitrary RPCs', async t => {

@@ -129,7 +129,7 @@ export class NativeHarnessClient {
   clearLocalState(): void {
     this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear(); this.selectedId = '';
   }
-  async follow(id: string, receive: (frame: NativeFrame) => void, ended: () => void): Promise<void> {
+  async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');
     this.pause();
     const generation = this.generation;
@@ -137,21 +137,36 @@ export class NativeHarnessClient {
     if (generation !== this.generation) return;
     const socket = webSocket.createWebSocket(); this.socket = socket;
     let finished: boolean = false;
-    const finish = (): void => {
+    let opened: boolean = false;
+    const openingTimer = setTimeout(() => { finish('open_timeout'); }, 20000);
+    const finish = (reason: string): void => {
       if (generation !== this.generation || finished) return;
-      finished = true; socket.close().catch(() => {}); ended();
+      finished = true; clearTimeout(openingTimer); socket.close().catch(() => {}); ended(reason);
     };
+    socket.on('open', (error: BusinessError): void => {
+      if (error) { finish('open_error_' + error.code); return; }
+      opened = true; clearTimeout(openingTimer);
+    });
     socket.on('message', (error: BusinessError, data: string | ArrayBuffer): void => {
       if (error || generation !== this.generation || finished) return;
+      if (!opened) { finish('message_before_open'); return; }
+      let frame: NativeFrame;
       try {
         const text = typeof data === 'string' ? data : util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(data));
-        receive(JSON.parse(text) as NativeFrame);
-      } catch (_) { finish(); }
+        frame = JSON.parse(text) as NativeFrame;
+      } catch (_) { finish('invalid_frame'); return; }
+      try { receive(frame); }
+      catch (_) { finish('frame_handler_error'); }
     });
-    socket.on('close', finish);
-    socket.on('error', finish);
-    try { await socket.connect(this.origin.replace(/^https:/, 'wss:') + '/pocket/native/live?sessionId=' + encodeURIComponent(id),
-      { header: { Origin: this.origin, Cookie: cookie } }); }
-    catch (_) { finish(); }
+    socket.on('close', (_error: BusinessError, result: webSocket.CloseResult): void => {
+      finish('close_' + (result?.code || 0));
+    });
+    socket.on('error', (error: BusinessError): void => { finish('socket_error_' + error.code); });
+    const socketOrigin = this.origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    try {
+      const created = await socket.connect(socketOrigin + '/pocket/native/live?sessionId=' + encodeURIComponent(id),
+        { header: { cookie: cookie }, supportOriginPort: true });
+      if (!created) finish('connect_rejected');
+    } catch (_) { finish('connect_error'); }
   }
 }

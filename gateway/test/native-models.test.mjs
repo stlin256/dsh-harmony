@@ -11,7 +11,7 @@ function load(name, kits, globals = {}) {
   const source = readFileSync(new URL(name + '.ets', services), 'utf8');
   const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } });
   const module = { exports: {} };
-  vm.runInNewContext(output.outputText, { module, exports: module.exports, require: id => {
+  vm.runInNewContext(output.outputText, { module, exports: module.exports, setTimeout, clearTimeout, require: id => {
     if (!(id in kits)) throw Error('Unexpected dependency: ' + id);
     return kits[id];
   }, ...globals });
@@ -32,7 +32,7 @@ function storage() {
 }
 const context = { getApplicationContext() { return this; } };
 
-test('widget privacy defaults, cross-process restoration, expiry and logout serialization', async () => {
+test('widget task-name defaults, opt-out, cross-process restoration, expiry and logout serialization', async () => {
   const { preferences, disk } = storage();
   const deliveries = [];
   let block;
@@ -48,9 +48,13 @@ test('widget privacy defaults, cross-process restoration, expiry and logout seri
   WidgetStore.register(context, '123');
   const snapshot = Object.assign(new OverviewSnapshot(), { running: 2, waiting: 1, completed: 3, failed: 0, observedAt: now, generatedAt: now });
   await WidgetStore.update(context, snapshot);
+  assert.equal(WidgetStore.data(context).showCounts, true);
+  assert.notEqual(disk.get('pocket-widget-snapshot').get('snapshot'), '');
+  assert.equal(deliveries.length, 1, 'duplicate form instance IDs must not duplicate delivery');
+  await WidgetStore.setDetails(context, false);
+  await WidgetStore.update(context, snapshot);
   assert.equal(WidgetStore.data(context).showCounts, false);
   assert.equal(disk.get('pocket-widget-snapshot').get('snapshot'), '');
-  assert.equal(deliveries.length, 1, 'duplicate form instance IDs must not duplicate delivery');
   await WidgetStore.setDetails(context, true);
   await WidgetStore.update(context, snapshot);
   assert.equal(WidgetStore.data(context).showCounts, true);
@@ -147,13 +151,53 @@ test('native session reducer restores streams, deduplicates replay and replaces 
   assert.equal(model.messages.length,2);
 });
 
+test('native transcript hides protocol bookkeeping across snapshots, live events and history', () => {
+  const { NativeSessionModel } = load('NativeSessionModel', {});
+  const model = new NativeSessionModel();
+  model.apply({type:'snapshot',cursor:2,beforeSeq:0,messages:[
+    {id:'event-1',seq:1,role:'assistant',text:'answer'},
+    {id:'event-2',seq:2,role:'detail',label:'step/end',text:'{"turn":1}'}
+  ]});
+  model.apply({type:'event',seq:3,message:{id:'event-3',seq:3,role:'detail',label:'workspace/changes'}});
+  model.apply({type:'event',seq:4,message:{id:'event-4',seq:4,role:'notice',label:'执行失败',text:'task failed'}});
+  model.prepend({messages:[{id:'event-0',seq:0,role:'detail',label:'session/start'}],hasMore:false,beforeSeq:0});
+  assert.equal(model.messages.map(x => x.id).join(','),'event-1,event-4');
+});
+
+test('empty session filtering uses the explicit DSH flag and preserves untitled content and active work', () => {
+  const { nativeSessionVisible, NativeSessionModel } = load('NativeSessionModel', {});
+  assert.equal(nativeSessionVisible({title:'named empty',blank:true},undefined),false);
+  assert.equal(nativeSessionVisible({title:'新会话',blank:false},undefined),true);
+  assert.equal(nativeSessionVisible({title:'',blank:false},undefined),true);
+  assert.equal(nativeSessionVisible({title:'新会话',blank:true,running:true},undefined),true);
+  assert.equal(nativeSessionVisible({title:'新会话'},undefined),false);
+  const cached = new NativeSessionModel(); cached.messages = [{role:'user',text:'hello'}];
+  assert.equal(nativeSessionVisible({title:'新会话',blank:true},cached),true);
+});
+
+test('native inline markdown preserves literal code and malformed text while styling nested runs', () => {
+  const { nativeInlineMarkdown } = load('NativeInlineMarkdown', {});
+  const runs = nativeInlineMarkdown('**bold and `a_*b`** · [readme](</workspace/docs/readme.md>) · [web](https://example.com/a_(b))');
+  assert.equal(runs.map(x => x.text).join(''),'bold and a_*b · readme · web');
+  assert.equal(runs.find(x => x.code).text,'a_*b');
+  assert.equal(runs.find(x => x.code).bold,true);
+  assert.equal(runs.find(x => x.text === 'readme').href,'/workspace/docs/readme.md');
+  assert.equal(runs.find(x => x.text === 'web').href,'https://example.com/a_(b)');
+  assert.equal(nativeInlineMarkdown('**unfinished').map(x => x.text).join(''),'**unfinished');
+  assert.equal(nativeInlineMarkdown('`**literal**`').map(x => x.text).join(''),'**literal**');
+});
+
 test('native transport shares only gateway cookies, disables redirects and never retries prompts', async () => {
   const calls = [], configured = [];
   let code = 200, made = 0, streamBody = '{}';
   let cookie = Promise.resolve('other=hidden; pocket=' + 'a'.repeat(43));
   const socketCallbacks = new Map();
   const socket = { on: (event, callback) => socketCallbacks.set(event, callback), off: event => socketCallbacks.delete(event),
-    connect: async () => true, close: async () => true };
+    connect: async (_url, options) => {
+      assert.equal(options.supportOriginPort,true,'the Harmony stack must retain the gateway port in Origin');
+      socketCallbacks.get('open')(null);
+      return true;
+    }, close: async () => true };
   const network = { http: { RequestMethod: { GET:'GET',POST:'POST' }, HttpDataType:{STRING:'string'}, createHttp:()=>({
     on(event, callback) { this[event] = callback; },
     async requestInStream(url, options) { calls.push({url,options}); const encoded = new TextEncoder().encode(streamBody); this.dataReceive(encoded.buffer); this.dataEnd(); return code; },
@@ -206,7 +250,9 @@ test('UI mode preference persists and JavaScript cannot switch it from another o
     '@kit.AbilityKit':{},'@kit.ArkWeb':{},'@kit.NotificationKit':{},'@kit.PushKit':{},
     '@kit.ArkData':{preferences},'@kit.ArkTS':{util:{generateRandomUUID:()=> 'device-id'}},
     './WindowAppearance':{WindowAppearance:{}},'./NativeExperience':{NativeExperience:{state:()=> '{}'}},
-    './WidgetStore':{WidgetStore:{detailsEnabled:()=>false}}
+    './WidgetStore':{WidgetStore:{detailsEnabled:()=>false}},
+    'entry/PushKitAdapter':{PushKitAdapter:{supported:false}},
+    './BackgroundMonitor':{BackgroundMonitor:{}}
   },{AppStorage});
   const controller={getLastJavascriptProxyCallingFrameUrl:()=> 'https://other.example.com/',getUrl:()=> 'https://dsh.example.com/',runJavaScript:async()=>{}};
   const bridge=new PocketBridge(context,controller,'https://dsh.example.com',async()=>{});

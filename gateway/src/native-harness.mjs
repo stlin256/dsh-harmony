@@ -36,6 +36,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const rows = Array.isArray(value?.items) ? value.items : [];
       res.json({ protocol: 2, truncated: false, items: rows.filter(row => sessionIdValid(row.sessionId)).map(row => ({
         id: row.sessionId, title: typeof row.projections?.values?.title === 'string' ? row.projections.values.title : '新会话',
+        ...(typeof row.blank === 'boolean' ? { blank: row.blank } : {}),
         running: row.running === true, updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0
       })) });
     }));

@@ -2,13 +2,14 @@ import { picker, fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { NativeHarnessClient, NativeHttpError, NativeImageDraft } from '../services/NativeHarnessClient';
-import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion } from '../services/NativeSessionModel';
+import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, nativeSessionVisible } from '../services/NativeSessionModel';
 import { NativeListSource } from '../services/NativeListSource';
 import { NativeExperience } from '../services/NativeExperience';
 import { NativeTextContent } from './NativeTextContent';
 import { NativeInteraction } from './NativeInteraction';
 import { NativeSessionTools } from './NativeSessionTools';
 import { NativeMessageView } from './NativeMessageView';
+import { DSHIcon } from './DSHIcon';
 import { BackgroundMonitor } from '../services/BackgroundMonitor';
 
 class MessageSource implements IDataSource {
@@ -69,6 +70,7 @@ export struct NativeWorkspace {
   @State private error: string = '';
   @State private paging: boolean = false;
   @State private hasMore: boolean = false;
+  @State private visibleSessionCount: number = 0;
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
   private sessionSource: NativeListSource<NativeSession> = new NativeListSource<NativeSession>();
@@ -88,7 +90,11 @@ export struct NativeWorkspace {
   private backgroundBusy: boolean = false;
   private backgroundStates: Map<string, string> = new Map<string, string>();
 
-  private sessionsChanged(): void { this.sessionSource.set(this.sessions); }
+  private sessionsChanged(): void {
+    const visible = this.sessions.filter((item: NativeSession) => nativeSessionVisible(item, this.client.models.get(item.id)));
+    this.visibleSessionCount = visible.length;
+    this.sessionSource.set(visible);
+  }
   aboutToAppear(): void { this.mounted = true; this.reload(); }
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
@@ -113,7 +119,7 @@ export struct NativeWorkspace {
         this.requestedSession = '';
         if (requested === this.selected) {
           const session = this.sessions.find((item: NativeSession) => item.id === requested);
-          if (session) this.title = session.title;
+          if (session) this.title = session.title.trim() || '未命名会话';
           this.follow();
         } else this.select(requested);
       }
@@ -235,13 +241,13 @@ export struct NativeWorkspace {
   private select(id: string): void {
     if (this.selected) this.client.models.set(this.selected, this.model);
     this.client.drafts.set(this.selected, this.draft);
-    this.continued = []; this.interactions = []; this.toolsOpen = false; this.selected = id; this.client.selectedId = id;
+    this.continued = []; this.interactions = []; this.toolsOpen = false; this.client.selectedId = id;
     const session = this.sessions.find((item: NativeSession) => item.id === id);
-    this.title = session ? session.title : '会话';
+    this.title = session ? session.title.trim() || '未命名会话' : '会话';
     this.draft = this.client.drafts.get(id) || '';
     this.images = this.client.images.get(id) || [];
     this.uncertain = this.client.uncertain.has(id);
-    this.animatePane(() => { this.showSessions = false; }); this.followTail = true;
+    this.animatePane(() => { this.selected = id; this.showSessions = false; }); this.followTail = true;
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', !this.wide);
     this.model = this.client.models.get(id) || new NativeSessionModel();
     this.client.models.set(id, this.model);
@@ -285,12 +291,22 @@ export struct NativeWorkspace {
       if (frame.type === 'interaction-ended') {
         this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId); return;
       }
+      if (frame.type === 'error') {
+        // Preserve the server's close/reconnect lifecycle instead of throwing
+        // through the WebSocket parser and misreporting an invalid JSON frame.
+        console.error('DSH Harmony live stream returned an error frame');
+        this.connected = false; this.reconnecting = true;
+        return;
+      }
       this.model.apply(frame);
       if (frame.type === 'snapshot') {
         this.connected = true; this.reconnecting = false; this.error = ''; this.retries = 0;
       }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
-    }, (): void => { this.reconnect(id); }).catch((): void => { this.scheduleReconnect(id); });
+    }, (reason: string): void => {
+      console.error('DSH Harmony live socket ended: ' + reason);
+      this.reconnect(id);
+    }).catch((): void => { this.scheduleReconnect(id); });
   }
   private async reconnect(id: string): Promise<void> {
     if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
@@ -316,6 +332,7 @@ export struct NativeWorkspace {
     if (!this.mounted) return;
     if (this.previousRows !== this.model.messages) { this.previousRows = this.model.messages; this.source.set(this.model.messages); }
     this.running = this.model.running; this.waiting = this.model.waiting; this.hasMore = this.model.hasMore;
+    this.sessionsChanged();
     this.streamText = this.model.streamText; this.streamReasoning = this.model.streamReasoning;
     if (this.followTail) setTimeout(() => { if (this.mounted) this.scroller.scrollEdge(Edge.Bottom); }, 0);
   }
@@ -397,81 +414,94 @@ export struct NativeWorkspace {
 
   @Builder
   private sessionList() {
-    Column({ space: 12 }) {
+    Column({ space: 8 }) {
       Row() {
-        Text('会话').fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1)
+        Text('会话').fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
           .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-        Button('新建', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(13)
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'new-chat-outline', color: this.dark ? '#F9FAFB' : '#0F1115' })
+        }.width(36).height(36).borderRadius(18)
           .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          .enabled(!this.loading).onClick(() => { this.newSessionOpen = true; })
-        Button('设置', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(12)
+          .accessibilityText('新建会话').enabled(!this.loading).onClick(() => { this.newSessionOpen = true; })
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'settings-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+        }.width(36).height(36).borderRadius(18)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .accessibilityText('应用设置').onClick(this.onSettings)
       }.width('100%')
-      List({ space: 4 }) {
+      List({ space: 2 }) {
         LazyForEach(this.sessionSource, (item: NativeSession) => {
           ListItem() {
-            Column({ space: 6 }) {
-              Text(item.title).fontSize(14).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            Row({ space: 8 }) {
+              Text(item.title.trim() || '未命名会话').fontSize(14).maxLines(1).layoutWeight(1).textOverflow({ overflow: TextOverflow.Ellipsis })
                 .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-              Text(item.running ? '运行中' : '会话').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-            }.padding(12).width('100%').alignItems(HorizontalAlign.Start).borderRadius(12)
-              .backgroundColor(this.selected === item.id ? this.dark ? '#353638' : '#EBEEF2' : Color.Transparent)
+              if (item.running) {
+                Text('运行中').fontSize(10).fontColor(this.dark ? '#C7D8FF' : '#3B5B9A')
+              }
+            }.padding({ left: 10, right: 10, top: 10, bottom: 10 }).width('100%').borderRadius(10)
+              .backgroundColor(this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
           }.onClick(() => this.select(item.id)).accessibilityText(item.title + (item.running ? '，运行中' : ''))
         }, (item: NativeSession) => item.id)
       }.layoutWeight(1).width('100%')
       if (this.reconnecting) {
-        Text('连接中断，正在重连').fontSize(12).padding({ left: 10, right: 10, top: 8, bottom: 8 })
-          .width('100%').borderRadius(10).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+        Text('连接中断，正在重连').fontSize(11).padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .width('100%').borderRadius(9).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
       }
       if (this.loading) { Text('正在连接…').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
-      if (!this.loading && !this.sessions.length) { Text('新建会话，开始你的任务').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
-    }.padding(16).height('100%').width(this.wide ? 240 : '100%')
-      .backgroundColor(this.dark ? '#232324' : '#F5F6F7').transition(TransitionEffect.OPACITY)
+      if (!this.loading && !this.visibleSessionCount) { Text('新建会话，开始你的任务').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
+    }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).height('100%').width(this.wide ? 240 : '100%')
+      .backgroundColor(this.dark ? '#151517' : '#FFFFFF').transition(TransitionEffect.OPACITY)
   }
 
   @Builder
   private conversation() {
-    Column({ space: 12 }) {
-      Row({ space: 8 }) {
+    Column({ space: 8 }) {
+      Row({ space: 6 }) {
         if (!this.wide) {
-          Button('会话', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
-            .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          Button({ type: ButtonType.Normal }) {
+            DSHIcon({ glyph: 'panel-left-outline', color: this.dark ? '#F9FAFB' : '#0F1115' })
+          }.width(36).height(36).borderRadius(10)
+            .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            .accessibilityText('会话列表')
             .onClick(() => { this.backToSessions(); })
         }
-        Text(this.title).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
+        Text(this.title).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-        Button('工具', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
-          .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'ellipsis-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+        }.width(36).height(36).borderRadius(10)
+          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .accessibilityText('工具')
           .onClick(() => { this.toolsOpen = true; })
-        Button('设置', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'settings-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+        }.width(36).height(36).borderRadius(10)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .accessibilityText('应用设置').onClick(this.onSettings)
-        if (this.running) {
-          Button('停止', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
-            .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-            .onClick(() => { this.client.cancel(this.selected).catch((error: Error) => this.handleError(error)); })
-        }
       }.width('100%')
       if (this.reconnecting) {
         Row({ space: 8 }) {
           Text('•').fontSize(14).fontColor(this.dark ? '#F8C86A' : '#A56A00')
           Text('连接中断，正在重连').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           Blank()
-        }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).width('100%').borderRadius(10)
+        }.padding({ left: 10, right: 10, top: 6, bottom: 6 }).width('100%').borderRadius(9)
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
       }
-      List({ space: 18, scroller: this.scroller }) {
-        if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(44).onClick(() => { this.older(); }) } }
+      List({ space: 12, scroller: this.scroller }) {
+        if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(38).onClick(() => { this.older(); }) } }
         LazyForEach(this.source, (message: NativeMessage) => {
-          ListItem() { NativeMessageView({ client: this.client, sessionId: this.selected, message: message, onCompatibility: this.onCompatibility }) }
+          ListItem() {
+            Row() {
+              if (message.role === 'user') { Blank().layoutWeight(1) }
+              NativeMessageView({ client: this.client, sessionId: this.selected, message: message, onCompatibility: this.onCompatibility })
+            }.width('100%').alignItems(VerticalAlign.Top)
+          }
         }, (message: NativeMessage) => message.id)
         if (this.streamReasoning || this.streamText) {
           ListItem() {
             Column({ space: 8 }) {
-              Text('DeepSeek · 正在回复').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              if (this.streamReasoning) { Text('正在思考…').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
+              if (this.streamReasoning) { Text('思考中…').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
               NativeTextContent({ text: this.streamText })
             }.width('100%').alignItems(HorizontalAlign.Start)
           }
@@ -487,12 +517,12 @@ export struct NativeWorkspace {
         } })
       }, (frame: NativeFrame) => frame.eventId)
       if (this.waiting && !this.interactions.length && !this.continued.length) {
-        Button('有待处理输入 · 打开完整交互', { type: ButtonType.Normal }).height(44).fontSize(12).borderRadius(12)
+          Button('有待处理输入 · 打开完整交互', { type: ButtonType.Normal }).height(38).fontSize(12).borderRadius(11)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(this.onCompatibility)
       }
       if (this.uncertain) {
-        Button('发送结果未确认 · 已检查会话，允许再次发送', { type: ButtonType.Normal }).height(44).fontSize(11)
+        Button('发送结果未确认 · 已检查会话，允许再次发送', { type: ButtonType.Normal }).height(38).fontSize(11)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.client.uncertain.delete(this.selected); this.uncertain = false; })
       }
@@ -500,7 +530,7 @@ export struct NativeWorkspace {
         Scroll() {
           Row({ space: 8 }) {
             ForEach(this.images, (image: NativeImageDraft) => {
-              Button(image.name + ' ×').height(44).enabled(!this.sending).onClick(() => {
+              Button(image.name + ' ×').height(32).fontSize(11).enabled(!this.sending).onClick(() => {
                 this.images = this.images.filter((item: NativeImageDraft) => item.id !== image.id);
                 this.client.images.set(this.selected, this.images);
               })
@@ -508,24 +538,56 @@ export struct NativeWorkspace {
           }
         }.scrollable(ScrollDirection.Horizontal).width('100%')
       }
-      Row({ space: 8 }) {
-        Button(this.attaching ? '读取中…' : '添加图片').height(44).fontSize(12).enabled(!this.attaching && !this.sending)
-          .onClick(() => { this.attach(); })
-        Button('更多附件').height(44).fontSize(12).onClick(this.onCompatibility)
-        Toggle({ type: ToggleType.Switch, isOn: this.steer }).onChange((value: boolean) => { this.steer = value; })
-        Text(this.steer ? '下一步干预' : '下一轮排队').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-      }.width('100%')
-      Row({ space: 8 }) {
-        TextArea({ text: this.draft, placeholder: '向 Harness 发送消息' }).layoutWeight(1).height(76)
-          .fontSize(14).borderRadius(16)
-          .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+      Column({ space: 8 }) {
+        TextArea({ text: this.draft, placeholder: '发送消息…' }).height(44)
+          .fontSize(14).borderRadius(0).padding({ left: 7, right: 7, top: 3, bottom: 3 })
+          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onChange((value: string) => { this.draft = value; this.client.drafts.set(this.selected, value); })
-        Button(this.sending ? '发送中' : '发送', { type: ButtonType.Normal }).height(44).fontSize(13).borderRadius(12)
-          .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115').fontColor(this.dark ? '#151517' : '#FFFFFF')
-          .enabled(this.connected && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0))
-          .onClick(() => { this.followTail = true; this.send(); })
-      }.width('100%')
-    }.padding(16).height('100%').layoutWeight(1).transition(TransitionEffect.OPACITY)
+        Row({ space: 6 }) {
+          Button({ type: ButtonType.Normal }) {
+            if (this.attaching) { LoadingProgress().width(14).height(14).color(this.dark ? '#F9FAFB' : '#0F1115') }
+            else { DSHIcon({ glyph: 'plus-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }
+          }.width(32).height(32).borderRadius(16)
+            .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            .accessibilityText(this.attaching ? '读取中' : '添加图片')
+            .enabled(!this.attaching && !this.sending).onClick(() => { this.attach(); })
+          Button({ type: ButtonType.Normal }) {
+            DSHIcon({ glyph: 'paperclip-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+          }.width(32).height(32).borderRadius(16)
+            .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            .accessibilityText('更多附件')
+            .onClick(this.onCompatibility)
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: 5 }) {
+              DSHIcon({ glyph: this.steer ? 'paper-plane-outline' : 'queue-outline', color: this.dark ? '#CFD3D6' : '#61666B', glyphSize: 14 })
+              Text(this.steer ? '接管' : '排队').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+            }
+          }.height(32).borderRadius(9).backgroundColor(Color.Transparent)
+            .accessibilityText(this.steer ? '发送模式：接管' : '发送模式：排队，点击切换')
+            .onClick(() => { this.steer = !this.steer; })
+          Blank().layoutWeight(1)
+          if (this.running && !this.sending && !this.draft.trim() && !this.images.length) {
+            Button({ type: ButtonType.Normal }) {
+              DSHIcon({ glyph: 'stop-fill', color: '#FFFFFF' })
+            }.width(34).height(34).borderRadius(17)
+              .backgroundColor(this.dark ? '#679EFE' : '#3964FE').accessibilityText('停止任务')
+              .onClick(() => { this.client.cancel(this.selected).catch((error: Error) => this.handleError(error)); })
+          } else {
+            Button({ type: ButtonType.Normal }) {
+              if (this.sending) { LoadingProgress().width(16).height(16).color('#FFFFFF') }
+              else { DSHIcon({ glyph: 'send-arrow', color: '#FFFFFF' }) }
+            }.width(34).height(34).borderRadius(17)
+              .backgroundColor(this.dark ? '#679EFE' : '#3964FE')
+              .enabled(this.connected && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0))
+              .opacity(this.connected && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0) ? 1 : 0.4)
+              .accessibilityText(this.sending ? '发送中' : '发送').onClick(() => { this.followTail = true; this.send(); })
+          }
+        }.width('100%')
+      }.padding(8).width('100%').borderRadius(16)
+        .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
+        .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
+    }.padding({ left: 12, right: 12, top: 4, bottom: 8 }).height('100%').layoutWeight(1)
+      .transition(TransitionEffect.OPACITY)
   }
 
   build() {

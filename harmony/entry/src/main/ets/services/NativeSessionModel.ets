@@ -21,8 +21,17 @@ export class NativeMessage {
 export class NativeSession {
   id: string = '';
   title: string = '';
+  blank: boolean | undefined = undefined;
   running: boolean = false;
   updatedAt: number = 0;
+}
+
+/** New hosts expose blank explicitly; keep a fallback for older gateway versions. */
+export function nativeSessionVisible(session: NativeSession, model: NativeSessionModel | undefined): boolean {
+  if (session.running || (model !== undefined && (model.running || model.waiting || model.messages.length > 0))) return true;
+  if (typeof session.blank === 'boolean') return !session.blank;
+  const title = session.title.trim();
+  return title.length > 0 && title !== '新会话';
 }
 export class NativeSessionList {
   protocol: number = 0;
@@ -90,6 +99,7 @@ export class NativeSessionModel {
     });
   }
   private visible(item: NativeMessage): boolean {
+    if (item.role === 'detail') return false;
     return !this.replacements.some((range: NativeReplacement) => item.seq >= range.start && item.seq <= range.end);
   }
 
@@ -119,7 +129,7 @@ export class NativeSessionModel {
         this.remember([range]);
         this.messages = this.messages.filter((item: NativeMessage) => this.visible(item));
       }
-      if (frame.message) {
+      if (frame.message && this.visible(frame.message)) {
         this.messages = this.messages.concat([frame.message]);
       }
     } else if (frame.type === 'start') {
