@@ -34,7 +34,7 @@
 - 仅 `!hideChrome && tabs.length > 1` 时显示视图栏。
 - 固定视图 ID 的聊天排前，其次用户固定的其他视图；未固定的视图不占常驻位置。
 - 有“更多视图”扩展时，可见上限是 `max(1, floor((rowWidth - 48) / 120))`。
-- 三点菜单列出没出现在可见 tabs 中的剩余视图；entry 包含 `id/label/pinned/active`，通过共享 `selectView/setPinned` 操作。
+- 三点菜单列出没出现在可见tabs中的剩余视图；owner entry包含`id/label/pinned/active`与`selectView/setPinned`回调。经扩展审计核对，官方默认`ui-entry-customization`菜单只消费打开操作和当前勾选，并提供可用时的浏览插件/创建插件入口，不提供固定按钮；不能把owner合同直接当成默认可见控件。
 - 当前视图在 More 内时 More 按钮显示 active 着色。视图切换沿用同一会话，不创建新会话。
 
 证据：`packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx:118`、`:125`、`:134`、`:217`、`:235`。
