@@ -1,3 +1,5 @@
+import { ColorMetrics } from '@kit.ArkUI';
+
 /**
  * DSH product glyphs adapted from deepseek-ai/deepseek-harness's
  * packages/client/ui-primitives/src/icons/artwork.ts (MIT).
@@ -38,9 +40,16 @@ export struct DSHIcon {
   private filledGlyph(): boolean {
     return this.glyph === 'ellipsis-outline' || this.glyph === 'send-arrow' || this.glyph === 'stop-fill';
   }
+  private tint(): ColorFilter {
+    const value = ColorMetrics.resourceColor(this.color);
+    return new ColorFilter([0,0,0,0,value.red, 0,0,0,0,value.green, 0,0,0,0,value.blue, 0,0,0,value.alpha / 255,0]);
+  }
 
   build() {
-    if (this.glyph === 'copy-outline') {
+    if (['think-outline', 'browse-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline'].includes(this.glyph)) {
+      Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
+        .objectFit(ImageFit.Contain).supportSvg2(true).colorFilter(this.tint())
+    } else if (this.glyph === 'copy-outline') {
       Stack() {
         Path({ commands: this.scaleCommands(this.pathForGlyph()), width: 16, height: 16 })
           .fill(Color.Transparent).stroke(this.color).strokeWidth(1)

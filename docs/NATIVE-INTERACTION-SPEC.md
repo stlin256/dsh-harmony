@@ -6,7 +6,7 @@
 
 - 官方仓库：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。
 - 锁定 revision：`f3803c96974ad4a94195fb97e5c637e9c2a3afe3`，`0.2.2-alpha.2`；2026-10-29 核对官方 HEAD 与此一致。
-- 研究分为聊天、工作区、设置与视觉三条，证据见 [聊天](research/upstream-chat.md)、[工作区](research/upstream-workspaces.md)、[设置与视觉](research/upstream-settings-visual.md)。源码引用均针对上述 revision。
+- 研究分为聊天、工作区、设置与视觉三条，并补充非ui包贡献的入口及完整内置交互目录。证据见[聊天](research/upstream-chat.md)、[工作区](research/upstream-workspaces.md)、[设置与视觉](research/upstream-settings-visual.md)、[扩展交互目录](research/upstream-extended-ui.md)。源码引用均针对上述revision。
 - 用 ArkTS/ArkUI 重写官方的状态、操作、排序、内容投影与错误恢复；保留原版图标和视觉语义。适配手机的改变限于可用空间、触控、键盘、安全区和系统返回。
 - 不用原始 JSON 列表、临时网页或占位按钮冒充原生等价实现。第三方自定义页面与尚未移植的内置功能分别记录。不得把“打开兼容模式”记为完成该原生功能。
 - 上游全部内置模块的范围见 [覆盖核对表](NATIVE-COVERAGE.md)。这里的优先级表示执行顺序，不将后面的模块从目标中删除。
@@ -33,8 +33,9 @@
 - `NAV02` 设置入口：原生侧栏的扁平齿轮；兼容模式向已信任 DSH 网页侧栏注入同一个齿轮，调用同一个原生设置页。
 - `NAV03` 系统返回与页面返回使用同一导航状态：最上层预览/菜单 → 该功能二级页 → 功能根页 → 会话 → 列表。设置二级页只返回设置，不退出整个设置。
 - `NAV04` 导航派生值必须统一计算，窗口尺寸改变不能覆盖当前弹层/子页的返回能力。组件销毁才取消所属订阅。
-- `NAV05` 顶栏会话标题保留父/子会话层级。官方聊天页三点按钮是“更多视图”；侧栏会话三点按钮才是“会话操作”。不得混淆。
+- `NAV05` 顶栏会话标题保留父/子会话层级。三种三点入口不得混淆：标题区utilities菜单为复制Markdown、下载日志、可用时反馈；tab栏三点为更多视图；侧栏会话三点为会话管理。注册来源还包含`session-query/session-log-export`，不能只扫描`ui-*`。
 - `NAV06` 会话操作顺序：置顶/取消置顶 → 重命名 → 创建分支 → 归档/恢复 → 复制会话 ID。归档会话不提供置顶；模型、队列不塞入此菜单。
+- `NAV06a` 标题区utilities复制完整服务端Markdown，不仅复制已加载窗口；日志经Host授权export route生成ZIP，可选择是否包含后代，手机使用系统保存选择器。忙碌时禁用对应操作，复制/下载失败分别反馈。
 - `NAV07` 更多视图按官方视图注册顺序、固定偏好和可用宽度决定可见标签，聊天固定；默认溢出菜单列出其余视图与当前勾选，以及可用的插件浏览/创建入口。owner虽提供固定回调，官方默认菜单不消费它，不添加臆测的固定按钮。只有一个视图时隐藏视图栏；没有原生实现的视图记录为待移植，不伪造菜单项。
 
 ### WS：工作区与会话
@@ -43,7 +44,7 @@
 - `WS02` 列表使用服务端 `blank` 隐藏空会话；当前正在编辑的空会话可保留在工作区新建位置。运行中或缓存中确有内容的会话不能被默认标题误删。
 - `WS03` 默认按 updatedAt 降序、同值用 ID 稳定排序，当前 blank 最前，再将非归档 pinned 排前；手动顺序按 account 隔离保存在客户端，不能拿 membership 数组冒充用户手动偏好。搜索匹配 title、workspace label/cwd basename、完整 ID，250ms 防抖远端内容搜索，取消旧请求并按 ID 合并，不改写源数组。
 - `WS04` 新建会话在选定工作区中创建。复用符合 preset 条件的已有空会话；`workspaceId` 与 `cwd` 互斥。指定 ID 的创建在超时后可通过列表核对。
-- `WS05` 添加、重命名、排序、移除工作区与会话置顶、归档、恢复分别使用公开 Workspace Controller 合同。普通归档直接执行并可撤销；活动会话先请求，只有 Host 返回 `workspace/session-active` 后才询问停止活动并使用 `stopActivity:true`，取消不停止。分支传 `increaseTitle:true,allowMigration:false`，不在后台强制迁移。
+- `WS05` 添加、重命名、排序、移除工作区与会话置顶、归档、恢复分别使用公开Workspace Controller合同。普通归档直接执行并可撤销；活动会话先请求，只有Host返回`workspace/session-active`后才询问停止活动并使用`stopActivity:true`，取消不停止。分支RPC只传`sessionId/atSeq?/allowMigration:false`；客户端increaseTitle策略在创建成功后单独rename，已有编号递增；rename失败不重做fork，不在后台强制迁移。
 - `WS06` 目录选择的是远端文件系统，显示 Host 根、目录加载/失败/返回/确认；不可将手机目录当成远端目录。直接输入路径只是后备入口。
 - `WS07` 会话选择保留各自草稿、附件、已加载窗口、过程展开和视图选择；切换后只显示所选会话的实时交互。
 

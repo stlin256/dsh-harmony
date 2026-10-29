@@ -29,7 +29,7 @@ struct Index {
   @StorageLink('nativeAuthRevision') @Watch('authenticated') private authRevision: number = 0;
   @State private authSurface: boolean = false;
   @State private compatibilitySurface: boolean = false;
-  @State private nativeSettings: boolean = false;
+  @State @Watch('settingsChanged') private nativeSettings: boolean = false;
   @State private connectionManager: boolean = false;
   @State private modePicker: boolean = false;
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
@@ -242,13 +242,16 @@ struct Index {
   }
   @Builder
   private settingsSheet() {
-    NativeSettings({ client: this.nativeClient,
+    NativeSettings({ client: this.nativeClient, serverOrigin: this.origin,
       invoke: (command: string, value: string): Promise<string> => this.invokeNative(command, value),
       onReturn: (): void => { this.nativeSettings = false; },
       onModes: (): void => { this.modePicker = true; },
       onConnection: (): void => { this.nativeSettings = false; this.connectionManager = true; },
       onLogin: (): void => { this.loginSurface(); },
       onLogout: (): Promise<void> => this.disconnectConnection() })
+  }
+  private settingsChanged(): void {
+    if (!this.nativeSettings) AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
@@ -277,10 +280,15 @@ struct Index {
 
   onBackPress(): boolean {
     if (!this.ready) return false;
+    if (this.nativeSettings) {
+      if ((AppStorage.get<string>('nativeSettingsPage') || 'root') !== 'root') {
+        AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
+      } else this.nativeSettings = false;
+      return true;
+    }
     if (this.connectionManager) { this.connectionManager = false; return true; }
     if (this.compatibilitySurface) { this.closeCompatibility(); return true; }
     if (this.uiMode === 'native' && !this.authSurface) {
-      if (this.nativeSettings) { this.nativeSettings = false; return true; }
       if (AppStorage.get<boolean>('nativeWorkspaceCanGoBack') === true) {
         AppStorage.setOrCreate<number>('nativeBackRevision', (AppStorage.get<number>('nativeBackRevision') || 0) + 1); return true;
       }
@@ -292,6 +300,7 @@ struct Index {
 
   @Builder
   private pageContent() {
+    Stack() {
     Column() {
       if (this.connectionManager) {
         Scroll() {
@@ -407,8 +416,9 @@ struct Index {
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
       .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: true,
         onDisappear: (): void => { this.closeCompatibility(); } })
-      .bindSheet(this.nativeSettings, this.settingsSheet, { height: SheetSize.LARGE, showClose: false,
-        onDisappear: (): void => { this.nativeSettings = false; } })
+      .visibility(this.nativeSettings ? Visibility.Hidden : Visibility.Visible)
+      if (this.nativeSettings) { this.settingsSheet() }
+    }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
   }
 
   build() {

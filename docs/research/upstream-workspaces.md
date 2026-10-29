@@ -27,9 +27,11 @@
 
 空白占位会话不显示行菜单，也不支持拖动；会话菜单打开时抑制行 hover card。正常行单击进入；仅当前已选会话的标题先经过一次单击 arm 后，双击才重命名，避免进入会话的第二次点击意外改名。桌面 hover 的归档按钮 order 100、pin 按钮 order 200；手机没有 hover，应保留同一操作菜单，不能让核心动作依赖 hover。证据：`rows/Rows.tsx:645`、`:651`、`:659`、`:732`、`:749`、`:764`。
 
-### 1.2 会话内容顶栏的三点按钮：更多视图
+### 1.2 会话顶栏存在两种不同的三点按钮
 
-官方 `ConversationSession.tsx:27` 的 Ellipsis 实际是 **More Views**，内容来自 `conversation.session.header.views.actions`。它不是上面五项会话管理菜单，更不是模型、队列、工作区和调试数据的大集合。
+会话标题右侧 utilities 的“更多操作”来自 `packages/session-query/session-log-export/src/client/HeaderAction.tsx:45`，实际内置项为：**复制会话为 Markdown → 下载 Session 日志 → 反馈（反馈服务可用时）**。该包 `src/client/index.ts:69` 将其注册到 `conversation.session.header.utilities`。复制和下载分别依据自身 pending 状态禁用。精确 HTTP 契约、格式与 owner 限制见 [扩展交互审计](upstream-extended-ui.md)。
+
+View 标签栏末尾的 `ConversationSession.tsx:27` Ellipsis 是 **More Views**，内容来自 `conversation.session.header.views.actions`。它与 utilities、上面五项会话管理菜单都不同。
 
 - 仅 `!hideChrome && tabs.length > 1` 时显示视图栏。
 - 固定视图 ID 的聊天排前，其次用户固定的其他视图；未固定的视图不占常驻位置。
@@ -39,7 +41,7 @@
 
 证据：`packages/client/ui-conversation/src/client/skeleton/ConversationSession.tsx:118`、`:125`、`:134`、`:217`、`:235`。
 
-鸿蒙上可以保留一个紧凑会话操作入口以适应手机，但必须在 spec 标明这是移动端入口合并，内部管理动作仍按 1.1；若实现官方更多视图，须与会话管理明确区分，不能声称混合菜单与上游一致。
+鸿蒙标题三点应优先对应官方 utilities；侧栏的会话管理动作仍按 1.1；View 导航另行承载。若因手机布局合并入口，须在 spec 标明映射并保留语义，不能声称任意混合配置页与上游一致。
 
 ### 1.3 输入框的模型／推理菜单
 
@@ -144,11 +146,13 @@
 | quiet archive | menu close → command，无额外确认 | 保留日志/位置，清主视图，提示 Undo/归档列表 | active 拒绝才进入下述确认；其他错误不伪成功 |
 | active archive | Host 返回 `workspace/session-active` + activity → 确认 | 显式 `stopActivity:true` 后归档并提示 | Cancel 保留运行，confirm 出错保留对话框；不能在第一次请求静默 stop |
 | restore | command | 从 archive set 移除，恢复原 account 位置 | 保持归档；不自动打开 |
-| fork | command `{increaseTitle:true, allowMigration:false}` | 新会话从 Host list 出现于源会话旁；不要求自动选择 | migration-required 提示先打开会话；不在后台强做迁移 |
+| fork | UI 调用 `ISessions.fork({increaseTitle:true, allowMigration:false})`；RPC 只传 `sessionId/atSeq?/allowMigration?` | child 创建后另发 rename 实现标题递增；不要求自动选择 | migration-required 提示先打开会话；rename失败时child已创建，不能当作未创建重试fork |
 | copy ID | menu close → clipboard | 短成功提示 | 短失败提示 |
 | workspace create | picker → directory flow → adopting | pick 新/已有 workspace，再连接 blank | 失败可重新选择，busy 锁防竞态 |
 
 证据：`index.ts:174`、`:182`、`:193`、`:216`、`:224`、`:236`；`navigation.ts:321`；`ArchiveSession.tsx:105`；`RenameSession.tsx:73`。
+
+分支标题递增属于客户端服务，不是 `session/fork` Remote 字段。`packages/api/session-controller/src/client/sessions/service.ts:463` 先取源会话 durable `title`，仅向 manager.fork 传 sessionId、可选 atSeq/allowMigration。child 创建并执行 onCreated 后，若源 title 非 undefined，再 manager.rename(childId, increasedForkTitle(title))。`:138` 的算法递增尾部半角 `(数字)` 或全角 `（数字）`，保留括号风格；其余追加 ` (1)`。没有 durable title 不 rename；rename失败会抛错但不删除已创建child。native应保留这一部分成功状态，不自动重发fork。
 
 ## 9. 传输契约：不能用猜测的 HTTP path 代替官方 Remote
 

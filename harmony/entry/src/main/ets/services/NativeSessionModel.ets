@@ -7,7 +7,19 @@ export class NativeImageAttachment {
   attachmentId: string = ''; mediaType: string = ''; bytes: number = 0;
   width: number = 0; height: number = 0; name: string = '';
 }
+export class NativeAssistantSegment {
+  kind: string = ''; text: string = ''; blocks: NativeTextBlock[] = []; images: NativeImageAttachment[] = [];
+}
 export class NativeMessage {
+  metaRaw: string = ''; contentRaw: string = ''; errorRaw: string = '';
+  flat: boolean = false; preview: boolean = true; runningTurn: boolean = false;
+  segments: NativeAssistantSegment[] = [];
+  eventType: string = ''; sourceKind: string = '';
+  turn: number = -1; step: number = -1; time: number = 0;
+  callId: string = ''; parentCallId: string = ''; rootCallId: string = ''; toolName: string = '';
+  phase: string = ''; failed: boolean = false; outcome: string = ''; error: string = '';
+  args: string = ''; output: string = ''; status: string = ''; turnKey: string = '';
+  children: NativeMessage[] = []; foldable: boolean = false; closed: boolean = true;
   images: NativeImageAttachment[] = [];
   id: string = '';
   seq: number = 0;
@@ -18,20 +30,55 @@ export class NativeMessage {
   blocks: NativeTextBlock[] = [];
   detail: string = '';
 }
+export class NativeToolUpdate {
+  callId: string = ''; name: string = ''; argsDelta: string = ''; arguments: string = ''; replace: boolean = false;
+}
 export class NativeSession {
+  titleKnown: boolean = false;
+  origin: string = ''; parentSessionId: string = ''; agentPreset: string = '';
   id: string = '';
   title: string = '';
   blank: boolean | undefined = undefined;
+  cwd: string = '';
   running: boolean = false;
   updatedAt: number = 0;
+}
+export class NativeWorkspaceItem {
+  workspaceId: string = ''; path: string = ''; title: string = ''; sessionIds: string[] = [];
+}
+export class NativeWorkspaceSnapshot {
+  available: boolean = false; items: NativeWorkspaceItem[] = [];
+  archivedSessionIds: string[] = []; pinnedSessionIds: string[] = [];
+}
+export function nativeToolsParent(page: string): string {
+  if (page === 'models' || page === 'efforts') return 'modelsRoot';
+  if (page === 'queueEdit') return 'queue';
+  return '';
 }
 
 /** New hosts expose blank explicitly; keep a fallback for older gateway versions. */
 export function nativeSessionVisible(session: NativeSession, model: NativeSessionModel | undefined): boolean {
-  if (session.running || (model !== undefined && (model.running || model.waiting || model.messages.length > 0))) return true;
+  if (session.running || (model !== undefined && (model.running || model.waiting || model.messages.some((row: NativeMessage) =>
+    (row.role === 'user' || row.role === 'assistant') && !!(row.text || row.reasoning || row.images?.length))))) return true;
   if (typeof session.blank === 'boolean') return !session.blank;
   const title = session.title.trim();
   return title.length > 0 && title !== '新会话';
+}
+export function nativeWorkspaceSessions(sessions: NativeSession[], snapshot: NativeWorkspaceSnapshot, workspaceId: string,
+  query: string, models: Map<string, NativeSessionModel>, selectedId: string = '', manual: boolean = false): NativeSession[] {
+  const workspace = snapshot.items.find((item: NativeWorkspaceItem) => item.workspaceId === workspaceId);
+  const archived: Set<string> = new Set<string>(snapshot.archivedSessionIds);
+  const search = query.trim().toLowerCase();
+  const rows = sessions.filter((row: NativeSession) => row.origin !== 'subagent' && !archived.has(row.id) && (row.id === selectedId || nativeSessionVisible(row, models.get(row.id))) &&
+    (!workspace || workspace.sessionIds.includes(row.id)) && (!search || !row.blank && (row.title + ' ' + row.id + ' ' + (workspace?.title || '') + ' ' + (row.cwd || '')).toLowerCase().includes(search)));
+  return rows.sort((a: NativeSession, b: NativeSession): number => {
+    if (a.blank === true && a.id === selectedId) return -1;
+    if (b.blank === true && b.id === selectedId) return 1;
+    const ap = snapshot.pinnedSessionIds.indexOf(a.id); const bp = snapshot.pinnedSessionIds.indexOf(b.id);
+    if (ap >= 0 || bp >= 0) return ap >= 0 && bp >= 0 ? ap - bp : ap >= 0 ? -1 : 1;
+    if (manual && workspace) return workspace.sessionIds.indexOf(a.id) - workspace.sessionIds.indexOf(b.id);
+    return b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+  });
 }
 export class NativeSessionList {
   protocol: number = 0;
@@ -52,6 +99,8 @@ export class NativeInteractionRequest {
 export class NativeReplacement { start: number = -1; end: number = -1; }
 export class NativePendingQuestion { callId: string = ''; state: string = ''; questions: NativeQuestion[] = []; }
 export class NativeFrame {
+  journal: NativeJournalEntry[] = [];
+  toolUpdates: NativeToolUpdate[] = [];
   questions: NativePendingQuestion[] = [];
   callId: string = '';
   remainingMs: number = -1;
@@ -77,9 +126,17 @@ export class NativeFrame {
   running: boolean = false;
   waiting: boolean = false;
 }
+export class NativeJournalEntry { seq: number = 0; raw: string = ''; }
 
 /** One in-memory session projection. No transcripts or drafts are written to disk. */
 export class NativeSessionModel {
+  readonly journal: Map<number, string> = new Map<number, string>();
+  readonly disclosures: Map<string, boolean> = new Map<string, boolean>();
+  readonly turnDisclosure: Map<string, boolean> = new Map<string, boolean>();
+  collapseThrough: number = -1;
+  lastSeq(): number { return this.cursor; }
+  readonly expandedTurns: Set<string> = new Set<string>();
+  streamTools: NativeMessage[] = [];
   messages: NativeMessage[] = [];
   historyCut: number = -1;
   historyBefore: number = -1;
@@ -96,14 +153,33 @@ export class NativeSessionModel {
   private remember(ranges: NativeReplacement[]): void {
     ranges.forEach((range: NativeReplacement) => {
       if (!this.replacements.some((existing: NativeReplacement) => existing.start === range.start && existing.end === range.end)) this.replacements.push(range);
+      this.journal.forEach((_value: string, seq: number): void => { if (seq >= range.start && seq <= range.end) this.journal.delete(seq); });
     });
   }
   private visible(item: NativeMessage): boolean {
     if (item.role === 'detail') return false;
+    if (item.role === 'user') {
+      if (item.sourceKind && !['user', 'steer', 'client'].includes(item.sourceKind)) return false;
+      if (!item.sourceKind && /^(?:current runtime context\.|time sampled while preparing turn|browser time zone for this request:|elapsed since the preceding model-visible message:|current working directory:|current dsh file policy:|<system[-_]reminder>)/i.test((item.text || '').trimStart())) return false;
+    }
     return !this.replacements.some((range: NativeReplacement) => item.seq >= range.start && item.seq <= range.end);
+  }
+  private updateTools(updates: NativeToolUpdate[]): void {
+    for (const update of updates || []) {
+      let tool = this.streamTools.find((item: NativeMessage) => item.callId === update.callId);
+      if (!tool) {
+        if (!update.name) continue;
+        tool = new NativeMessage(); tool.id = 'preparing-' + update.callId; tool.role = 'tool';
+        tool.callId = update.callId; tool.toolName = update.name; tool.phase = 'preparing'; tool.time = Date.now();
+        this.streamTools.push(tool);
+      }
+      if (update.name) tool.toolName = update.name;
+      tool.text = update.replace ? update.arguments : tool.text + update.argsDelta;
+    }
   }
 
   apply(frame: NativeFrame): void {
+    (frame.journal || []).forEach((entry: NativeJournalEntry): void => { this.journal.set(entry.seq, entry.raw); });
     if (frame.type === 'snapshot') {
       // Retain loaded history on foreground/reconnect, applying replacement ranges.
       this.remember(frame.replacements || []);
@@ -118,6 +194,7 @@ export class NativeSessionModel {
       this.nextIndex = frame.nextIndex || 0;
       this.streamText = frame.text || '';
       this.streamReasoning = frame.reasoning || '';
+      this.streamTools = []; this.updateTools(frame.toolUpdates);
     } else if (frame.type === 'state') {
       this.running = frame.running;
       this.waiting = frame.waiting;
@@ -136,6 +213,7 @@ export class NativeSessionModel {
       this.attemptId = frame.attemptId;
       this.nextIndex = 0;
       this.streamText = ''; this.streamReasoning = '';
+      this.streamTools = [];
     } else if (frame.type === 'delta') {
       if (frame.attemptId !== this.attemptId) throw new Error('Stream attempt changed');
       if (frame.index < this.nextIndex) return;
@@ -143,13 +221,18 @@ export class NativeSessionModel {
       this.nextIndex++;
       this.streamText = this.streamText + (frame.text || '');
       this.streamReasoning = this.streamReasoning + (frame.reasoning || '');
+      this.updateTools(frame.toolUpdates);
     } else if (frame.type === 'end' && frame.attemptId === this.attemptId) {
       this.attemptId = ''; this.streamText = ''; this.streamReasoning = '';
+      this.streamTools = [];
     } else if (frame.type === 'error') throw new Error('Native stream unavailable');
   }
 
   prepend(page: NativeFrame): void {
     this.remember(page.replacements || []);
+    (page.journal || []).forEach((entry: NativeJournalEntry): void => {
+      if (!this.replacements.some((range: NativeReplacement) => entry.seq >= range.start && entry.seq <= range.end) && !this.journal.has(entry.seq)) this.journal.set(entry.seq, entry.raw);
+    });
     const existing: Set<number> = new Set<number>(this.messages.map((item: NativeMessage) => item.seq));
     this.messages = page.messages.filter((item: NativeMessage) => !existing.has(item.seq)).concat(this.messages).filter((item: NativeMessage) => this.visible(item));
     this.hasMore = page.hasMore;

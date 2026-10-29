@@ -2,11 +2,14 @@ import { http, webSocket } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { NativeFrame, NativeSessionList, NativeSessionModel } from './NativeSessionModel';
+import { NativeFrame, NativeSessionList, NativeSessionModel, NativeWorkspaceSnapshot } from './NativeSessionModel';
+import { NativeHostSettings } from './NativeHostSettings';
+import { NativeModelDirectory } from './NativeModelDirectory';
 
 export class NativeHttpError extends Error {
   status: number;
-  constructor(status: number) { super(status === 401 ? '请先登录工作空间' : '请求失败或结果未确认，请刷新核对'); this.status = status; }
+  code: string;
+  constructor(status: number, code: string = '') { super(status === 401 ? '请先登录工作空间' : '操作未确认，请刷新'); this.status = status; this.code = code; }
 }
 export class GatewayState {
   mode: string = '';
@@ -18,6 +21,12 @@ export class NativeImageDraft { id: string = ''; name: string = ''; mediaType: s
 export class NativeCreatedSession { id: string = ''; }
 
 export class NativeHarnessClient {
+  readonly modelDirectory: NativeModelDirectory = new NativeModelDirectory((value: string): Promise<string> => this.operation(value), (): void => {
+    AppStorage.setOrCreate<number>('nativeModelRevision', (AppStorage.get<number>('nativeModelRevision') || 0) + 1);
+  });
+  readonly hostSettings: NativeHostSettings = new NativeHostSettings((value: string): Promise<string> => this.operation(value), (): void => {
+    AppStorage.setOrCreate<number>('nativeHostSettingsRevision', (AppStorage.get<number>('nativeHostSettingsRevision') || 0) + 1);
+  });
   private origin: string;
   private socket: webSocket.WebSocket | null = null;
   private generation: number = 0;
@@ -41,7 +50,7 @@ export class NativeHarnessClient {
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -59,12 +68,17 @@ export class NativeHarnessClient {
           const part = new Uint8Array(data); chunks.push(part); bytes += part.byteLength;
         });
         const status = await task.requestInStream(this.origin + path, options);
-        if (status < 200 || status >= 300) throw new NativeHttpError(status);
         await end;
         const buffer = new Uint8Array(bytes);
         let offset: number = 0;
         chunks.forEach((part: Uint8Array) => { buffer.set(part, offset); offset += part.byteLength; });
-        return util.TextDecoder.create('utf-8').decodeToString(buffer);
+        const text = util.TextDecoder.create('utf-8').decodeToString(buffer);
+        if (status < 200 || status >= 300) {
+          let code = '';
+          try { const value = JSON.parse(text) as Record<string, Object>; if (typeof value.code === 'string') code = value.code; } catch (_) {}
+          throw new NativeHttpError(status, code);
+        }
+        return text;
       }
       const response = await task.request(this.origin + path, options);
       if (response.responseCode < 200 || response.responseCode >= 300) throw new NativeHttpError(response.responseCode);
@@ -89,9 +103,11 @@ export class NativeHarnessClient {
     await this.request('/pocket/api/auth/native', http.RequestMethod.POST, JSON.stringify({ token: token }));
   }
   async sessions(): Promise<NativeSessionList> { return JSON.parse(await this.request('/pocket/api/native/sessions')) as NativeSessionList; }
-  async create(cwd: string = '', agentPreset: string = ''): Promise<string> {
+  async workspaces(): Promise<NativeWorkspaceSnapshot> { return JSON.parse(await this.request('/pocket/api/native/workspaces')) as NativeWorkspaceSnapshot; }
+  async create(cwd: string = '', agentPreset: string = '', workspaceId: string = '', reuseId: string = ''): Promise<string> {
     const result = JSON.parse(await this.request('/pocket/api/native/create', http.RequestMethod.POST,
-      JSON.stringify({ requestId: util.generateRandomUUID(), cwd: cwd || undefined, agentPreset: agentPreset || undefined }))) as NativeCreatedSession;
+      JSON.stringify({ requestId: reuseId || util.generateRandomUUID(), workspaceId: workspaceId || undefined,
+        cwd: workspaceId ? undefined : cwd || undefined, agentPreset: agentPreset || undefined }))) as NativeCreatedSession;
     return result.id;
   }
   async page(id: string, before: number, throughSeq: number = -1): Promise<NativeFrame> {
@@ -115,10 +131,31 @@ export class NativeHarnessClient {
   async operation(body: string): Promise<string> {
     return this.request('/pocket/api/native/operation', http.RequestMethod.POST, body);
   }
+  async exportSession(id: string, format: string, receive: (part: ArrayBuffer) => void): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(id) || !['markdown', 'zip'].includes(format)) throw new Error('Invalid export');
+    const task = http.createHttp();
+    try {
+      let status = 0;
+      let consumerError: Error | null = null;
+      const ended = new Promise<void>((resolve: () => void) => { task.on('dataEnd', resolve); });
+      task.on('headersReceive', (): void => {});
+      task.on('dataReceive', (part: ArrayBuffer): void => {
+        try { receive(part); } catch (error) { consumerError = error as Error; }
+      });
+      status = await task.requestInStream(this.origin + '/pocket/api/native/export?sessionId=' + encodeURIComponent(id) + '&format=' + format + '&includeDescendants=true', {
+        method: http.RequestMethod.GET, header: { Origin: this.origin, Cookie: await this.cookie() },
+        maxRedirects: 0, usingCache: false, connectTimeout: 10000, readTimeout: 120000
+      });
+      await ended;
+      if (status < 200 || status >= 300) throw new NativeHttpError(status);
+      if (consumerError) throw consumerError as Error;
+    } finally { task.destroy(); }
+  }
   async cancel(id: string): Promise<void> {
     await this.request('/pocket/api/native/cancel', http.RequestMethod.POST, JSON.stringify({ sessionId: id }));
   }
   pause(): void {
+    this.modelDirectory.reset();
     this.generation++;
     const old = this.socket; this.socket = null;
     if (old) {
@@ -127,6 +164,7 @@ export class NativeHarnessClient {
     }
   }
   clearLocalState(): void {
+    this.modelDirectory.clear();
     this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear(); this.selectedId = '';
   }
   async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {

@@ -4,18 +4,23 @@ import { DSHIcon } from './DSHIcon';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeImageView } from './NativeImageView';
 import { NativeExperience } from '../services/NativeExperience';
+import { nativeReasoningPreview } from '../services/NativeTranscript';
 import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
 
 @Component
 export struct NativeMessageView {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
+  disclosures: Map<string, boolean> = new Map<string, boolean>();
+  @Prop preview: boolean = true;
+  @Prop runningReasoning: boolean = false;
   onCompatibility: () => void = (): void => {};
   @Prop message: NativeMessage = new NativeMessage();
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private reasoningOpen: boolean = false;
   @State private toolOpen: boolean = false;
   @State private copied: boolean = false;
+  aboutToAppear(): void { this.reasoningOpen = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true; }
 
   private copyMessage(): void {
     const text = this.message.text || this.message.blocks.map((block: NativeTextBlock) => block.text).join('\n');
@@ -31,7 +36,7 @@ export struct NativeMessageView {
 
   build() {
     Column({ space: 6 }) {
-      if (this.message.role !== 'user' && this.message.role !== 'assistant' && this.message.role !== 'tool') {
+      if (this.message.role !== 'user' && this.message.role !== 'assistant' && this.message.role !== 'tool' && this.message.role !== 'reasoning') {
         Text(this.message.label).fontSize(12).fontWeight(FontWeight.Medium)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
@@ -41,10 +46,15 @@ export struct NativeMessageView {
             DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
               .rotate({ angle: this.reasoningOpen ? -90 : 180 })
             Text('思考过程').fontSize(12)
+            if (!this.reasoningOpen && this.preview) {
+              Text(nativeReasoningPreview(this.message.reasoning, this.runningReasoning)).fontSize(12).maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+            }
           }
         }.height(30).fontSize(12).borderRadius(8)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-          .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen; }); })
+          .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen;
+            this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.reasoningOpen); }); })
         if (this.reasoningOpen) {
           NativeTextContent({ text: this.message.reasoning })
         }
@@ -61,6 +71,7 @@ export struct NativeMessageView {
           .onClick(() => { this.animate(() => { this.toolOpen = !this.toolOpen; }); })
       }
       if (this.message.role !== 'tool' || this.toolOpen) {
+        if (!this.message.blocks.length && this.message.text) { NativeTextContent({ text: this.message.text }) }
         ForEach(this.message.blocks, (block: NativeTextBlock) => {
           if (block.kind === 'code') {
             Column({ space: 8 }) {

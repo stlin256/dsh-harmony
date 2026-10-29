@@ -2,6 +2,8 @@
 
 ![DSH Harmony](harmony/AppScope/resources/base/media/app_icon.svg)
 
+Native interaction work follows the [source-backed specification](docs/NATIVE-INTERACTION-SPEC.md). The [implementation ledger](docs/NATIVE-INTERACTION-STATUS.md) distinguishes implementation, automated checks, and device validation.
+
 [简体中文](README.md) · English
 
 A HarmonyOS companion for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Compatibility mode preserves the original Web workspace. The experimental native interface provides sessions, messages, tools and live interactions, with system notifications and home-screen widgets.
@@ -19,7 +21,7 @@ Native login uses Harness's official launch-token exchange and signed cookies. N
 
 1. Prepare a reachable Harness Web instance on Node.js 24.9+.
 2. Run `npm ci` in `gateway/`, then `node scripts/package-plugin.mjs` from the repository root.
-3. Install `.artifacts/dsh-harmony-plugin-0.2.0.tgz` using Harness's plugin manager and enable `@dsh-harmony/plugin`. See the [plugin guide](plugins/dsh-harmony/README.md) for manual installation.
+3. Install `.artifacts/dsh-harmony-plugin-0.2.3.tgz` using Harness's plugin manager and enable `@dsh-harmony/plugin`. See the [plugin guide](plugins/dsh-harmony/README.md) for manual installation.
 4. Install the app. Use the default native login with the Web origin and access key from the startup URL's `token` parameter. The key is not saved in app preferences; the signed cookie is used for later sessions.
 5. Optional Pocket ID setup instructions and tools are in the [Passkey deployment guide](docs/OIDC-DEPLOYMENT.md). Choose the lower Passkey option after configuring the server.
 

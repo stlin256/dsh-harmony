@@ -6,12 +6,20 @@ import { once } from 'node:events';
 import WebSocket, { WebSocketServer } from 'ws';
 import { openStore } from '../src/store.mjs';
 import { createApp } from '../src/app.mjs';
-import { normalizeFollow, normalizedHistory, richBlocks } from '../src/native-protocol.mjs';
+import { normalizeFollow, normalizedHistory, richBlocks, normalizeRecord } from '../src/native-protocol.mjs';
 
 const origin = 'https://dsh.example.com';
 async function setup(t, options = {}) {
   const calls = [];
   const backend = createServer(async (req, res) => {
+    if (req.method === 'GET') {
+      assert.equal(req.headers.cookie, 'harness=server-only');
+      const route = new URL(req.url, 'http://localhost');
+      assert.equal(route.searchParams.get('sessionId'), 'session');
+      if (route.pathname === '/api/session.markdown') { res.setHeader('Content-Type','text/markdown'); res.end('# Complete transcript\n\nnot just the visible window'); return; }
+      if (route.pathname === '/api/session.export') { assert.equal(route.searchParams.get('includeDescendants'),'true'); res.setHeader('Content-Type','application/zip'); res.end(Buffer.from([0x50,0x4b,3,4,0,255])); return; }
+      res.writeHead(404).end(); return;
+    }
     const chunks = []; for await (const part of req) chunks.push(part);
     const value = JSON.parse(Buffer.concat(chunks).toString());
     calls.push({ headers: req.headers, value });
@@ -20,6 +28,10 @@ async function setup(t, options = {}) {
       assert.deepEqual(value.payload.args, { _request: {} }, 'source _request parameter must keep its exact wire name');
       result = { items: [{ sessionId:'session', blank:false, running:true, updatedAt:42, projections:{values:{title:'Native session'}} }] };
     } else if (value.method === 'session/create') result = {sessionId:value.payload.args.request.sessionId};
+    else if (value.method === 'settings/describe') result = {writable:true,namespaces:[
+      {ns:'ui-chat',value:{transcriptView:'standard'},revision:4}, {ns:'private-provider',value:{credential:'must-not-forward'},revision:1}
+    ]};
+    else if (value.method === 'settings/mutate') result = {ns:value.payload.args.ns,value:{[value.payload.args.ops[0].path[0]]:value.payload.args.ops[0].value},revision:5};
     else if (value.method === 'session/page') result = { records:[{type:'event',event:{seq:0,type:'user/message',data:{content:[{type:'text',text:'older'}]}}}], cursor:3,hasMore:false };
     else result = {accepted:true};
     res.setHeader('Content-Type','application/json');
@@ -36,6 +48,12 @@ async function setup(t, options = {}) {
       ws.on('message',raw=>{
         const frame=JSON.parse(raw); openings.push(frame);
         assert.equal(frame.type,'open');
+        if (frame.endpoint === 'workspace/follow') {
+          assert.deepEqual(frame.payload,{args:{}});
+          ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{type:'baseline',value:{items:[
+            {workspaceId:'workspace',title:'Project',path:'/workspace/project',sessionIds:['session']}
+          ],archivedSessionIds:['archived'],pinnedSessionIds:['session']}}})); return;
+        }
         if (frame.endpoint === 'userQuestions/attachWait') {
           assert.deepEqual(frame.payload.args,{agent:'session',callId:'timed-call'});
           ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value:{remainingMs:80}})); return;
@@ -101,12 +119,31 @@ test('modern Harness control stream replaces removed per-session observers witho
   ws.close();
 });
 
+test('header utilities export complete Host content and profile writes use named revision arguments', async t => {
+  const {call,calls}=await setup(t);
+  const markdown=await call('/pocket/api/native/export?sessionId=session&format=markdown');
+  assert.equal(markdown.status,200);assert.match(markdown.text,/not just the visible window/);
+  assert.equal((await call('/pocket/api/native/export?sessionId=session&format=zip')).status,200);
+  assert.equal((await call('/pocket/api/native/export?sessionId=../bad&format=zip')).status,400);
+  assert.equal((await call('/pocket/api/native/export?sessionId=session&format=markdown',undefined,false)).status,401);
+  const settings=JSON.parse((await call('/pocket/api/native/operation',{operation:'settingsDescribe'})).text);
+  assert.equal(settings.namespaces.length,1);assert.doesNotMatch(JSON.stringify(settings),/must-not-forward/);
+  assert.deepEqual(calls.at(-1).value.payload.args,{});
+  assert.equal((await call('/pocket/api/native/operation',{operation:'settingsSet',ns:'ui-chat',field:'transcriptView',value:'detailed',revision:4})).status,200);
+  assert.equal(calls.at(-1).value.method,'settings/mutate');
+  assert.deepEqual(calls.at(-1).value.payload.args,{ns:'ui-chat',ops:[{op:'set',path:['transcriptView'],value:'detailed'}],expectedRevision:4});
+  for (const body of [
+    {ns:'provider',field:'apiKey',value:'never'}, {ns:'ui-chat',field:'transcriptView',value:'invented'},
+    {ns:'ui-theme',field:'fontSize',value:23}, {ns:'ui-chat',field:'collapseTiming',value:'completion',revision:-1}
+  ]) assert.equal((await call('/pocket/api/native/operation',{operation:'settingsSet',revision:4,...body})).status,400);
+});
+
 test('native adapter uses official RPC envelopes and keeps upstream credentials server-side',async t=>{
   const {call,calls}=await setup(t);
   assert.equal((await call('/pocket/api/native/sessions',undefined,false)).status,401);
   const sessions=await call('/pocket/api/native/sessions');
   assert.equal(sessions.status,200);
-  assert.deepEqual(JSON.parse(sessions.text),{protocol:2,truncated:false,items:[{id:'session',title:'Native session',blank:false,running:true,updatedAt:42}]});
+  assert.deepEqual(JSON.parse(sessions.text),{protocol:2,truncated:false,items:[{id:'session',title:'Native session',titleKnown:true,blank:false,running:true,updatedAt:42}]});
   assert.equal((await call('/pocket/api/native/create',{requestId:'new-session'})).status,200);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'request',text:'test prompt'})).status,200);
   assert.equal(calls.at(-1).value.method,'session/prompt');
@@ -120,6 +157,25 @@ test('native adapter uses official RPC envelopes and keeps upstream credentials 
     assert.equal(call.headers.cookie,'harness=server-only');
     assert.doesNotMatch(JSON.stringify(call.value),/pocket=/);
   }
+});
+
+test('Workspace baseline, named Session creation and archive/pin commands use the public controller contracts',async t=>{
+  const {call,calls}=await setup(t);
+  const response=await call('/pocket/api/native/workspaces');
+  const baseline=JSON.parse(response.text);
+  assert.equal(baseline.available,true);assert.equal(baseline.items[0].workspaceId,'workspace');
+  assert.deepEqual(baseline.archivedSessionIds,['archived']);
+  assert.equal((await call('/pocket/api/native/create',{requestId:'reusable-blank',workspaceId:'workspace'})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request,{sessionId:'reusable-blank',workspaceId:'workspace'});
+  assert.equal((await call('/pocket/api/native/create',{requestId:'new',workspaceId:'workspace',cwd:'/workspace/other'})).status,400);
+  for(const [operation,method] of [['workspaceCreate','create'],['workspaceRename','rename'],['archive','archiveSession'],['unarchive','unarchiveSession'],['pin','pinSession'],['unpin','unpinSession']]) {
+    const body={operation,sessionId:'session',workspaceId:'workspace',path:'/workspace/project',title:'Renamed'};
+    assert.equal((await call('/pocket/api/native/operation',body)).status,200);
+    assert.equal(calls.at(-1).value.method,'workspace/'+method);
+    const expected=operation==='workspaceCreate'?{path:body.path}:operation==='workspaceRename'?{workspaceId:body.workspaceId,title:body.title}:{sessionId:body.sessionId};
+    assert.deepEqual(calls.at(-1).value.payload.args,{request:expected});
+  }
+  assert.equal((await call('/pocket/api/native/operation',{operation:'workspaceRename',workspaceId:'../bad',title:'x'})).status,400);
 });
 
 test('native live channel restores stream baseline and revokes both sockets on logout',async t=>{
@@ -160,6 +216,18 @@ test('normalization respects history replacements and produces native code block
   assert.equal(richBlocks('text\n```js\nconst x=1;\n```')[1].kind,'code');
   assert.deepEqual(normalizeFollow({type:'assistant-stream',frame:{type:'chunk',attemptId:'a',index:1,chunk:{type:'reasoning-delta',text:'thinking'}}}),
     {type:'delta',attemptId:'a',index:1,text:'',reasoning:'thinking'});
+});
+
+test('Chat filters injected source kinds at the durable source field while retaining actual human text', () => {
+  const message=(source,text='context')=>({type:'event',event:{seq:1,type:'user/message',data:{source,content:[{type:'text',text}]}}});
+  for(const kind of ['agent-instructions','runtime-context','session-reference','skill-invocation','compact-checkpoint']) {
+    assert.equal(normalizeRecord(message({kind})),null,kind);
+  }
+  assert.equal(normalizeRecord(message({kind:'user'},'Current runtime context. is a phrase I want explained')).role,'user');
+  assert.equal(normalizeRecord(message(undefined,'  Time sampled while preparing turn: now')),null);
+  assert.equal(normalizeRecord(message(undefined,'Please explain current runtime context.')).role,'user');
+  const assistant=normalizeRecord({type:'event',event:{seq:2,type:'assistant/message',data:{message:{content:[{type:'tool-call',id:'x',name:'read',arguments:'{}'},{type:'text',text:'reply'}]}}}});
+  assert.equal(assistant.text,'reply');
 });
 
 test('native history and stream preserve arbitrarily long Unicode content without display truncation', () => {

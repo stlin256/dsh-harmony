@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { BuildInfo } from '../services/BuildInfo';
 import { NativeExperience } from '../services/NativeExperience';
+import { DSHIcon } from './DSHIcon';
 
 @Component
 export struct AboutSettings {
@@ -21,8 +22,8 @@ export struct AboutSettings {
     Scroll() {
       Column({ space: 13 }) {
         Row({ space: 8 }) {
-          Button('‹', { type: ButtonType.Normal }).width(38).height(38).fontSize(24).borderRadius(19)
-            .backgroundColor(this.dark ? '#2D2D30' : '#ECEDEF').fontColor(this.dark ? '#F9FAFB' : '#33353A')
+          Button({ type: ButtonType.Normal }) { DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#F9FAFB' : '#33353A' }) }
+            .width(38).height(38).borderRadius(12).backgroundColor(Color.Transparent)
             .accessibilityText('返回设置').onClick(this.onBack)
           Column({ space: 2 }) {
             Text('关于').fontSize(19).fontWeight(FontWeight.Medium)
@@ -48,7 +49,7 @@ export struct AboutSettings {
               Text('GitHub 作者').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           }.width('100%').padding(14).borderRadius(16).backgroundColor(this.dark ? '#222225' : '#FFFFFF')
-            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
+            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC', radius: 14 }).clip(true)
           Button({ type: ButtonType.Normal }) {
             Row() {
               Column({ space: 3 }) {
@@ -58,9 +59,9 @@ export struct AboutSettings {
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               Text('↗').fontSize(16).fontColor(this.dark ? '#929298' : '#888B91')
             }.width('100%')
-          }.width('100%').height(60).padding({ left: 14, right: 14 }).borderRadius(14)
+          }.width('100%').constraintSize({ minHeight: 58 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).borderRadius(14)
             .backgroundColor(this.dark ? '#222225' : '#FFFFFF')
-            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
+            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC', radius: 14 }).clip(true)
             .onClick(() => this.open(BuildInfo.repository))
           Button({ type: ButtonType.Normal }) {
             Row() {
@@ -71,9 +72,9 @@ export struct AboutSettings {
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               Text('↗').fontSize(16).fontColor(this.dark ? '#929298' : '#888B91')
             }.width('100%')
-          }.width('100%').height(60).padding({ left: 14, right: 14 }).borderRadius(14)
+          }.width('100%').constraintSize({ minHeight: 58 }).padding({ left: 14, right: 14, top: 10, bottom: 10 }).borderRadius(14)
             .backgroundColor(this.dark ? '#222225' : '#FFFFFF')
-            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
+            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC', radius: 14 }).clip(true)
             .onClick(() => this.open(BuildInfo.issues))
         }.width('100%')
         Text(BuildInfo.copyright + ' · AGPL-3.0-only').fontSize(11).lineHeight(18)
@@ -85,7 +86,7 @@ export struct AboutSettings {
         }
       }.padding({ left: 18, right: 18, top: 16, bottom: 24 }).width('100%')
         .constraintSize({ maxWidth: 560 }).alignItems(HorizontalAlign.Start)
-    }.width('100%').height('100%').backgroundColor(this.dark ? '#171719' : '#F5F6F8')
+    }.width('100%').height('100%').align(Alignment.Top).backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY : TransitionEffect.OPACITY)
   }
 }

@@ -4,7 +4,7 @@
 
 安装这一个插件即可为 Harness 增加 DSH Harmony 原生登录、会话接口、实时通道、任务概览、分级通知队列和网页会话定位。无需独立 relay 或常驻网关进程。Node.js 24.9+；需使用提供 `connection.requestRejection`、`connection.authorizeIndex`、`connection.authenticatedUrl` 的 Harness 版本。
 
-从仓库根目录运行 `node scripts/package-plugin.mjs`，生成 `.artifacts/dsh-harmony-plugin-0.2.0.tgz`。通过 Harness 的插件管理安装该包，并启用 `@dsh-harmony/plugin`。也可以将包作为当前 web profile 的依赖安装，在 `cordis.patch.yml` 追加：
+从仓库根目录运行 `node scripts/package-plugin.mjs`，生成 `.artifacts/dsh-harmony-plugin-0.2.3.tgz`。通过 Harness 的插件管理安装该包，并启用 `@dsh-harmony/plugin`。也可以将包作为当前 web profile 的依赖安装，在 `cordis.patch.yml` 追加：
 
 ```yaml
 - insert:

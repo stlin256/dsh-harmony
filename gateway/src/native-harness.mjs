@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { normalizeFollow, normalizedHistory, sessionIdValid } from './native-protocol.mjs';
 
 export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ownerOf }) {
@@ -9,19 +11,50 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
   async function rpc(method, request, signal) {
     const rpcId = randomUUID();
-    const endpoint = method === '$events/result' ? method : method === 'answerQuestion' ? 'userQuestions/answer' : 'session/' + method;
+    const direct = method.startsWith('settings/') || method.startsWith('directoryPicker/');
+    const endpoint = direct || method === '$events/result' || method.startsWith('workspace/') ? method : method === 'answerQuestion' ? 'userQuestions/answer' : 'session/' + method;
     const response = await fetch(new URL('/api/' + endpoint, target), {
       method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
       headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: await credential() },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: method === '$events/result' ? request : method === 'answerQuestion' ? { agent: request.sessionId, callId: request.callId, answer: request.answer } : method === 'list' ? { _request: request } : method === 'modelCatalog' ? {} : { request } } })
+      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: direct || method === '$events/result' ? request : method === 'answerQuestion' ? { agent: request.sessionId, callId: request.callId, answer: request.answer } : method === 'list' ? { _request: request } : method === 'modelCatalog' ? {} : { request } } })
     });
     if (!response.ok) throw Error('Harness native API unavailable');
     const envelope = await response.json();
     if (envelope.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true) {
-      // Do not relay arbitrary upstream details (which may contain paths or credentials).
-      throw Error('Harness rejected this operation; use compatibility mode for details');
+      // Preserve only stable decision codes; do not relay arbitrary error messages.
+      const error = new Error('Harness rejected this operation');
+      if (['workspace/session-active', 'workspace/name-conflict', 'workspace/invalid-path', 'settings/conflict', 'settings/rejected',
+        'directory-picker/unavailable', 'directory-picker/unreadable', 'directory-picker/exists', 'directory-picker/create-failed',
+        'session/writer-held', 'session/migration-required'].includes(envelope.result?.error?.code)) error.code = envelope.result.error.code;
+      throw error;
     }
     return envelope.result.value;
+  }
+  async function workspaceBaseline(signal) {
+    const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
+    const cookie = await credential();
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(url, { headers: { Cookie: cookie, Origin: target.origin }, handshakeTimeout: 10000 });
+      let done = false;
+      const finish = (error, value) => {
+        if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', aborted);
+        ws.close(); error ? reject(error) : resolve(value);
+      };
+      const aborted = () => finish(Error('Workspace request cancelled'));
+      const timer = setTimeout(() => finish(Error('Workspace baseline timeout')), 15000);
+      ws.once('error', () => finish(Error('Workspace connection unavailable')));
+      ws.once('close', () => { if (!done) finish(Error('Workspace stream ended')); });
+      signal?.addEventListener('abort', aborted, { once: true });
+      if (signal?.aborted) { aborted(); return; }
+      ws.once('open', () => ws.send(JSON.stringify({ type: 'open', streamId: 'workspaces', endpoint: 'workspace/follow', payload: { args: {} } })));
+      ws.on('message', raw => {
+        try {
+          const frame = JSON.parse(raw.toString());
+          if (frame.type === 'error') { finish(Error('Workspace API unavailable')); return; }
+          if (frame.type === 'item' && frame.streamId === 'workspaces' && frame.value?.type === 'baseline' && Array.isArray(frame.value.value?.items)) finish(null, frame.value.value);
+        } catch { finish(Error('Invalid workspace baseline')); }
+      });
+    });
   }
   function routes(app, requireAuth) {
     app.use('/pocket/api/native', requireAuth);
@@ -29,21 +62,43 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const abort = new AbortController();
       res.once('close', () => { if (!res.writableEnded) abort.abort(); });
       try { await fn(req, res, abort.signal); }
-      catch { if (!res.headersSent && !res.destroyed) res.status(502).json({ error: '原生接口不可用或操作未确认，请刷新核对；也可切换兼容模式。' }); }
+      catch (error) { if (!res.headersSent && !res.destroyed) res.status(error.code ? 409 : 502).json({ error: '操作未确认，请刷新', ...(error.code ? { code: error.code } : {}) }); }
     };
     app.get('/pocket/api/native/sessions', guarded(async (_req, res, signal) => {
       const value = await rpc('list', {}, signal);
       const rows = Array.isArray(value?.items) ? value.items : [];
       res.json({ protocol: 2, truncated: false, items: rows.filter(row => sessionIdValid(row.sessionId)).map(row => ({
         id: row.sessionId, title: typeof row.projections?.values?.title === 'string' ? row.projections.values.title : '新会话',
+        titleKnown: typeof row.projections?.values?.title === 'string',
         ...(typeof row.blank === 'boolean' ? { blank: row.blank } : {}),
+        ...(typeof row.cwd === 'string' ? { cwd: row.cwd } : {}),
+        ...(typeof row.origin === 'string' ? { origin: row.origin } : {}),
+        ...(typeof row.parentSessionId === 'string' ? { parentSessionId: row.parentSessionId } : {}),
+        ...(typeof row.projections?.values?.agentPreset === 'string' ? { agentPreset: row.projections.values.agentPreset } : {}),
         running: row.running === true, updatedAt: Number.isFinite(row.updatedAt) ? row.updatedAt : 0
       })) });
+    }));
+    app.get('/pocket/api/native/workspaces', guarded(async (_req, res, signal) => {
+      try { res.json({ available: true, ...await workspaceBaseline(signal) }); }
+      catch { if (!res.destroyed) res.json({ available: false, items: [], archivedSessionIds: [], pinnedSessionIds: [] }); }
+    }));
+    app.get('/pocket/api/native/export', guarded(async (req, res, signal) => {
+      if (!sessionIdValid(req.query.sessionId) || !['markdown', 'zip'].includes(req.query.format) ||
+        (req.query.includeDescendants !== undefined && !['true', 'false'].includes(req.query.includeDescendants))) return res.sendStatus(400);
+      const url = new URL(req.query.format === 'markdown' ? '/api/session.markdown' : '/api/session.export', target);
+      url.searchParams.set('sessionId', req.query.sessionId);
+      if (req.query.format === 'zip') url.searchParams.set('includeDescendants', req.query.includeDescendants || 'true');
+      const response = await fetch(url, { signal, redirect: 'error', headers: { Cookie: await credential(), Origin: target.origin } });
+      if (!response.ok || !response.body) { await response.body?.cancel(); return res.sendStatus(response.status === 404 ? 404 : 502); }
+      res.setHeader('Content-Type', req.query.format === 'zip' ? 'application/zip' : 'text/markdown; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      await pipeline(Readable.fromWeb(response.body), res, { signal });
     }));
     app.post('/pocket/api/native/create', guarded(async (req, res, signal) => {
       // A caller-chosen ID makes a timed-out create recoverable through the list.
       if (!sessionIdValid(req.body?.requestId) || (req.body.cwd !== undefined && typeof req.body.cwd !== 'string')) return res.sendStatus(400);
-      const value = await rpc('create', { sessionId: req.body.requestId, ...(req.body.cwd ? { cwd: req.body.cwd } : {}), ...(typeof req.body.agentPreset === 'string' && req.body.agentPreset ? { agentPreset: req.body.agentPreset } : {}) }, signal);
+      if (req.body.workspaceId !== undefined && (!sessionIdValid(req.body.workspaceId) || req.body.cwd)) return res.sendStatus(400);
+      const value = await rpc('create', { sessionId: req.body.requestId, ...(req.body.workspaceId ? { workspaceId: req.body.workspaceId } : req.body.cwd ? { cwd: req.body.cwd } : {}), ...(typeof req.body.agentPreset === 'string' && req.body.agentPreset ? { agentPreset: req.body.agentPreset } : {}) }, signal);
       if (!sessionIdValid(value?.sessionId)) throw Error('Invalid session');
       res.json({ id: value.sessionId });
     }));
@@ -99,9 +154,45 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     }));
     app.post('/pocket/api/native/operation', guarded(async (req, res, signal) => {
       const { operation, sessionId } = req.body || {};
-      if (operation !== 'modelCatalog' && !sessionIdValid(sessionId)) return res.sendStatus(400);
+      if (!['modelCatalog', 'workspaceCreate', 'workspaceRename', 'workspaceDelete', 'workspaceOrder', 'settingsDescribe', 'settingsSet', 'directoryList', 'directoryCreate'].includes(operation) && !sessionIdValid(sessionId)) return res.sendStatus(400);
       let request;
       switch (operation) {
+        case 'settingsDescribe': {
+          const value = await rpc('settings/describe', {}, signal);
+          res.json({ writable: value?.writable === true, namespaces: (value?.namespaces || []).filter(row => ['ui-chat', 'ui-theme', 'ui-conversation', 'locale'].includes(row.ns))
+            .map(({ ns, value, revision }) => ({ ns, value, revision })) }); return;
+        }
+        case 'settingsSet': {
+          const { ns, field, value, revision } = req.body;
+          const enums = { 'ui-chat': { transcriptView: ['compact','standard','detailed','verbose'], collapseTiming: ['completion','next-input'], foldedReplies: ['all','final'] },
+            'ui-theme': { preference: ['light','dark','system'] }, 'ui-conversation': { busyEnter: ['queue','steer'] } };
+          const bounds = { fontSize: [10,22], codeFontSize: [10,16], terminalFontSize: [10,20] };
+          const valid = enums[ns]?.[field]?.includes(value) || (ns === 'ui-theme' && bounds[field] && Number.isInteger(value) && value >= bounds[field][0] && value <= bounds[field][1]);
+          if (!valid || !Number.isSafeInteger(revision) || revision < 0) return res.sendStatus(400);
+          res.json(await rpc('settings/mutate', { ns, ops: [{ op: 'set', path: [field], value }], expectedRevision: revision }, signal)); return;
+        }
+        case 'directoryList':
+          if (req.body.path !== undefined && typeof req.body.path !== 'string') return res.sendStatus(400);
+          res.json(await rpc('directoryPicker/list', req.body.path ? { path: req.body.path } : {}, signal)); return;
+        case 'directoryCreate':
+          if (typeof req.body.path !== 'string' || typeof req.body.name !== 'string' || !req.body.name.trim() || /[/\\]/.test(req.body.name) || ['.','..'].includes(req.body.name)) return res.sendStatus(400);
+          res.json(await rpc('directoryPicker/createDirectory', { path: req.body.path, name: req.body.name }, signal)); return;
+        case 'workspaceCreate':
+          if (typeof req.body.path !== 'string' || !req.body.path.trim() || req.body.path.length > 4096) return res.sendStatus(400);
+          res.json(await rpc('workspace/create', { path: req.body.path }, signal)); return;
+        case 'workspaceRename':
+          if (!sessionIdValid(req.body.workspaceId) || typeof req.body.title !== 'string' || !req.body.title.trim()) return res.sendStatus(400);
+          res.json(await rpc('workspace/rename', { workspaceId: req.body.workspaceId, title: req.body.title }, signal)); return;
+        case 'workspaceDelete':
+          if (!sessionIdValid(req.body.workspaceId)) return res.sendStatus(400);
+          res.json(await rpc('workspace/delete', { workspaceId: req.body.workspaceId }, signal)); return;
+        case 'workspaceOrder':
+          if (!sessionIdValid(req.body.workspaceId) || (req.body.beforeWorkspaceId !== undefined && !sessionIdValid(req.body.beforeWorkspaceId))) return res.sendStatus(400);
+          res.json(await rpc('workspace/insertBefore', { workspaceId: req.body.workspaceId, ...(req.body.beforeWorkspaceId ? { beforeWorkspaceId: req.body.beforeWorkspaceId } : {}) }, signal)); return;
+        case 'archive': case 'unarchive': case 'pin': case 'unpin':
+          if (req.body.stopActivity !== undefined && (operation !== 'archive' || typeof req.body.stopActivity !== 'boolean')) return res.sendStatus(400);
+          res.json(await rpc('workspace/' + ({ archive: 'archiveSession', unarchive: 'unarchiveSession', pin: 'pinSession', unpin: 'unpinSession' }[operation]),
+            { sessionId, ...(operation === 'archive' && req.body.stopActivity === true ? { stopActivity: true } : {}) }, signal)); return;
         case 'modelCatalog': request = {}; break;
         case 'answerQuestion':
           if (typeof req.body.callId !== 'string' || !req.body.callId || !Array.isArray(req.body.answer?.answers) ||

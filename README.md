@@ -19,13 +19,15 @@
 
 1. 准备可访问的 Harness Web，服务器 Node.js 24.9+。
 2. 在 `gateway/` 运行 `npm ci`，回到仓库根目录运行 `node scripts/package-plugin.mjs`。
-3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.2.0.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
+3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.2.3.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
 4. 安装 App，默认选原生登录，填写地址和 Harness 启动 URL 中 `token=` 后的访问密钥。密钥不保存在 App 配置中；后续使用有效 Cookie。
 5. 可选 Pocket ID 的[流程与工具](docs/OIDC-DEPLOYMENT.md)均在仓库中，配置后选择下面的 Passkey 登录。
 
 网络监听、受信任主机、端口映射和 TLS 按环境配置，见[部署指南](docs/DEPLOYMENT.md)。
 
 ## 功能与状态
+
+原生交互以[实现规格](docs/NATIVE-INTERACTION-SPEC.md)为基线，附官方源码研究和逐项验收要求；[进度表](docs/NATIVE-INTERACTION-STATUS.md)区分已实现、测试通过和真机验证。
 
 - 兼容模式保留 Harness 原版工作空间、插件和高级控件。
 - 原生模式（实验）提供会话、文本/图片、工具、模型、队列、审批、提问和实时输出。覆盖范围见[界面模式](docs/UI-MODES.md)与[能力核对表](docs/NATIVE-COVERAGE.md)。
