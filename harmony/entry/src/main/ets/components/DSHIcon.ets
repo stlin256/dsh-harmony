@@ -1,4 +1,5 @@
 import { ColorMetrics } from '@kit.ArkUI';
+import { drawing } from '@kit.ArkGraphics2D';
 
 /**
  * DSH product glyphs adapted from deepseek-ai/deepseek-harness's
@@ -59,25 +60,39 @@ export struct DSHIcon {
     if (['#8AB4FF', '#3964FE'].includes(value)) return dark ? '#8AB4FF' : '#3964FE';
     return color;
   }
-  private tint(color: ResourceColor, dark: boolean): ColorFilter {
-    const value = ColorMetrics.resourceColor(this.resolvedColor(color, dark));
-    return new ColorFilter([
-      0, 0, 0, value.red / 255, 0,
-      0, 0, 0, value.green / 255, 0,
-      0, 0, 0, value.blue / 255, 0,
-      0, 0, 0, 1, 0
-    ]);
+  private tint(color: ResourceColor, dark: boolean): drawing.ColorFilter {
+    let alpha = 255;
+    let red = 255;
+    let green = 255;
+    let blue = 255;
+    try {
+      const value = ColorMetrics.resourceColor(this.resolvedColor(color, dark));
+      alpha = value.alpha;
+      red = value.red;
+      green = value.green;
+      blue = value.blue;
+    } catch (_) {
+      // Invalid or unavailable resources fall back to the active theme foreground.
+      if (!dark) {
+        red = 23;
+        green = 24;
+        blue = 27;
+      }
+    }
+    return drawing.ColorFilter.createBlendModeColorFilter({
+      alpha: alpha,
+      red: red,
+      green: green,
+      blue: blue
+    }, drawing.BlendMode.SRC_IN);
   }
   build() {
-    if (['think-outline', 'browse-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline'].includes(this.glyph)) {
+    if (['think-outline', 'browse-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline', 'deepseek-logo'].includes(this.glyph)) {
       Stack() {
-        if (this.dark) {
-          Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
-            .objectFit(ImageFit.Contain).colorFilter(this.tint(this.color, this.dark))
-        } else {
-          Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
-            .objectFit(ImageFit.Contain).colorFilter(this.tint(this.color, this.dark))
-        }
+        Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
+          .objectFit(ImageFit.Contain)
+          .supportSvg2(true)
+          .colorFilter(this.tint(this.color, this.dark))
       }.width(this.glyphSize).height(this.glyphSize)
     } else if (this.glyph === 'copy-outline') {
       Stack() {

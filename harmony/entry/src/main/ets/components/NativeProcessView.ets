@@ -1,6 +1,5 @@
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeMessage } from '../services/NativeSessionModel';
-import { NativeExperience } from '../services/NativeExperience';
 import { NativeMessageView } from './NativeMessageView';
 import { NativeToolCallView } from './NativeToolCallView';
 import { DSHIcon } from './DSHIcon';
@@ -12,15 +11,19 @@ export struct NativeProcessView {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   disclosures: Map<string, boolean> = new Map<string, boolean>();
-  maxGroupHeight: number = 400;
   @Prop @Watch('changed') message: NativeMessage = new NativeMessage();
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private expanded: boolean = false;
   @State private headline: string = '';
   private titleTimer: number = -1;
   private shownAt: number = 0;
-  private groupScroller: Scroller = new Scroller();
-  private follow: boolean = false;
+  private disclosureId: string = '';
+  private syncDisclosure(): void {
+    const key = this.message.turnKey + '|' + this.message.id;
+    if (key === this.disclosureId) return;
+    this.disclosureId = key;
+    this.expanded = this.disclosures.get(key) === true;
+  }
   aboutToAppear(): void { this.expanded = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true; this.changed(); }
   aboutToDisappear(): void { clearTimeout(this.titleTimer); }
   private changed(): void {
@@ -29,11 +32,13 @@ export struct NativeProcessView {
     const update = (): void => { this.headline = this.message.label; this.shownAt = Date.now(); };
     if (this.message.closed || remaining <= 0 || !this.headline) update();
     else this.titleTimer = setTimeout(update, remaining);
-    if (!this.message.closed && this.expanded && this.follow && !this.message.flat) setTimeout(() => { this.groupScroller.scrollEdge(Edge.Bottom); }, 0);
+    this.syncDisclosure();
   }
   private toggle(): void {
-    const update = (): void => { this.expanded = !this.expanded; this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded);
-      if (this.expanded) { this.follow = !this.message.closed; if (this.follow) setTimeout(() => { this.groupScroller.scrollEdge(Edge.Bottom); }, 0); } };
+    const update = (): void => {
+      this.expanded = !this.expanded;
+      this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded);
+    };
     NativeMotion.animate(this.getUIContext(), 'micro', update);
   }
   @Builder
@@ -63,10 +68,7 @@ export struct NativeProcessView {
       }
       if (this.message.flat) { this.members() }
       else if (this.expanded) {
-        Scroll(this.groupScroller) { this.members() }.width('100%').constraintSize({ maxHeight: this.maxGroupHeight })
-          .nestedScroll({ scrollForward: NestedScrollMode.SELF_FIRST, scrollBackward: NestedScrollMode.SELF_FIRST })
-          .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
-          .onScroll(() => { this.follow = this.groupScroller.isAtEnd(); })
+        this.members()
       }
     }.width('100%').alignItems(HorizontalAlign.Start)
   }

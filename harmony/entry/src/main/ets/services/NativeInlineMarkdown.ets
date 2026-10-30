@@ -10,6 +10,23 @@ export class NativeInlineRun {
   alt: string = '';
 }
 
+/**
+ * Inline code commonly contains the file references emitted by coding agents.
+ * Keep commands and expressions literal; only promote high-confidence paths.
+ */
+export function nativeInlineFileReference(value: string): string {
+  const text = value.trim();
+  if (!text || text.length > 500 || /\s/.test(text)) return '';
+  if (/^(?:https?:|mailto:|tel:|file:|dsh-resource:\/\/)/i.test(text)) return text;
+  if (/^(?:\.{1,2}\/|\/|~\/|[A-Za-z]:[\\/])/.test(text)) return text;
+  const extension = text.match(/\.([A-Za-z0-9]{1,16})(?::\d+(?::\d+)?)?(?:#L\d+(?:-L?\d+)?)?$/);
+  const known = ['md','mdx','ts','tsx','js','jsx','json','py','svg','png','jpg','jpeg','webp','gif','pdf',
+    'html','css','scss','less','yaml','yml','toml','xml','sh','ps1','bat','ets','c','cc','cpp','h','hpp',
+    'java','kt','rs','go','rb','php','sql','csv','txt','log','zip','lock','conf','ini','env','vue','astro'];
+  if (extension && known.includes(extension[1].toLowerCase())) return text;
+  return '';
+}
+
 function run(text: string, style: NativeInlineRun): NativeInlineRun {
   const value = new NativeInlineRun();
   value.text = text; value.bold = style.bold; value.italic = style.italic;
@@ -86,5 +103,9 @@ function scan(source: string, style: NativeInlineRun, depth: number): NativeInli
 }
 
 export function nativeInlineMarkdown(source: string): NativeInlineRun[] {
-  return scan(source, new NativeInlineRun(), 0);
+  const rows = scan(source, new NativeInlineRun(), 0);
+  rows.forEach((row: NativeInlineRun): void => {
+    if (row.code && !row.href) row.href = nativeInlineFileReference(row.text);
+  });
+  return rows;
 }

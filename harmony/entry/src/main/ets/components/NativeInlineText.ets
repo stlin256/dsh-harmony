@@ -33,6 +33,8 @@ export struct NativeInlineText {
   @State private remoteTitle: string = '';
   @State private remoteError: string = '';
   @State private resolvingFile: boolean = false;
+  private lastOpenHref: string = '';
+  private lastOpenAt: number = 0;
 
   aboutToAppear(): void { this.changed(); }
   private changed(): void { this.runs = nativeInlineMarkdown(this.text); }
@@ -46,6 +48,10 @@ export struct NativeInlineText {
   }
   private async open(run: NativeInlineRun): Promise<void> {
     if (!run.href) return;
+    const now = Date.now();
+    if (run.href === this.lastOpenHref && now - this.lastOpenAt < 350) return;
+    this.lastOpenHref = run.href;
+    this.lastOpenAt = now;
     try {
       const kind = nativeLinkKind(run.href);
       if (kind === 'http' && run.isImage) {
@@ -86,6 +92,10 @@ export struct NativeInlineText {
         this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
       }
     } finally { this.resolvingFile = false; }
+  }
+  private openSingleLink(): void {
+    const linked = this.runs.filter((run: NativeInlineRun): boolean => run.href.length > 0);
+    if (linked.length === 1) this.open(linked[0]);
   }
   @Builder
   private resolvingOverlay() {
@@ -146,6 +156,7 @@ export struct NativeInlineText {
     }.fontSize(this.textSize).lineHeight(this.lineHeight)
       .width('100%').wordBreak(WordBreak.BREAK_WORD)
       .textAlign(this.alignment === 'right' ? TextAlign.End : this.alignment === 'center' ? TextAlign.Center : TextAlign.Start)
+      .onClick((): void => { this.openSingleLink(); })
       .bindContentCover(this.resolvingFile, this.resolvingOverlay, {
         modalTransition: ModalTransition.NONE,
         onDisappear: (): void => { this.resolvingFile = false; }

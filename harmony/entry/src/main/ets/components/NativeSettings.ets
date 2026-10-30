@@ -51,6 +51,8 @@ export struct NativeSettings {
   @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
   @StorageLink('nativeSafeTop') private safeTop: number = 0;
   @StorageLink('nativeSafeBottom') private safeBottom: number = 0;
+  @StorageLink('nativeSafeLeft') private safeLeft: number = 0;
+  @StorageLink('nativeSafeRight') private safeRight: number = 0;
   @StorageLink('nativeSettingsPage') private settingsPage: string = 'root';
   @State private host: NativeSettingsDescription = new NativeSettingsDescription();
   @State private chat: NativeChatPreferences = new NativeChatPreferences();
@@ -61,6 +63,10 @@ export struct NativeSettings {
   @State private retryHostField: string = '';
   @State private retryHostValue: string = '';
   @State private themeMode: string = 'system';
+  @State private chatMode: string = 'detailed';
+  @State private chatCollapseTiming: string = 'completion';
+  @State private chatFoldedReplies: string = 'all';
+  @State private chatBusyEnter: string = 'queue';
   @State private reduceMotion: boolean = false;
   @State private reduceTransparency: boolean = false;
   @State private widgetDetails: boolean = true;
@@ -79,6 +85,10 @@ export struct NativeSettings {
   @State private error: string = '';
   private mounted: boolean = false;
   private notificationWrites: Promise<void> = Promise.resolve();
+
+  private updateState(action: () => void): void {
+    NativeMotion.animate(this.getUIContext(), 'micro', action);
+  }
 
   aboutToAppear(): void {
     this.mounted = true;
@@ -100,6 +110,10 @@ export struct NativeSettings {
   private hostChanged(): void {
     this.host = this.client.hostSettings.description;
     this.chat = this.client.hostSettings.chat();
+    this.chatMode = this.chat.mode;
+    this.chatCollapseTiming = this.chat.collapseTiming;
+    this.chatFoldedReplies = this.chat.foldedReplies;
+    this.chatBusyEnter = this.chat.busyEnter;
   }
 
   private async refreshHost(): Promise<void> {
@@ -125,7 +139,11 @@ export struct NativeSettings {
     this.retryHostValue = '';
     try {
       await this.client.hostSettings.set(ns, field, value);
-      if (this.mounted) this.hostChanged();
+      if (this.mounted) {
+        this.updateState((): void => { this.hostChanged(); });
+        AppStorage.setOrCreate<number>('nativeHostSettingsRevision',
+          (AppStorage.get<number>('nativeHostSettingsRevision') || 0) + 1);
+      }
     } catch (_) {
       if (this.mounted) {
         this.hostError = '这一项保存失败';
@@ -168,6 +186,12 @@ export struct NativeSettings {
   }
 
   private openPage(page: string): void {
+    this.status = '';
+    this.error = '';
+    this.hostError = '';
+    this.retryHostNs = '';
+    this.retryHostField = '';
+    this.retryHostValue = '';
     const update = (): void => { this.settingsPage = page; };
     NativeMotion.animate(this.getUIContext(), 'navigation', update);
   }
@@ -197,12 +221,12 @@ export struct NativeSettings {
   private async theme(value: string): Promise<void> {
     if (!this.begin('theme')) return;
     const previous = this.themeMode;
-    this.themeMode = value;
+    this.updateState((): void => { this.themeMode = value; });
     try {
       await this.invoke('themeMode', value);
       this.status = '已保存';
     } catch (_) {
-      this.themeMode = previous;
+      this.updateState((): void => { this.themeMode = previous; });
       this.error = '外观保存失败';
     } finally {
       this.end('theme');
@@ -212,12 +236,12 @@ export struct NativeSettings {
   private async setting(command: string, value: boolean): Promise<void> {
     if (!this.begin(command)) return;
     const previous = this.localValue(command);
-    this.setLocalValue(command, value);
+    this.updateState((): void => { this.setLocalValue(command, value); });
     try {
       await this.invoke(command, value ? 'true' : 'false');
       this.status = '已保存';
     } catch (_) {
-      this.setLocalValue(command, previous);
+      this.updateState((): void => { this.setLocalValue(command, previous); });
       this.error = command === 'backgroundMonitor' ? '后台投递启动失败' : '保存失败';
     } finally {
       this.end(command);
@@ -267,7 +291,7 @@ export struct NativeSettings {
     if (!this.begin(key)) return;
     const previous = this.notificationValue(category);
     let localSaved = false;
-    this.setNotificationValue(category, levelValue);
+    this.updateState((): void => { this.setNotificationValue(category, levelValue); });
     try {
       const write = this.notificationWrites.catch((): void => {}).then(async (): Promise<void> => {
         const notifications = this.notificationPreferences();
@@ -280,7 +304,7 @@ export struct NativeSettings {
       this.status = '通知偏好已保存';
     } catch (_) {
       if (!localSaved) {
-        this.setNotificationValue(category, previous);
+        this.updateState((): void => { this.setNotificationValue(category, previous); });
         this.error = '通知偏好保存失败';
       } else {
         this.status = '已保存本机，服务端同步待重试';
@@ -355,6 +379,8 @@ export struct NativeSettings {
       } else if (command === 'testNotification') {
         await this.invoke('testNotification', '');
         await this.refreshNotificationState();
+        this.notificationsEnabled = true;
+        this.notificationPermissionKnown = true;
         this.status = '测试通知已发送';
       }
     } catch (_) {
@@ -375,7 +401,7 @@ export struct NativeSettings {
         DSHIcon({ glyph: 'close-outline', glyphSize: 17, color: this.dark ? '#F9FAFB' : '#17181B' })
       }.width(40).height(40).borderRadius(12).backgroundColor(Color.Transparent)
         .accessibilityText('关闭设置').onClick(this.onReturn)
-    }.width('100%').height(58)
+    }.width('100%').height(58).padding({ left: 4, right: 4 })
   }
 
   @Builder
@@ -387,7 +413,7 @@ export struct NativeSettings {
         .accessibilityText('返回设置').onClick(() => { this.openPage('root'); })
       Text(title).fontSize(20).fontWeight(FontWeight.Medium).layoutWeight(1)
         .fontColor(this.dark ? '#F9FAFB' : '#17181B')
-    }.width('100%').height(58)
+    }.width('100%').height(58).padding({ left: 4, right: 4 })
   }
 
   @Builder
@@ -438,7 +464,7 @@ export struct NativeSettings {
         Column({ space: 0 }) {
           this.sectionLabel('DSH HARMONY')
           Column() {
-            this.navigationRow('personalization-outline', 'DSH 设置', '对话与过程展示', 'dsh')
+            this.navigationRow('deepseek-logo', 'DSH 设置', '对话与过程展示', 'dsh')
             Divider().strokeWidth(0.5).margin({ left: 44 }).color(this.dark ? '#323236' : '#E9EAEC')
             this.navigationRow('dark-outline', '外观与动效',
               this.themeMode === 'system' ? '跟随系统' : this.themeMode === 'dark' ? '深色' : '浅色', 'appearance')
@@ -465,8 +491,8 @@ export struct NativeSettings {
           }
         }.padding({ left: 16, right: 16, top: 2, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.width('100%').layoutWeight(1).align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition(-1))
   }
@@ -515,21 +541,21 @@ export struct NativeSettings {
           if (this.hasHost('ui-chat')) {
             Column() {
               this.hostChoice('工作步骤展示', 'transcriptView',
-                ['compact', 'standard', 'detailed', 'verbose'], ['简洁', '标准', '详细', '完全展开'], this.chat.mode)
+                ['compact', 'standard', 'detailed', 'verbose'], ['简洁', '标准', '详细', '完全展开'], this.chatMode)
               Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')
               this.hostChoice('过程收起时机', 'collapseTiming',
-                ['completion', 'next-input'], ['完成时', '下次发送时'], this.chat.collapseTiming)
-              if (this.chat.mode !== 'verbose') {
+                ['completion', 'next-input'], ['完成时', '下次发送时'], this.chatCollapseTiming)
+              if (this.chatMode !== 'verbose') {
                 Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')
                 this.hostChoice('收起后显示回复', 'foldedReplies',
-                  ['all', 'final'], ['全部回复', '仅最终回答'], this.chat.foldedReplies)
+                  ['all', 'final'], ['全部回复', '仅最终回答'], this.chatFoldedReplies)
               }
             }.width('100%').borderRadius(16).clip(true).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           }
           if (this.hasHost('ui-conversation')) {
             Column() {
               this.hostChoice('运行时发送', 'busyEnter',
-                ['queue', 'steer'], ['排队', '立即干预'], this.chat.busyEnter, 'ui-conversation')
+                ['queue', 'steer'], ['排队', '立即干预'], this.chatBusyEnter, 'ui-conversation')
             }.width('100%').borderRadius(16).clip(true).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           }
           if (this.hostLoading) {
@@ -554,10 +580,10 @@ export struct NativeSettings {
                 .onClick(() => { this.retryHostWrite(); })
             }.padding(14).borderRadius(14).backgroundColor(this.dark ? '#2B2224' : '#FDECEC')
           }
-        }.padding({ left: 16, right: 16, top: 4, bottom: this.safeBottom + 28 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 0, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
@@ -622,10 +648,10 @@ export struct NativeSettings {
             .fontColor(this.dark ? '#FF9999' : '#B83A3A').padding(12)
           if (this.status) Text(this.status).fontSize(12)
             .fontColor(this.dark ? '#8E9197' : '#777B81').padding(8)
-        }.padding({ left: 16, right: 16, top: 4, bottom: this.safeBottom + 28 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 0, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
@@ -721,10 +747,10 @@ export struct NativeSettings {
             .fontColor(this.dark ? '#FF9999' : '#B83A3A')
           if (this.status) Text(this.status).fontSize(12).padding(8)
             .fontColor(this.dark ? '#8E9197' : '#777B81')
-        }.padding({ left: 16, right: 16, top: 4, bottom: this.safeBottom + 28 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 0, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
@@ -744,10 +770,10 @@ export struct NativeSettings {
             .fontColor(this.dark ? '#FF9999' : '#B83A3A')
           if (this.status) Text(this.status).fontSize(12).padding(8)
             .fontColor(this.dark ? '#8E9197' : '#777B81')
-        }.padding({ left: 16, right: 16, top: 4, bottom: this.safeBottom + 28 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 0, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
@@ -770,10 +796,10 @@ export struct NativeSettings {
           }.width('100%').borderRadius(16).clip(true).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           if (this.error) Text(this.error).fontSize(12).padding(12)
             .fontColor(this.dark ? '#FF9999' : '#B83A3A')
-        }.padding({ left: 16, right: 16, top: 4, bottom: this.safeBottom + 28 }).width('100%')
+        }.padding({ left: 16, right: 16, top: 0, bottom: this.safeBottom + 28 }).width('100%')
           .constraintSize({ maxWidth: 680 }).alignItems(HorizontalAlign.Start)
-      }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
-    }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.layoutWeight(1).width('100%').align(Alignment.TopStart).scrollBar(BarState.Off)
+    }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
@@ -788,7 +814,7 @@ export struct NativeSettings {
       Column() {
         this.pageHeader('关于')
         AboutSettings({ embedded: true, onBack: (): void => { this.openPage('root'); } }).layoutWeight(1)
-      }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
+      }.padding({ top: this.safeTop, left: 12 + this.safeLeft, right: 12 + this.safeRight }).width('100%').height('100%')
         .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
         .transition(NativeMotion.navigationTransition())
     }

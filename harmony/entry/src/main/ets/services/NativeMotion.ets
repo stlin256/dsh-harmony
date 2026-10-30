@@ -69,12 +69,12 @@ export class NativeMotion {
 
   static navigationTransition(direction: number = 1): TransitionEffect {
     if (!NativeMotion.enabled()) return TransitionEffect.IDENTITY;
-    const offset = direction < 0 ? -10 : 10;
+    const enterOffset = direction < 0 ? -10 : 10;
     const enter = TransitionEffect.OPACITY.combine(
-      TransitionEffect.translate({ x: offset }))
+      TransitionEffect.translate({ x: enterOffset }))
       .animation({ duration: NativeMotion.duration('navigation'), curve: Curve.FastOutSlowIn });
     const leave = TransitionEffect.OPACITY.combine(
-      TransitionEffect.translate({ x: offset })).animation({
+      TransitionEffect.translate({ x: 0 - enterOffset })).animation({
       duration: Math.max(120, NativeMotion.duration('navigation') - 40),
       curve: Curve.FastOutSlowIn
     });

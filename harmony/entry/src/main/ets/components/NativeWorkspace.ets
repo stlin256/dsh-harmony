@@ -17,7 +17,8 @@ import { nativeTranscript, nativePresentTranscript } from '../services/NativeTra
 import { NativeWorkspacePicker } from './NativeWorkspacePicker';
 import { BackgroundMonitor } from '../services/BackgroundMonitor';
 import { NativeActionMenu } from './NativeActionMenu';
-import { NativeNavigationState, nativeSessionMenu, nativeCanGoBack, nativeForkTitle } from '../services/NativeNavigation';
+import { NativeNavigationState, nativeSessionMenu, nativeCanGoBack, nativeForkTitle,
+  nativeUtilityMenu } from '../services/NativeNavigation';
 import { NativeMenuItem } from '../services/NativeNavigation';
 import { NativeMetadataCache } from '../services/NativeMetadataCache';
 import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
@@ -93,10 +94,11 @@ export struct NativeWorkspace {
   @State @Watch('navigationChanged') private utilityOpen: boolean = false;
   @State private copying: boolean = false;
   @State private modelCaption: string = '模型';
-  @State private groupHeight: number = 400;
   @State private downloading: boolean = false;
   @State private utilityKnown: boolean = false;
   @State private exportCapabilities: NativeExportCapabilities = new NativeExportCapabilities();
+  private utilityCapabilities: Map<string, NativeExportCapabilities> = new Map<string, NativeExportCapabilities>();
+  private utilityRequests: Set<string> = new Set<string>();
   @State private menuBusy: boolean = false;
   @State private archivedUndo: string = '';
   @State private steer: boolean = false;
@@ -166,6 +168,7 @@ export struct NativeWorkspace {
   private selectionGeneration: number = 0;
   private cacheTimer: number = -1;
   private backToBottomTimer: number = -1;
+  private returnToBottomTimer: number = -1;
   private returningToBottom: boolean = false;
   private workspaceOrderGeneration: number = 0;
   private workspaceOrderBusy: boolean = false;
@@ -201,6 +204,7 @@ export struct NativeWorkspace {
     clearTimeout(this.widgetEventTimer);
     clearTimeout(this.backgroundTimer); clearTimeout(this.preloadTimer);
     clearTimeout(this.cacheTimer); clearTimeout(this.backToBottomTimer);
+    clearTimeout(this.returnToBottomTimer);
     clearTimeout(this.drawerSettleTimer);
     this.persistCache();
     this.stopBackground();
@@ -347,19 +351,27 @@ export struct NativeWorkspace {
   }
   private openDrawer(): void {
     clearTimeout(this.backToBottomTimer);
+    clearTimeout(this.returnToBottomTimer);
     clearTimeout(this.drawerSettleTimer);
+    const width = this.mobileDrawerWidth();
     this.drawerFollowing = false;
-    this.drawerTranslation = 0;
+    this.drawerTranslation = -width;
     this.backToBottomVisible = false;
-    this.animatePane(() => { this.showSessions = true; });
+    this.returningToBottom = false;
+    NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
+      this.showSessions = true;
+      this.drawerTranslation = 0;
+    });
     this.navigationChanged();
     this.refreshSessionList().catch((): void => {});
   }
   private closeDrawer(): void {
     clearTimeout(this.drawerSettleTimer);
     this.drawerFollowing = false;
-    this.drawerTranslation = 0;
-    this.animatePane(() => { this.showSessions = false; });
+    NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
+      this.showSessions = false;
+      this.drawerTranslation = -this.mobileDrawerWidth();
+    });
     this.navigationChanged();
     this.restoreScrollTailAfterDrawer();
   }
@@ -681,21 +693,36 @@ export struct NativeWorkspace {
       onClose: (): void => { this.modelPickerOpen = false; } })
   }
   private utilityItems(): NativeMenuItem[] {
-    const rows: NativeMenuItem[] = [];
-    if (this.utilityKnown && this.exportCapabilities.copyMarkdown) rows.push({ id: 'copy', title: '复制 Markdown', icon: 'copy-outline', disabled: this.copying, danger: false, separator: false });
-    if (this.utilityKnown && this.exportCapabilities.downloadLog) rows.push({ id: 'download', title: '下载日志', icon: 'download-outline', disabled: this.downloading, danger: false, separator: false });
-    if (!rows.length) rows.push({ id: 'none', title: this.utilityKnown ? '此服务未提供导出' : '正在加载…', icon: 'download-outline', disabled: true, danger: false, separator: false });
-    return rows;
+    return nativeUtilityMenu(this.utilityKnown, this.exportCapabilities.copyMarkdown,
+      this.exportCapabilities.downloadLog, this.copying, this.downloading);
   }
-  private async openUtilities(): Promise<void> {
+  private openUtilities(): void {
     this.modelPickerOpen = false;
     this.utilityOpen = !this.utilityOpen; if (!this.utilityOpen) return;
-    const id = this.selected; this.utilityKnown = false;
+    // The action list is complete on the first frame. Capabilities only refine
+    // availability and never gate whether the menu can appear immediately.
+    this.prefetchUtilities(this.selected);
+  }
+  private async prefetchUtilities(id: string): Promise<void> {
+    if (!id || this.utilityCapabilities.has(id) || this.utilityRequests.has(id)) return;
+    this.utilityRequests.add(id);
     try {
       const value = JSON.parse(await this.client.operation(JSON.stringify({ operation: 'capabilities', sessionId: id }))) as NativeExportCapabilities;
-      if (this.mounted && this.selected === id) this.exportCapabilities = value;
-    } catch (_) { if (this.mounted && this.selected === id) this.exportCapabilities = new NativeExportCapabilities(); }
-    finally { if (this.mounted && this.selected === id) this.utilityKnown = true; }
+      this.utilityCapabilities.set(id, value);
+      if (this.mounted && this.selected === id) {
+        this.exportCapabilities = value;
+        this.utilityKnown = true;
+      }
+    } catch (_) {
+      const unsupported = new NativeExportCapabilities();
+      this.utilityCapabilities.set(id, unsupported);
+      if (this.mounted && this.selected === id) {
+        this.exportCapabilities = unsupported;
+        this.utilityKnown = true;
+      }
+    } finally {
+      this.utilityRequests.delete(id);
+    }
   }
   private async refreshWorkspaces(): Promise<void> {
     if (this.workspaceLoading) return;
@@ -894,12 +921,17 @@ export struct NativeWorkspace {
     this.navigationChanged();
     this.model = this.client.models.get(id) || new NativeSessionModel();
     this.client.models.set(id, this.model);
+    const capabilities = this.utilityCapabilities.get(id);
+    this.utilityKnown = capabilities !== undefined;
+    this.exportCapabilities = capabilities || new NativeExportCapabilities();
+    this.prefetchUtilities(id);
     this.previousRows = this.model.messages;
     this.renderTranscript();
     this.streamText = ''; this.streamReasoning = '';
     this.running = false; this.waiting = false; this.retries = 0;
     this.connectionPhase = 'syncing'; this.userHasScrolled = false;
     clearTimeout(this.backToBottomTimer);
+    clearTimeout(this.returnToBottomTimer);
     this.backToBottomVisible = false; this.backToBottomNew = false;
     this.returningToBottom = false;
     if (this.model.messages.length) {
@@ -1012,7 +1044,11 @@ export struct NativeWorkspace {
     this.previousRows = this.model.messages; this.renderTranscript();
     this.running = this.model.running; this.waiting = this.model.waiting; this.hasMore = this.model.hasMore;
     this.streamText = this.model.streamText; this.streamReasoning = this.model.streamReasoning;
-    if (this.followTail) setTimeout(() => { if (this.mounted) this.scroller.scrollEdge(Edge.Bottom); }, 0);
+    if (this.followTail && !this.returningToBottom) {
+      setTimeout(() => {
+        if (this.mounted && this.followTail && !this.returningToBottom) this.scroller.scrollEdge(Edge.Bottom);
+      }, 0);
+    }
   }
   private renderTranscript(): void {
     const rows = nativeTranscript(this.model.messages, this.model.running, this.model.streamTools, this.model.streamReasoning, this.model.streamText);
@@ -1191,6 +1227,7 @@ export struct NativeWorkspace {
     return atEnd;
   }
   private settleScrollTail(): void {
+    clearTimeout(this.returnToBottomTimer);
     const atEnd = this.isScrollAtEnd();
     this.returningToBottom = false;
     if (atEnd) {
@@ -1232,12 +1269,14 @@ export struct NativeWorkspace {
     if (!NativeMotion.enabled()) {
       try { this.scroller.scrollToIndex(lastIndex, false, ScrollAlign.END); } catch (_) {}
       try { this.scroller.scrollEdge(Edge.Bottom); } catch (_) {}
-      setTimeout((): void => { if (this.mounted) this.settleScrollTail(); }, 0);
+      this.returnToBottomTimer = setTimeout((): void => {
+        if (this.mounted && this.returningToBottom) this.settleScrollTail();
+      }, 0);
       return;
     }
     try { this.scroller.scrollToIndex(lastIndex, true, ScrollAlign.END); } catch (_) {}
-    setTimeout((): void => {
-      if (!this.mounted) return;
+    this.returnToBottomTimer = setTimeout((): void => {
+      if (!this.mounted || !this.returningToBottom) return;
       try { this.scroller.scrollEdge(Edge.Bottom); } catch (_) {}
       this.settleScrollTail();
     }, 320);
@@ -1347,7 +1386,7 @@ export struct NativeWorkspace {
   }
 
   @Builder
-  private sessionList() {
+  private sessionList(inMobileDrawer: boolean = false) {
     Column({ space: 6 }) {
       Row({ space: 4 }) {
         Text('DSH Harmony').fontSize(21).fontWeight(FontWeight.Bold).layoutWeight(1)
@@ -1463,7 +1502,8 @@ export struct NativeWorkspace {
           this.closeDrawer();
           this.onSettings();
         })
-    }.padding({ left: 12, right: 12, top: this.safeTop + 8, bottom: this.safeBottom + 8 }).height('100%').width('100%')
+    }.padding({ left: 12, right: 12, top: this.safeTop + (inMobileDrawer ? 6 : 8),
+      bottom: this.safeBottom + 8 }).height('100%').width('100%')
       .backgroundColor(this.dark ? '#151517' : '#FFFFFF')
       .transition(NativeMotion.navigationTransition())
   }
@@ -1524,7 +1564,7 @@ export struct NativeWorkspace {
           LazyForEach(this.source, (message: NativeMessage) => {
             ListItem() {
               if (message.role === 'process') {
-                NativeProcessView({ client: this.client, sessionId: this.selected, message, disclosures: this.model.disclosures, maxGroupHeight: this.groupHeight })
+                NativeProcessView({ client: this.client, sessionId: this.selected, message, disclosures: this.model.disclosures })
               } else if (message.role === 'turn-control') {
                 Button({ type: ButtonType.Normal }) {
                   Row({ space: 6 }) {
@@ -1571,6 +1611,7 @@ export struct NativeWorkspace {
           })
           .onTouch((event: TouchEvent) => {
             if (event.type === TouchType.Down && this.returningToBottom) {
+              clearTimeout(this.returnToBottomTimer);
               this.returningToBottom = false;
               this.userHasScrolled = true;
               this.updateScrollTail();
@@ -1740,23 +1781,21 @@ export struct NativeWorkspace {
   private mobileShell() {
     Stack() {
       Column() { this.mainSurface() }.width('100%').height('100%')
-      if (this.showSessions || this.drawerFollowing) {
-        Row() {
-          Column() { this.sessionList() }.width(this.mobileDrawerWidth()).height('100%')
-            .translate({ x: this.drawerTranslation })
-            .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
-              .onActionStart((): void => { this.beginDrawerPan(); })
-              .onActionUpdate((event: GestureEvent): void => { this.updateDrawerPan(event); })
-              .onActionEnd((event: GestureEvent): void => { this.settleDrawerPan(event); })
-              .onActionCancel((): void => { this.cancelDrawerPan(); }))
-            .transition(NativeMotion.drawerTransition())
-          Column().layoutWeight(1).height('100%')
-            .backgroundColor(this.dark ? '#66000000' : '#42000000')
-            .opacity(this.drawerProgress(this.mobileDrawerWidth()))
-            .onClick(() => { this.closeDrawer(); })
-            .transition(NativeMotion.overlayTransition())
-        }.width('100%').height('100%')
-      }
+      Row() {
+        Column() { this.sessionList(true) }.width(this.mobileDrawerWidth()).height('100%')
+          .translate({ x: this.showSessions || this.drawerFollowing ? this.drawerTranslation : -this.mobileDrawerWidth() })
+          .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
+            .onActionStart((): void => { this.beginDrawerPan(); })
+            .onActionUpdate((event: GestureEvent): void => { this.updateDrawerPan(event); })
+            .onActionEnd((event: GestureEvent): void => { this.settleDrawerPan(event); })
+            .onActionCancel((): void => { this.cancelDrawerPan(); }))
+        Column().layoutWeight(1).height('100%')
+          .backgroundColor(this.dark ? '#66000000' : '#42000000')
+          .opacity(this.showSessions || this.drawerFollowing ?
+            this.drawerProgress(this.mobileDrawerWidth()) : 0)
+          .onClick(() => { this.closeDrawer(); })
+      }.width('100%').height('100%')
+        .hitTestBehavior(this.showSessions || this.drawerFollowing ? HitTestMode.Default : HitTestMode.None)
       if (!this.showSessions) {
         Row().position({ x: 0, y: 0 }).width(18).height('100%').backgroundColor(Color.Transparent)
           .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
@@ -1787,7 +1826,6 @@ export struct NativeWorkspace {
         .onAreaChange((_old: Area, area: Area) => {
           this.windowWidth = Number(area.width);
           this.wide = this.windowWidth >= 760;
-          this.groupHeight = Math.min(400, Number(area.height) / 2);
           this.navigationChanged();
         })
       } else {
@@ -1795,7 +1833,6 @@ export struct NativeWorkspace {
           .onAreaChange((_old: Area, area: Area) => {
             this.windowWidth = Number(area.width);
             this.wide = this.windowWidth >= 760;
-            this.groupHeight = Math.min(400, Number(area.height) / 2);
             this.navigationChanged();
           })
       }

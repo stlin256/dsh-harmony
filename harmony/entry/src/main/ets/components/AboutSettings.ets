@@ -46,15 +46,22 @@ export struct AboutSettings {
           .borderRadius(18).backgroundColor(this.dark ? '#222225' : '#FFFFFF')
           .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
         Column({ space: 10 }) {
-          Row({ space: 12 }) {
-            Image($rawfile('maintainer-avatar.png')).width(48).height(48).borderRadius(24).objectFit(ImageFit.Cover)
-            Column({ space: 3 }) {
-              Text(BuildInfo.author).fontSize(15).fontWeight(FontWeight.Medium)
-                .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-              Text('GitHub 作者').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-          }.width('100%').padding(14).borderRadius(16).backgroundColor(this.dark ? '#222225' : '#FFFFFF')
+          Button({ type: ButtonType.Normal }) {
+            Row({ space: 12 }) {
+              Image($rawfile('maintainer-avatar.png')).width(48).height(48).borderRadius(24).objectFit(ImageFit.Cover)
+              Column({ space: 3 }) {
+                Text(BuildInfo.author).fontSize(15).fontWeight(FontWeight.Medium)
+                  .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+                Text('github.com/' + BuildInfo.author).fontSize(12)
+                  .fontColor(this.dark ? '#8AB4FF' : '#3964FE')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Text('↗').fontSize(16).fontColor(this.dark ? '#929298' : '#888B91')
+            }.width('100%')
+          }.width('100%').constraintSize({ minHeight: 76 }).padding(14).borderRadius(16)
+            .backgroundColor(this.dark ? '#222225' : '#FFFFFF')
             .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC', radius: 14 }).clip(true)
+            .accessibilityText('打开作者 ' + BuildInfo.author + ' 的 GitHub 主页')
+            .onClick(() => this.open(BuildInfo.authorProfile))
           Button({ type: ButtonType.Normal }) {
             Row() {
               Column({ space: 3 }) {
@@ -89,9 +96,9 @@ export struct AboutSettings {
           Text(this.status).fontSize(12).fontColor(this.dark ? '#A1A1AA' : '#74777D')
             .width('100%').textAlign(TextAlign.Center).transition(TransitionEffect.OPACITY)
         }
-      }.padding({ left: 18, right: 18, top: 16, bottom: this.safeBottom + 24 }).width('100%')
+      }.padding({ left: 16, right: 16, top: 12, bottom: this.safeBottom + 24 }).width('100%')
         .constraintSize({ maxWidth: 560 }).alignItems(HorizontalAlign.Start)
-    }.width('100%').height('100%').align(Alignment.Top).backgroundColor(this.dark ? '#171719' : '#F5F6F8')
+    }.width('100%').height('100%').align(Alignment.TopStart).backgroundColor(this.dark ? '#171719' : '#F5F6F8')
       .transition(NativeMotion.navigationTransition())
   }
 }

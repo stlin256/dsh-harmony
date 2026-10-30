@@ -338,7 +338,7 @@ test('Workspace projection isolates pins, sorts by interaction and keeps drag co
 });
 
 test('native inline markdown preserves literal code and malformed text while styling nested runs', () => {
-  const { nativeInlineMarkdown } = load('NativeInlineMarkdown', {});
+  const { nativeInlineMarkdown, nativeInlineFileReference } = load('NativeInlineMarkdown', {});
   const runs = nativeInlineMarkdown('**bold and `a_*b`** · [readme](</workspace/docs/readme.md>) · [web](https://example.com/a_(b))');
   assert.equal(runs.map(x => x.text).join(''),'bold and a_*b · readme · web');
   assert.equal(runs.find(x => x.code).text,'a_*b');
@@ -352,6 +352,12 @@ test('native inline markdown preserves literal code and malformed text while sty
   assert.equal(image.href, '/workspace/docs/image.png');
   assert.equal(image.isImage, true);
   assert.equal(image.alt, 'preview');
+  assert.equal(nativeInlineFileReference('src/app.ts:42'), 'src/app.ts:42');
+  assert.equal(nativeInlineFileReference('/workspace/docs/readme.md'), '/workspace/docs/readme.md');
+  assert.equal(nativeInlineFileReference('npm run test'), '');
+  assert.equal(nativeInlineFileReference('object.value'), '');
+  const fileCode = nativeInlineMarkdown('see `src/app.ts:42`').find(x => x.code);
+  assert.equal(fileCode.href, 'src/app.ts:42');
 });
 
 test('native links resolve workspace files relative to the session cwd', () => {
@@ -490,7 +496,7 @@ test('native syntax highlighting preserves source and completed turns own one fo
 });
 
 test('foreground navigation wins over width changes and the session menu keeps the official action order', () => {
-  const {nativeCanGoBack,nativeSessionMenu,nativeForkTitle}=load('NativeNavigation',{});
+  const {nativeCanGoBack,nativeSessionMenu,nativeForkTitle,nativeUtilityMenu}=load('NativeNavigation',{});
   assert.equal(nativeCanGoBack({wide:true,drawerOpen:false,picker:true}),true);
   assert.equal(nativeCanGoBack({wide:true,drawerOpen:false,tools:true}),true);
   assert.equal(nativeCanGoBack({wide:false,drawerOpen:true,menu:true}),true);
@@ -501,6 +507,9 @@ test('foreground navigation wins over width changes and the session menu keeps t
   assert.equal(nativeForkTitle('task (99999999999999999999)'),'task (100000000000000000000)');
   assert.equal(nativeForkTitle('任务（009）'),'任务（10）');
   assert.equal(nativeForkTitle('task'),'task (1)');
+  assert.equal(nativeUtilityMenu(false,false,false,false,false).map(x=>x.title).join(','),
+    '复制 Markdown,下载日志');
+  assert.equal(nativeUtilityMenu(true,true,false,false,false).map(x=>x.id).join(','),'copy');
 });
 
 test('Host profile mirror serializes writes with the latest revision and restores authority after conflicts', async () => {
@@ -522,6 +531,23 @@ test('Host profile mirror serializes writes with the latest revision and restore
   fail=true;await assert.rejects(()=>mirror.set('ui-chat','transcriptView','verbose'));
   assert.equal(mirror.chat().mode,'compact');
   assert.equal(mirror.description.namespaces[0].revision,7);
+});
+
+test('Host chat settings project every supported ArkUI selector value', () => {
+  const { nativeChatPreferences } = load('NativeHostSettings', {});
+  const projected = nativeChatPreferences([
+    { ns: 'ui-chat', value: { transcriptView: 'compact', collapseTiming: 'next-input',
+      foldedReplies: 'final' }, revision: 3 },
+    { ns: 'ui-conversation', value: { busyEnter: 'steer' }, revision: 2 }
+  ]);
+  assert.equal(projected.mode, 'compact');
+  assert.equal(projected.collapseTiming, 'next-input');
+  assert.equal(projected.foldedReplies, 'final');
+  assert.equal(projected.busyEnter, 'steer');
+  const detailed = nativeChatPreferences([
+    { ns: 'ui-chat', value: { transcriptView: 'detailed' }, revision: 4 }
+  ]);
+  assert.equal(detailed.mode, 'detailed');
 });
 
 test('presentation policies share grouping while handling four modes, deferred collapse and final-only replies', () => {
