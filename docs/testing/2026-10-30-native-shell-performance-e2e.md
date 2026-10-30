@@ -2,18 +2,17 @@
 
 Date: 2026-10-30
 
-Status: pending device run. All implementation and local checks must finish before
-this checklist is executed. Use `install -r` for the updated HAP so cookies,
+Status: device run in progress. Use `install -r` for the updated HAP so cookies,
 Passkey state and app data remain available.
 
 ## Environment
 
-- [ ] Verify the connected HarmonyOS device ID.
-- [ ] Install `default` Release HAP with `install -r`.
+- [x] Verify the connected HarmonyOS device ID.
+- [x] Install `default` Release HAP with `install -r`.
 - [ ] Install `store` Release HAP only on a separate test application identity
   or after backing up app data; never replace private cookies unexpectedly.
-- [ ] Capture device model, API level, build/version and theme.
-- [ ] Confirm the private service origin is not present in logs or screenshots
+- [x] Capture device model, API level, build/version and theme.
+- [x] Confirm the private service origin is not present in logs or screenshots
   intended for the public repository.
 
 ## Navigation and drawer
@@ -31,8 +30,10 @@ Passkey state and app data remain available.
   tasks, More, grouped workspaces, fixed Settings footer.
 - [ ] Tap scrim, close button, system Back and edge gesture; each closes the
   drawer before leaving the app.
-- [ ] Verify 84–88% phone width, safe-area padding, light/dark, large text,
-  split-screen and rotation.
+- [x] Verify drawer background continuity and that title, search, session list
+  and Settings footer respect the top and bottom system safe areas.
+- [ ] Verify 84–88% phone width, light/dark, large text, split-screen and
+  rotation.
 - [ ] Verify selected conversation, three-dot menu target and current workspace
   remain visibly highlighted.
 - [ ] Expand/collapse workspaces, search, pin, drag reorder and manage a
@@ -51,8 +52,10 @@ Passkey state and app data remain available.
   No row may silently do nothing.
 - [ ] Set each Host option, close Settings immediately, reopen, and verify the
   latest value and inline failure/retry behavior.
-- [ ] Switch light/dark/system and verify every icon, text, surface, scrim,
-  divider and control updates.
+- [x] Switch light/dark on the settings root, appearance and About pages and
+  verify icons, text, surfaces, scrim and dividers update without black SVG
+  edges or stale fills.
+- [ ] Verify the system-following theme transition.
 - [ ] Disable and re-enable reduce motion/transparency; verify the effect and
   unavailable explanation on unsupported API levels.
 - [ ] Fast-tap independent settings while one write is pending; verify only the
@@ -95,7 +98,7 @@ Passkey state and app data remain available.
 - [ ] Verify 300–1,000-line code remains responsive and over-limit code falls
   back to readable plain text without truncation.
 - [ ] Watch a streamed code reply settle; highlight must not jump the viewport.
-- [ ] Verify the completed indicator and final-reply copy action share one
+- [x] Verify the completed indicator and final-reply copy action share one
   compact row.
 - [ ] Verify copy takes the final closing assistant reply, and does not appear
   for failed/stopped/no-final-reply turns or intermediate narration.

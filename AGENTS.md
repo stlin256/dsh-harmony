@@ -55,6 +55,14 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-workspace-pin-order-scroll-bottom.md](docs/research/2026-10-31-workspace-pin-order-scroll-bottom.md)
 - Formal E2E checklist:
   [2026-10-31-motion-workspace-scroll-e2e.md](docs/testing/2026-10-31-motion-workspace-scroll-e2e.md)
+- Settings surface, safe area and icon requirement:
+  [2026-10-31-settings-safe-area-icons.md](docs/requirements/2026-10-31-settings-safe-area-icons.md)
+- Settings surface implementation spec:
+  [2026-10-31-settings-safe-area-icons.md](docs/specs/2026-10-31-settings-safe-area-icons.md)
+- Chat controls and drawer requirement:
+  [2026-10-31-chat-controls-refinement.md](docs/requirements/2026-10-31-chat-controls-refinement.md)
+- Chat controls and drawer implementation spec:
+  [2026-10-31-chat-controls-refinement.md](docs/specs/2026-10-31-chat-controls-refinement.md)
 - Native interaction baseline:
   [NATIVE-INTERACTION-SPEC.md](docs/NATIVE-INTERACTION-SPEC.md)
 - Existing shell/performance E2E:
