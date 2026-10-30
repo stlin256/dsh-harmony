@@ -2,6 +2,7 @@ import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { nativeToolsParent } from '../services/NativeSessionModel';
 import { NativeCatalogModel, NativeModelProvider, NativeModelEffort, NativeModelSelection, NativeModelDirectoryState } from '../services/NativeModelDirectory';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 import { DSHIcon } from './DSHIcon';
 
 class Part { type: string = ''; text: string = ''; }
@@ -91,7 +92,7 @@ export struct NativeSessionTools {
   }
   private pane(page: string): void {
     const change = (): void => { this.page = page; this.error = ''; };
-    if (NativeExperience.reducedMotion()) change(); else this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, change);
+    NativeMotion.animate(this.getUIContext(), 'navigation', change);
   }
   @Builder
   private row(label: string, detail: string, selected: boolean, child: boolean, action: () => void) {

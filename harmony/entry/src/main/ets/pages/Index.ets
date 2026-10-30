@@ -16,6 +16,7 @@ import { PushKitAdapter } from 'entry/PushKitAdapter';
 import { NativeMetadataCache } from '../services/NativeMetadataCache';
 import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
 import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
+import { NativeMotion } from '../services/NativeMotion';
 
 @Entry
 @Component
@@ -279,8 +280,7 @@ struct Index {
   }
   private changeSettingsPage(page: string): void {
     const update = (): void => { AppStorage.setOrCreate<string>('nativeSettingsPage', page); };
-    if (NativeExperience.reducedMotion()) update();
-    else this.getUIContext().animateTo({ duration: 210, curve: Curve.EaseOut }, update);
+    NativeMotion.animate(this.getUIContext(), 'navigation', update);
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {

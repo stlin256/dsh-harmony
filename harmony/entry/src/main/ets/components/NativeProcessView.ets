@@ -5,6 +5,7 @@ import { NativeMessageView } from './NativeMessageView';
 import { NativeToolCallView } from './NativeToolCallView';
 import { DSHIcon } from './DSHIcon';
 import { nativeProcessIcon } from '../services/NativeTranscript';
+import { NativeMotion } from '../services/NativeMotion';
 
 @Component
 export struct NativeProcessView {
@@ -33,8 +34,7 @@ export struct NativeProcessView {
   private toggle(): void {
     const update = (): void => { this.expanded = !this.expanded; this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded);
       if (this.expanded) { this.follow = !this.message.closed; if (this.follow) setTimeout(() => { this.groupScroller.scrollEdge(Edge.Bottom); }, 0); } };
-    if (NativeExperience.reducedMotion()) update();
-    else this.getUIContext().animateTo({ duration: 110, curve: Curve.EaseInOut }, update);
+    NativeMotion.animate(this.getUIContext(), 'micro', update);
   }
   @Builder
   private members() {

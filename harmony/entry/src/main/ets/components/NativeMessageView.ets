@@ -8,6 +8,7 @@ import { nativeReasoningPreview } from '../services/NativeTranscript';
 import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
 import { NativeInlineText } from './NativeInlineText';
 import { NativeCodeBlock } from './NativeCodeBlock';
+import { NativeMotion } from '../services/NativeMotion';
 
 @Component
 export struct NativeMessageView {
@@ -35,8 +36,7 @@ export struct NativeMessageView {
   }
 
   private animate(action: () => void): void {
-    if (NativeExperience.reducedMotion()) action();
-    else this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, action);
+    NativeMotion.animate(this.getUIContext(), 'micro', action);
   }
 
   build() {

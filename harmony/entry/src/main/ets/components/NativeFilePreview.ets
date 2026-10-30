@@ -3,6 +3,7 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeFileBytes, NativeFilePage, NativeFileStat, NativeHarnessClient } from '../services/NativeHarnessClient';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 
 /** One compact foreground reader shared by chat links and the file browser. */
 @Component
@@ -48,8 +49,7 @@ export struct NativeFilePreview {
     return /\.(?:png|jpe?g|webp|gif|bmp|svg)$/i.test(value);
   }
   private animate(action: () => void): void {
-    if (NativeExperience.reducedMotion()) action();
-    else this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, action);
+    NativeMotion.animate(this.getUIContext(), 'navigation', action);
   }
   private async loadImage(): Promise<boolean> {
     try {
@@ -177,7 +177,7 @@ export struct NativeFilePreview {
         Image(this.imageMap).objectFit(ImageFit.Contain).width('100%')
           .scale({ x: this.zoom, y: this.zoom })
           .gesture(PinchGesture().onActionUpdate((event: GestureEvent) => {
-            this.animate(() => { this.zoom = Math.max(1, Math.min(4, event.scale)); });
+            this.zoom = Math.max(1, Math.min(4, event.scale));
           }))
           .gesture(TapGesture({ count: 2 }).onAction(() => {
             this.animate(() => { this.zoom = 1; });
@@ -212,7 +212,6 @@ export struct NativeFilePreview {
       left: 12 + this.safeLeft, right: 12 + this.safeRight,
       top: 8 + this.safeTop, bottom: 10 + this.safeBottom
     }).width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 })))
+      .transition(NativeMotion.previewTransition())
   }
 }

@@ -1,6 +1,7 @@
 import { NativeMenuItem } from '../services/NativeNavigation';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 
 /** Official Menu geometry with a 44vp touch target, presented by the caller's anchored popup. */
 @Component
@@ -24,7 +25,6 @@ export struct NativeActionMenu {
           .accessibilityText(item.title).onClick(() => { this.onSelect(item.id); })
       }, (item: NativeMenuItem) => item.id)
     }.width(208).padding(4).borderRadius(16)
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 })))
+      .transition(NativeMotion.overlayTransition())
   }
 }

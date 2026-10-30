@@ -4,6 +4,7 @@ import { NativeExperience } from '../services/NativeExperience';
 import { NativeChatPreferences, NativeSettingsDescription } from '../services/NativeHostSettings';
 import { AboutSettings } from './AboutSettings';
 import { DSHIcon } from './DSHIcon';
+import { NativeMotion } from '../services/NativeMotion';
 
 class NotificationPreferences {
   version: number = 1;
@@ -168,8 +169,7 @@ export struct NativeSettings {
 
   private openPage(page: string): void {
     const update = (): void => { this.settingsPage = page; };
-    if (NativeExperience.reducedMotion()) update();
-    else this.getUIContext().animateTo({ duration: 210, curve: Curve.EaseOut }, update);
+    NativeMotion.animate(this.getUIContext(), 'navigation', update);
   }
 
   private level(value: string, fallback: string): string {
@@ -468,8 +468,7 @@ export struct NativeSettings {
       }.width('100%').layoutWeight(1).align(Alignment.Top).scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition(-1))
   }
 
   @Builder
@@ -560,8 +559,7 @@ export struct NativeSettings {
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition())
   }
 
   @Builder
@@ -629,8 +627,7 @@ export struct NativeSettings {
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition())
   }
 
   @Builder
@@ -729,8 +726,7 @@ export struct NativeSettings {
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition())
   }
 
   @Builder
@@ -753,8 +749,7 @@ export struct NativeSettings {
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition())
   }
 
   @Builder
@@ -780,8 +775,7 @@ export struct NativeSettings {
       }.layoutWeight(1).width('100%').scrollBar(BarState.Off)
     }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
       .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+      .transition(NativeMotion.navigationTransition())
   }
 
   build() {
@@ -796,8 +790,7 @@ export struct NativeSettings {
         AboutSettings({ embedded: true, onBack: (): void => { this.openPage('root'); } }).layoutWeight(1)
       }.padding({ top: this.safeTop, left: 4, right: 4 }).width('100%').height('100%')
         .backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-        .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-          TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
+        .transition(NativeMotion.navigationTransition())
     }
     else this.settingsRoot()
   }

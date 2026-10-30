@@ -8,6 +8,7 @@ import { NativeImageView } from './NativeImageView';
 import { NativeImageAttachment } from '../services/NativeSessionModel';
 import { NativeDiffBlock } from './NativeDiffBlock';
 import { NativeDiffDocument, nativeDiff } from '../services/NativeDiff';
+import { NativeMotion } from '../services/NativeMotion';
 
 @Component
 export struct NativeToolCallView {
@@ -28,8 +29,7 @@ export struct NativeToolCallView {
   private toggle(): void {
     if (this.message.phase === 'preparing') return;
     const update = (): void => { this.expanded = !this.expanded; this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded); };
-    if (NativeExperience.reducedMotion()) update();
-    else this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, update);
+    NativeMotion.animate(this.getUIContext(), 'micro', update);
   }
   build() {
     Column({ space: 4 }) {

@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { BuildInfo } from '../services/BuildInfo';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 import { DSHIcon } from './DSHIcon';
 
 @Component
@@ -91,6 +92,6 @@ export struct AboutSettings {
       }.padding({ left: 18, right: 18, top: 16, bottom: this.safeBottom + 24 }).width('100%')
         .constraintSize({ maxWidth: 560 }).alignItems(HorizontalAlign.Start)
     }.width('100%').height('100%').align(Alignment.Top).backgroundColor(this.dark ? '#171719' : '#F5F6F8')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY : TransitionEffect.OPACITY)
+      .transition(NativeMotion.navigationTransition())
   }
 }

@@ -2,6 +2,7 @@ import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeDiffDocument, NativeDiffRow, nativeDiffText } from '../services/NativeDiff';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 
 @Component
 export struct NativeDiffBlock {
@@ -25,8 +26,7 @@ export struct NativeDiffBlock {
   }
   private toggle(): void {
     const update = (): void => { this.expanded = !this.expanded; };
-    if (NativeExperience.reducedMotion()) update();
-    else this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseInOut }, update);
+    NativeMotion.animate(this.getUIContext(), 'micro', update);
   }
   private copy(): void {
     pasteboard.getSystemPasteboard().setData(pasteboard.createData(

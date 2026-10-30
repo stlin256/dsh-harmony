@@ -6,6 +6,7 @@ import { NativeImageAttachment } from '../services/NativeSessionModel';
 import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 
 class AttachmentResult { data: string = ''; }
 @Component
@@ -70,8 +71,7 @@ export struct NativeImageView {
     } finally { if (this.mounted) this.loading = false; }
   }
   private animate(action: () => void): void {
-    if (NativeExperience.reducedMotion()) action();
-    else this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseOut }, action);
+    NativeMotion.animate(this.getUIContext(), 'micro', action);
   }
   @Builder
   private fullImage() {
@@ -89,7 +89,7 @@ export struct NativeImageView {
         Scroll() {
           Image(this.fullBitmap || this.bitmap).objectFit(ImageFit.Contain).width('100%').scale({ x: this.previewScale, y: this.previewScale })
             .gesture(PinchGesture().onActionUpdate((event: GestureEvent) => {
-              this.animate(() => { this.previewScale = Math.max(1, Math.min(4, event.scale)); });
+              this.previewScale = Math.max(1, Math.min(4, event.scale));
             }))
             .gesture(TapGesture({ count: 2 }).onAction(() => {
               this.animate(() => { this.previewScale = 1; });

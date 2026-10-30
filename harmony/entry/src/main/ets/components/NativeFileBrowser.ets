@@ -2,6 +2,7 @@ import { NativeDirectoryEntry, NativeDirectoryListing, NativeHarnessClient } fro
 import { DSHIcon } from './DSHIcon';
 import { NativeFilePreview } from './NativeFilePreview';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeMotion } from '../services/NativeMotion';
 
 class NativePathPart {
   label: string = '';
@@ -31,8 +32,7 @@ export struct NativeFileBrowser {
   aboutToAppear(): void { this.mounted = true; this.current = this.path; this.load(); }
   aboutToDisappear(): void { this.mounted = false; }
   private animate(action: () => void): void {
-    if (NativeExperience.reducedMotion()) action();
-    else this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, action);
+    NativeMotion.animate(this.getUIContext(), 'navigation', action);
   }
   private async load(next: string = this.current): Promise<void> {
     this.loading = true; this.error = '';
@@ -153,7 +153,8 @@ export struct NativeFileBrowser {
       .enabled(entry.type !== 'other').accessibilityText(entry.name + '，' + entry.type)
       .onClick(() => { this.open(entry); })
       .backgroundColor(entry.type === 'directory' && this.dark ? '#202124' : Color.Transparent)
-      .animation({ duration: NativeExperience.reducedMotion() ? 0 : 100, curve: Curve.EaseOut })
+      .animation({ duration: NativeMotion.enabled() ? NativeMotion.duration('press') : 0,
+        curve: Curve.FastOutSlowIn })
   }
   @Builder
   private content() {
@@ -200,10 +201,9 @@ export struct NativeFileBrowser {
       if (this.previewPath) {
         NativeFilePreview({ client: this.client, sessionId: this.sessionId, path: this.previewPath,
           onClose: (): void => { this.previewPath = ''; } })
-          .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 })))
+          .transition(NativeMotion.overlayTransition())
       }
     }.width('100%').height('100%')
-      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
-        TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 })))
+      .transition(NativeMotion.navigationTransition())
   }
 }
