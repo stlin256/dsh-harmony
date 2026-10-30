@@ -198,6 +198,18 @@ test('semantic motion tokens resolve directly when motion is disabled', () => {
   assert.equal(actions, 4);
 });
 
+test('About reads the installed bundle version instead of a source constant', () => {
+  const kits = { '@kit.AbilityKit': { bundleManager: {
+    BundleFlag: { GET_BUNDLE_INFO_DEFAULT: 0 },
+    getBundleInfoForSelfSync: flag => {
+      assert.equal(flag, 0);
+      return { versionName: '9.8.7' };
+    }
+  } } };
+  const { BuildInfo } = load('BuildInfo', kits);
+  assert.equal(BuildInfo.version, '9.8.7');
+});
+
 test('workspace interaction recency is account scoped and cleared on logout', () => {
   const { preferences } = storage();
   const { NativeMetadataCache } = load('NativeMetadataCache', {

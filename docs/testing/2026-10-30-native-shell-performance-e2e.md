@@ -64,6 +64,9 @@ Passkey state and app data remain available.
   background remains visible underneath it in both themes.
 - [ ] Verify About shows bundled logo/avatar, author, app name, version/build,
   repository, issue link and copyright; all links open.
+- [x] Verify About version equals the installed bundle version. `bm dump`
+  reported `0.4.1 (22)` and the device About page displayed `版本 0.4.1 ·
+  HarmonyOS`.
 
 ## Cache, reconnect and preload
 

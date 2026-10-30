@@ -1,5 +1,14 @@
 # 验证记录与交接验收
 
+## 0.4.1 版本投影修正（2026-10-31）
+
+“关于”页不再维护源码中的重复版本字符串，而是通过
+`bundleManager.getBundleInfoForSelfSync()` 读取当前安装包的 `versionName`。
+`app.json5`、根模块和 entry 模块的版本同步为 `0.4.1 (versionCode 22)`。
+自动化测试使用模拟的 bundle info 验证页面投影随安装版本变化。个人版已通过
+`install -r` 升级到在线设备；`bm dump` 确认 `versionCode 22`、`versionName
+"0.4.1"`，设备“关于”页实际显示 `版本 0.4.1 · HarmonyOS`。
+
 ## 0.3.1 灯箱、抽屉与退出手势修复（2026-10-31）
 
 - 灯箱支持点击图片外空白关闭；长按原图进入系统图库保存确认流程。工作过程与
