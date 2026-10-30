@@ -1,14 +1,19 @@
 import { common } from '@kit.AbilityKit';
 import { BuildInfo } from '../services/BuildInfo';
 import { NativeExperience } from '../services/NativeExperience';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { DSHIcon } from './DSHIcon';
+import { NativeInlineText } from './NativeInlineText';
 
 @Component
 export struct AboutSettings {
   @Prop embedded: boolean = false;
+  client: NativeHarnessClient = new NativeHarnessClient('');
+  sessionId: string = '';
   onBack: () => void = (): void => {};
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private status: string = '';
+  @State private linkProbe: boolean = false;
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
   private open(url: string): void {
@@ -40,9 +45,24 @@ export struct AboutSettings {
             .fontColor(this.dark ? '#F9FAFB' : '#17181B')
           Text('版本 ' + BuildInfo.version + ' · HarmonyOS').fontSize(12)
             .fontColor(this.dark ? '#A1A1AA' : '#777A80')
+            .accessibilityText('长按运行 Markdown 链接自检')
+            .gesture(LongPressGesture().onAction(() => { this.linkProbe = !this.linkProbe; }))
         }.width('100%').alignItems(HorizontalAlign.Center).padding({ top: 24, bottom: 24 })
           .borderRadius(18).backgroundColor(this.dark ? '#222225' : '#FFFFFF')
           .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
+        if (this.linkProbe) {
+          Column({ space: 8 }) {
+            Text('Markdown 链接自检').fontSize(12).fontWeight(FontWeight.Medium)
+              .fontColor(this.dark ? '#E7E7E9' : '#25262A')
+            NativeInlineText({
+              text: '[打开当前工作区](./) · [项目主页](https://github.com/stlin256/dsh-harmony)',
+              client: this.client,
+              sessionId: this.sessionId
+            })
+          }.width('100%').padding(14).borderRadius(14)
+            .backgroundColor(this.dark ? '#222225' : '#FFFFFF')
+            .border({ width: 1, color: this.dark ? '#353538' : '#E8E9EC' })
+        }
         Column({ space: 10 }) {
           Row({ space: 12 }) {
             Image($rawfile('maintainer-avatar.png')).width(48).height(48).borderRadius(24).objectFit(ImageFit.Cover)

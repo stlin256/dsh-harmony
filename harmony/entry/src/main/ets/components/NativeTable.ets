@@ -1,15 +1,19 @@
 import { NativeMarkdownTable } from '../services/NativeMarkdownTable';
 import { NativeInlineText } from './NativeInlineText';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
 
 @Component
 export struct NativeTable {
   @Prop table: NativeMarkdownTable = new NativeMarkdownTable();
+  client: NativeHarnessClient = new NativeHarnessClient('');
+  sessionId: string = '';
   @StorageLink('nativeDark') private dark: boolean = false;
 
   @Builder
   private cell(value: string, header: boolean, align: string) {
     Column() {
-      NativeInlineText({ text: value, textSize: 12, muted: !header, alignment: align })
+      NativeInlineText({ text: value, textSize: 12, muted: !header, alignment: align,
+        client: this.client, sessionId: this.sessionId })
     }.width(148).padding({ left: 10, right: 10, top: 8, bottom: 8 }).alignItems(HorizontalAlign.Start)
       .backgroundColor(header ? this.dark ? '#292A2D' : '#F1F3F5' : Color.Transparent)
   }

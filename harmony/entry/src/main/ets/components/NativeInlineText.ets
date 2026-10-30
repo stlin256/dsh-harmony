@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { nativeInlineMarkdown, NativeInlineRun } from '../services/NativeInlineMarkdown';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeDirectoryListing, NativeFileStat } from '../services/NativeHarnessClient';
+import { nativeFileTarget, nativeLinkKind } from '../services/NativeLinkResolver';
 import { NativeFilePreview } from './NativeFilePreview';
 import { NativeFileBrowser } from './NativeFileBrowser';
 import { DSHIcon } from './DSHIcon';
@@ -13,6 +14,8 @@ export struct NativeInlineText {
   @Prop textSize: number = 14;
   @Prop muted: boolean = false;
   @Prop alignment: string = 'left';
+  @Prop lineHeight: string = '22fp';
+  @Prop baseWeight: FontWeight = FontWeight.Normal;
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   @StorageLink('nativeDark') private dark: boolean = false;
@@ -29,6 +32,7 @@ export struct NativeInlineText {
   @State private remoteUrl: string = '';
   @State private remoteTitle: string = '';
   @State private remoteError: string = '';
+  @State private resolvingFile: boolean = false;
 
   aboutToAppear(): void { this.changed(); }
   private changed(): void { this.runs = nativeInlineMarkdown(this.text); }
@@ -43,29 +47,24 @@ export struct NativeInlineText {
   private async open(run: NativeInlineRun): Promise<void> {
     if (!run.href) return;
     try {
-      if (/^https?:/i.test(run.href) && run.isImage) {
+      const kind = nativeLinkKind(run.href);
+      if (kind === 'http' && run.isImage) {
         this.remoteUrl = run.href; this.remoteTitle = run.alt || '图片'; this.remoteError = '';
         this.remotePreview = true;
         return;
       }
-      if (/^(?:https?|mailto):/i.test(run.href)) {
+      if (kind === 'http' || kind === 'external') {
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
         await context.startAbility({ action: 'ohos.want.action.viewData', uri: run.href });
       } else {
         await this.openFile(run.href);
       }
-    } catch (_) {}
+    } catch (_) {
+      this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
+    }
   }
   private fileTarget(href: string): string {
-    let target = href.startsWith('<') && href.endsWith('>') ? href.slice(1, -1) : href;
-    if (target.startsWith('dsh-resource://file/session/')) {
-      const suffix = target.slice('dsh-resource://file/session/'.length);
-      const split = suffix.indexOf('/');
-      if (split > 0) target = suffix.slice(split + 1);
-    }
-    const hash = target.lastIndexOf('#L');
-    if (hash >= 0 && /^#L\d+(?:-L?\d+)?$/i.test(target.slice(hash))) target = target.slice(0, hash);
-    return decodeURIComponent(target);
+    return nativeFileTarget(href, this.client.sessionCwd(this.sessionId));
   }
   private async openFile(href: string): Promise<void> {
     if (!this.sessionId) {
@@ -74,6 +73,7 @@ export struct NativeInlineText {
     }
     const path = this.fileTarget(href);
     if (!path) return;
+    this.resolvingFile = true;
     try {
       const stat: NativeFileStat = await this.client.statFile(this.sessionId, path);
       if (!stat.version) throw new Error('Invalid file');
@@ -85,7 +85,16 @@ export struct NativeInlineText {
       } catch (_) {
         this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
       }
-    }
+    } finally { this.resolvingFile = false; }
+  }
+  @Builder
+  private resolvingOverlay() {
+    Column({ space: 10 }) {
+      LoadingProgress().width(24).height(24).color(this.dark ? '#8AB4FF' : '#3964FE')
+      Text('正在打开…').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+    }.width(132).height(88).justifyContent(FlexAlign.Center).borderRadius(16)
+      .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
+      .border({ width: 0.5, color: this.dark ? '#45464B' : '#E2E4E8' })
   }
   @Builder
   private filePreview() {
@@ -127,16 +136,20 @@ export struct NativeInlineText {
     Text() {
       ForEach(this.runs, (run: NativeInlineRun) => {
         Span(run.text).fontSize(run.code ? this.textSize - 1 : this.textSize)
-          .fontWeight(run.bold ? FontWeight.Medium : FontWeight.Normal)
+          .fontWeight(run.bold ? FontWeight.Medium : this.baseWeight)
           .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
           .fontFamily(run.code ? 'Noto Sans Mono, monospace' : 'HarmonyOS Sans')
           .fontColor(this.runColor(run)).textBackgroundStyle(this.runBackground(run))
           .decoration({ type: run.strike ? TextDecorationType.LineThrough : run.href ? TextDecorationType.Underline : TextDecorationType.None })
           .onClick(() => { this.open(run); })
       }, (_run: NativeInlineRun, index: number) => index.toString())
-    }.fontSize(this.textSize).lineHeight('22fp').copyOption(CopyOptions.InApp)
+    }.fontSize(this.textSize).lineHeight(this.lineHeight)
       .width('100%').wordBreak(WordBreak.BREAK_WORD)
       .textAlign(this.alignment === 'right' ? TextAlign.End : this.alignment === 'center' ? TextAlign.Center : TextAlign.Start)
+      .bindContentCover(this.resolvingFile, this.resolvingOverlay, {
+        modalTransition: ModalTransition.NONE,
+        onDisappear: (): void => { this.resolvingFile = false; }
+      })
       .bindContentCover(this.filePreviewOpen, this.filePreview, {
         modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
         onDisappear: (): void => { this.filePreviewOpen = false; }

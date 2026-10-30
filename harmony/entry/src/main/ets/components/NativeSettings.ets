@@ -388,7 +388,9 @@ export struct NativeSettings {
           }.padding({ left: 16, right: 16 })
         }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').height(48)
         Divider().strokeWidth(0.5).color(this.dark ? '#353638' : '#E8E9EC')
-        if (this.tab === 'about') { AboutSettings({ embedded: true }).layoutWeight(1) }
+        if (this.tab === 'about') {
+          AboutSettings({ embedded: true, client: this.client, sessionId: this.client.selectedId }).layoutWeight(1)
+        }
         else { Scroll() {
           Column() {
             if (this.tab === 'general') { this.hostGeneral() }

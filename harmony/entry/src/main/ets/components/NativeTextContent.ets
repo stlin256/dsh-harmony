@@ -31,7 +31,7 @@ export struct NativeTextContent {
   @Builder
   private body(value: string) {
     if (!this.monospace && this.table) {
-      NativeTable({ table: this.table })
+      NativeTable({ table: this.table, client: this.client, sessionId: this.sessionId })
     } else if (this.monospace) {
       Text(value).width('100%').fontSize(12).lineHeight('22fp')
         .fontFamily('Noto Sans Mono, monospace').copyOption(CopyOptions.InApp)

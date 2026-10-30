@@ -2,7 +2,7 @@ import { http, webSocket } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { NativeFrame, NativeSessionList, NativeSessionModel, NativeWorkspaceSnapshot } from './NativeSessionModel';
+import { NativeFrame, NativeSession, NativeSessionList, NativeSessionModel, NativeWorkspaceSnapshot } from './NativeSessionModel';
 import { NativeHostSettings } from './NativeHostSettings';
 import { NativeModelDirectory } from './NativeModelDirectory';
 
@@ -65,6 +65,7 @@ export class NativeHarnessClient {
   private stateRead: Promise<GatewayState> | null = null;
   private sessionRead: Promise<NativeSessionList> | null = null;
   private workspaceRead: Promise<NativeWorkspaceSnapshot> | null = null;
+  private sessionCwds: Map<string, string> = new Map<string, string>();
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
@@ -158,11 +159,19 @@ export class NativeHarnessClient {
   async sessions(): Promise<NativeSessionList> {
     if (this.sessionRead) return this.sessionRead;
     const pending = this.request('/pocket/api/native/sessions')
-      .then((value: string): NativeSessionList => JSON.parse(value) as NativeSessionList)
+      .then((value: string): NativeSessionList => {
+        const parsed = JSON.parse(value) as NativeSessionList;
+        this.sessionCwds.clear();
+        parsed.items.forEach((session: NativeSession): void => {
+          if (session.cwd) this.sessionCwds.set(session.id, session.cwd);
+        });
+        return parsed;
+      })
       .finally((): void => { this.sessionRead = null; });
     this.sessionRead = pending;
     return pending;
   }
+  sessionCwd(id: string): string { return this.sessionCwds.get(id) || ''; }
   async workspaces(): Promise<NativeWorkspaceSnapshot> {
     if (this.workspaceRead) return this.workspaceRead;
     const pending = this.request('/pocket/api/native/workspaces')
@@ -290,7 +299,8 @@ export class NativeHarnessClient {
   }
   clearLocalState(): void {
     this.modelDirectory.clear();
-    this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear(); this.selectedId = '';
+    this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear();
+    this.sessionCwds.clear(); this.selectedId = '';
   }
   async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');

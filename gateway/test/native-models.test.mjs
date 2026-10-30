@@ -220,6 +220,35 @@ test('native inline markdown preserves literal code and malformed text while sty
   assert.equal(image.alt, 'preview');
 });
 
+test('native links resolve workspace files relative to the session cwd', () => {
+  const { nativeFileTarget, nativeLinkKind } = load('NativeLinkResolver', {});
+  assert.equal(nativeLinkKind('https://example.com/image.png'), 'http');
+  assert.equal(nativeLinkKind('mailto:author@example.com'), 'external');
+  assert.equal(nativeLinkKind('docs/readme.md'), 'file');
+  assert.equal(
+    nativeFileTarget('docs/README.md#L12', '/workspace/project'),
+    '/workspace/project/docs/README.md'
+  );
+  assert.equal(
+    nativeFileTarget('../packages/a.ts', '/workspace/project/src'),
+    '/workspace/project/packages/a.ts'
+  );
+  assert.equal(
+    nativeFileTarget('dsh-resource://file/session/session-a/docs/view.ts', '/workspace/project'),
+    '/workspace/project/docs/view.ts'
+  );
+  assert.equal(
+    nativeFileTarget('file:///workspace/project/docs/view.ts#L20', '/workspace/project'),
+    '/workspace/project/docs/view.ts'
+  );
+  assert.equal(
+    nativeFileTarget('docs\\view.ts', 'C:\\workspace\\project'),
+    'C:/workspace/project/docs/view.ts'
+  );
+  assert.equal(nativeFileTarget('../../../outside.md', '/workspace/project'), '/outside.md');
+  assert.equal(nativeFileTarget('/workspace/shared.md', '/workspace/project'), '/workspace/shared.md');
+});
+
 test('native diff renders only explicit or applied edits and honors null old text', () => {
   const { nativeDiff, nativeDiffText } = load('NativeDiff', {});
   const message = fields => Object.assign({

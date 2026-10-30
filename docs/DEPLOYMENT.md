@@ -40,6 +40,8 @@ devecocli run --module entry@default --product default --build-mode release --sk
 
 浏览器继续打开正常 Harness 地址：原生部署使用启动 URL，Pocket ID 部署按现有 OIDC 登录。登录后 `/pocket/` 提供配套设置和任务概览。App 关闭后任务仍在服务器执行，插件持续采集后续事件。
 
-升级前检查运行中的任务，保留配置、Harness 数据和 SQLite。Passkey 安装器备份到 `/var/backups/dsh-harmony/`，采用版本化 release 和 `current` 链接。`deploy/preflight.mjs` 输出任务数量；`deploy/verify-live.mjs` 使用私有启动文件验证原生登录、会话、实时通道和退出，不输出密钥或对话。
+升级前检查运行中的任务，保留配置、Harness 数据和 SQLite。Passkey 安装器备份到 `/var/backups/dsh-harmony/`，采用版本化 release 和 `current` 链接。`deploy/preflight.mjs` 输出任务数量；`deploy/verify-live.mjs` 使用私有启动文件验证原生登录、会话、实时通道和退出，不输出密钥或对话。部署文件浏览与会话排序后，可用同一启动文件运行 `node deploy/verify-native-features.mjs <启动文件>`；探针只输出状态、数量和字节长度，验证目录列举、stat、二进制窗口与同位置排序 RPC。
+
+发布包只携带源码和锁文件。每个新建的版本化 release 在切换 `current`、重启服务前必须执行 `npm install --omit=dev --ignore-scripts --no-audit --no-fund`，并在发布目录保留该次安装生成的 `node_modules`；否则 Harness 插件会出现运行时依赖导入失败。
 
 旧的[独立网关](STANDALONE-GATEWAY.md)作为高级方案保留，不是默认插件部署的必要组件。

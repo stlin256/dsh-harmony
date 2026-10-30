@@ -6,6 +6,7 @@ import { NativeImageView } from './NativeImageView';
 import { NativeExperience } from '../services/NativeExperience';
 import { nativeReasoningPreview } from '../services/NativeTranscript';
 import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
+import { NativeInlineText } from './NativeInlineText';
 
 @Component
 export struct NativeMessageView {
@@ -83,12 +84,14 @@ export struct NativeMessageView {
             }.padding(10).width('100%').alignItems(HorizontalAlign.Start)
               .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
           } else if (block.kind === 'heading') {
-            Text(block.text).fontSize(18).lineHeight('28fp').fontWeight(FontWeight.Medium)
-              .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            NativeInlineText({ text: block.text, textSize: 18, lineHeight: '28fp',
+              baseWeight: FontWeight.Medium, client: this.client, sessionId: this.sessionId })
           } else if (block.kind === 'quote') {
-            Text(block.text).fontSize(13).lineHeight('22fp').padding(12).borderRadius(12)
+            Column() {
+              NativeInlineText({ text: block.text, textSize: 13, muted: true,
+                client: this.client, sessionId: this.sessionId })
+            }.padding(12).borderRadius(12)
               .backgroundColor(this.dark ? '#353638' : '#F5F6F7')
-              .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           } else {
             NativeTextContent({ text: block.text, client: this.client, sessionId: this.sessionId })
           }
