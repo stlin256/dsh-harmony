@@ -94,10 +94,11 @@ export struct NativeWorkspacePicker {
                 }.padding(6)
               }
             }, (workspace: NativeWorkspaceItem) => workspace.workspaceId)
-            Divider().color(this.dark ? '#353538' : '#E8E9EC').margin({ top: 8, bottom: 8 })
-            this.row('添加工作区', '', false, () => { this.creating = true; })
-            this.row('已归档会话', '', false, () => { this.archived = true; })
-            if (!this.snapshot.available) { Text('工作区接口暂不可用').fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91') }
+            if (this.snapshot.available) {
+              Divider().color(this.dark ? '#353538' : '#E8E9EC').margin({ top: 8, bottom: 8 })
+              this.row('添加工作区', '', false, () => { this.creating = true; })
+              this.row('已归档会话', '', false, () => { this.archived = true; })
+            }
           }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }.layoutWeight(1).width('100%').align(Alignment.Top)

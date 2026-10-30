@@ -497,6 +497,7 @@ export struct NativeSettings {
           .selectedOptionBgColor(this.dark ? '#383A40' : '#EBEEF3')
           .menuBackgroundColor(this.dark ? '#28292C' : '#FFFFFF')
           .enabled(!this.hostSaving.includes(ns + ':' + field) && this.host.writable)
+          .opacity(this.host.writable ? 1 : 0.55)
           .onSelect((index: number) => {
             const valueIndex = values.includes(current) ? index : index - 1;
             if (valueIndex < 0 || valueIndex >= values.length) return;
@@ -540,6 +541,10 @@ export struct NativeSettings {
           }
           if (!this.hostLoading && !this.host.namespaces.length && !this.hostError) {
             Text('当前 DSH 服务未提供可写设置').fontSize(13).padding(14)
+              .fontColor(this.dark ? '#8E9197' : '#777B81')
+          }
+          if (!this.hostLoading && this.host.namespaces.length && !this.host.writable) {
+            Text('当前 DSH 服务未开放设置写入').fontSize(13).padding(14)
               .fontColor(this.dark ? '#8E9197' : '#777B81')
           }
           if (this.hostError) {

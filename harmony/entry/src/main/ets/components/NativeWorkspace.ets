@@ -236,11 +236,20 @@ export struct NativeWorkspace {
       } else this.animatePane(() => { this.showSessions = true; });
     } catch (error) {
       if (!this.sessions.length) this.handleError(error as Error);
-      if (this.sessions.length && !this.selected) this.animatePane(() => { this.showSessions = true; });
       if (!(error instanceof NativeHttpError && error.status === 401)) {
-        this.connectionPhase = 'retrying';
-        if (!this.selected) this.animatePane(() => { this.showSessions = true; });
-        this.scheduleReconnect('');
+        if (!this.sessions.length) {
+          this.connectionPhase = 'retrying';
+          this.scheduleReconnect('');
+        } else {
+          this.connectionPhase = this.selected ? 'syncing' : 'idle';
+          if (!this.selected) this.animatePane(() => { this.showSessions = true; });
+          if (!this.selected) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = setTimeout((): void => {
+              if (this.mounted && this.active) this.reload();
+            }, 5000);
+          }
+        }
       }
     }
     finally { if (this.mounted && generation === this.generation) this.loading = false; }

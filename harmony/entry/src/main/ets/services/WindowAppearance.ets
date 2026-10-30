@@ -31,7 +31,9 @@ export class WindowAppearance {
 
   static async fullscreen(enabled: boolean): Promise<void> {
     if (WindowAppearance.mainWindow === null) return;
-    await WindowAppearance.mainWindow.setWindowSystemBarEnable(enabled ? [] : ['status', 'navigation']);
+    // Keep the status bar and gesture navigation visible. The page paints under
+    // both system bars, while page content uses the safe-area insets above.
+    await WindowAppearance.mainWindow.setWindowSystemBarEnable(['status', 'navigation']);
     await WindowAppearance.mainWindow.setWindowLayoutFullScreen(enabled);
   }
 
