@@ -1,5 +1,10 @@
 # 与 Harness 的界面适配
 
+本文件的视觉基线由
+[DSH Harmony 视觉与动效设计](design/2026-10-31-dsh-harmony-visual-motion.md)
+补充。新的控件、页面和结构变化应先使用该文档的 Quiet Precision 语义；本文保留具体
+模块的适配记录。
+
 ## 原生聊天 0.2.2
 
 参考 DSH `f3803c96974ad4a94195fb97e5c637e9c2a3afe3` 的 `InputBar`、`MessageItem`、`ApprovalCard` 和图标 artwork；本地 `harness-pocket` 的正文投影和文本片段渲染也用于实现对照。

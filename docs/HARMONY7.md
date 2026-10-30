@@ -1,5 +1,9 @@
 # HarmonyOS 7 原生适配与桌面卡片
 
+产品级动效策略以及 API 23–26 降级矩阵见
+[DSH Harmony 视觉与动效设计](design/2026-10-31-dsh-harmony-visual-motion.md)与
+[HarmonyOS 7 动效策略调研](research/2026-10-31-harmonyos7-motion-strategy.md)。
+
 ## 已实现的范围
 
 工程以 API 26.0.0 为 target，保留 API 23 最低兼容配置。新增能力均使用原生 ArkUI / Form Kit；Web 内容继续运行原版 Harness，不对聊天页面全屏叠模糊或替换其交互。
