@@ -199,10 +199,31 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
   }
   flush(!running || ends.has(turnKey));
   const foldable: Set<string> = new Set<string>();
+  const firstProcess: Set<string> = new Set<string>();
+  const inputAfterProcess: Set<string> = new Set<string>();
+  const finalAssistant: Map<string, NativeMessage> = new Map<string, NativeMessage>();
+  for (const row of rows) {
+    if (row.role === 'process') {
+      firstProcess.add(row.turnKey);
+      continue;
+    }
+    if (row.role === 'user' && firstProcess.has(row.turnKey)) inputAfterProcess.add(row.turnKey);
+    if (row.role === 'assistant' &&
+      (row.text.trim().length > 0 || row.blocks.some((block) => block.text.trim().length > 0))) {
+      finalAssistant.set(row.turnKey, row);
+    }
+  }
   ends.forEach((end: NativeMessage, key: string): void => {
-    const firstProcess = rows.findIndex((row: NativeMessage) => row.turnKey === key && row.role === 'process');
-    const inputAfterProcess = firstProcess >= 0 && rows.slice(firstProcess + 1).some((row: NativeMessage) => row.turnKey === key && row.role === 'user');
-    if (firstProcess >= 0 && !inputAfterProcess && end.outcome === 'completed') foldable.add(key);
+    if (firstProcess.has(key) && !inputAfterProcess.has(key) && end.outcome === 'completed') foldable.add(key);
+    if (end.outcome === 'completed') {
+      const final = finalAssistant.get(key);
+      end.footerOutcome = 'completed';
+      end.footerCopyText = final ? (final.text ||
+        final.blocks.map((block) => block.text).join('\n')) : '';
+      end.footerCopyMessageId = final?.id || '';
+    } else {
+      end.footerOutcome = end.outcome || (end.failed ? 'failed' : '');
+    }
   });
   const result: NativeMessage[] = [];
   const controls: Set<string> = new Set<string>();

@@ -7,6 +7,7 @@ import { NativeExperience } from '../services/NativeExperience';
 import { nativeReasoningPreview } from '../services/NativeTranscript';
 import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
 import { NativeInlineText } from './NativeInlineText';
+import { NativeCodeBlock } from './NativeCodeBlock';
 
 @Component
 export struct NativeMessageView {
@@ -78,11 +79,7 @@ export struct NativeMessageView {
         if (!this.message.blocks.length && this.message.text) { NativeTextContent({ text: this.message.text, client: this.client, sessionId: this.sessionId }) }
         ForEach(this.message.blocks, (block: NativeTextBlock) => {
           if (block.kind === 'code') {
-            Column({ space: 8 }) {
-              Text(block.language || '代码').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              NativeTextContent({ text: block.text, monospace: true, client: this.client, sessionId: this.sessionId })
-            }.padding(10).width('100%').alignItems(HorizontalAlign.Start)
-              .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
+            NativeCodeBlock({ code: block.text, language: block.language })
           } else if (block.kind === 'heading') {
             NativeInlineText({ text: block.text, textSize: 18, lineHeight: '28fp',
               baseWeight: FontWeight.Medium, client: this.client, sessionId: this.sessionId })
@@ -109,7 +106,7 @@ export struct NativeMessageView {
         Text('此消息包含高级内容，请在兼容模式查看。').fontSize(13)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
-      if ((this.message.role === 'user' || this.message.role === 'assistant') && this.message.text) {
+      if (this.message.role === 'user' && this.message.text) {
         Row() {
           Blank()
           Button({ type: ButtonType.Normal }) {
