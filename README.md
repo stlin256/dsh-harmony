@@ -84,7 +84,7 @@ DSH Harmony 将 DeepSeek Harness 的工作空间、会话、工具调用和实�
 
 DSH Harmony 是开源项目。欢迎提交问题、改进建议和代码；开始开发前，请阅读 [验证说明](docs/VALIDATION.md) 与仓库中的实现规格。
 
-[报告问题](https://github.com/stlin256/dsh-harmony/issues) · [查看源码](https://github.com/stlin256/dsh-harmony) · [作者主页](https://github.com/stlin256)
+[报告问题](https://github.com/stlin256/DSH-Harmony/issues) · [查看源码](https://github.com/stlin256/DSH-Harmony) · [作者主页](https://github.com/stlin256)
 
 <p align="center">
   <sub>Built for HarmonyOS with care. AGPL-3.0.</sub>

@@ -67,7 +67,7 @@ export struct AboutSettings {
               Column({ space: 3 }) {
                 Text('项目仓库').fontSize(13).fontWeight(FontWeight.Medium)
                   .fontColor(this.dark ? '#E7E7E9' : '#25262A')
-                Text('github.com/stlin256/dsh-harmony').fontSize(11).fontColor(this.dark ? '#929298' : '#888B91')
+                Text('github.com/stlin256/DSH-Harmony').fontSize(11).fontColor(this.dark ? '#929298' : '#888B91')
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               Text('↗').fontSize(16).fontColor(this.dark ? '#929298' : '#888B91')
             }.width('100%')

@@ -6,8 +6,8 @@ export class BuildInfo {
   static readonly bundleName: string = 'io.github.stlin256.dshharmony';
   static readonly author: string = 'stlin256';
   static readonly authorProfile: string = 'https://github.com/stlin256';
-  static readonly repository: string = 'https://github.com/stlin256/dsh-harmony';
-  static readonly issues: string = 'https://github.com/stlin256/dsh-harmony/issues/new';
+  static readonly repository: string = 'https://github.com/stlin256/DSH-Harmony';
+  static readonly issues: string = 'https://github.com/stlin256/DSH-Harmony/issues/new';
   static readonly copyright: string = '© 2026 stlin256 and contributors';
 
   private static installedVersion(): string {
