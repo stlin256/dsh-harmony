@@ -99,7 +99,7 @@
 ### INPUT：输入与提交
 
 - `INPUT01` 输入区保留官方语义草稿：文本、引用、命令、文件/目录/会话 reference 和有序附件。普通换行与提交、IME 组合输入、可编辑/忙碌态分离。
-- `INPUT02` 模型/推理选择属于输入区；显示当前 Host 选择，catalog 懒加载，模型与 reasoning 分栏/子页，返回仅退一级。
+- `INPUT02` 模型/推理选择属于输入区；显示当前 Host 选择。catalog 按Session预取并缓存，点击后在输入区上方弹出紧凑气泡，先呈现缓存再后台刷新；关闭气泡不得切换或隐藏聊天页面。
 - `INPUT03` Idle 普通提交与 running 时 queue/steer 的路径不同。Queue 不是自动重复发送。运行且无可发送草稿时显示 Stop，停止请求不代表任务已经结束。
 - `INPUT03a` `ui-conversation.busyEnter` Host偏好为queue（默认）/steer；主发送与Enter一致，Ctrl/Cmd+Enter选相反模式。手机显式发送优先，IME候选确认不触发提交。
 - `INPUT04` 本地提交立即创建有 rpcId 的 pending echo，以日志/Inbox 结果对账后移交正式记录。网络结果不明确时保留草稿和状态，不创建新 ID 自动重发。

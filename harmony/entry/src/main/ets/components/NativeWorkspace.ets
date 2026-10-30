@@ -9,6 +9,7 @@ import { NativeExperience } from '../services/NativeExperience';
 import { NativeTextContent } from './NativeTextContent';
 import { NativeInteraction } from './NativeInteraction';
 import { NativeSessionTools } from './NativeSessionTools';
+import { NativeModelPicker } from './NativeModelPicker';
 import { NativeMessageView } from './NativeMessageView';
 import { DSHIcon } from './DSHIcon';
 import { NativeProcessView } from './NativeProcessView';
@@ -63,6 +64,7 @@ export struct NativeWorkspace {
   @State private attaching: boolean = false;
   @State @Watch('navigationChanged') private toolsOpen: boolean = false;
   @State private toolsId: string = '';
+  @State @Watch('navigationChanged') private modelPickerOpen: boolean = false;
   @State @Watch('navigationChanged') private menuId: string = '';
   @State private menuTarget: string = '';
   @State @Watch('navigationChanged') private utilityOpen: boolean = false;
@@ -130,7 +132,8 @@ export struct NativeWorkspace {
   private navigationChanged(): void {
     const state = new NativeNavigationState();
     state.wide = this.wide; state.sessions = this.showSessions; state.picker = this.workspacePickerOpen;
-    state.create = this.newSessionOpen; state.tools = this.toolsOpen; state.menu = !!this.menuId || this.utilityOpen;
+    state.create = this.newSessionOpen; state.tools = this.toolsOpen;
+    state.menu = !!this.menuId || this.utilityOpen || this.modelPickerOpen;
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', nativeCanGoBack(state));
   }
 
@@ -199,6 +202,7 @@ export struct NativeWorkspace {
   }
   private backToSessions(): void {
     if (this.menuId || this.utilityOpen) { this.menuId = ''; this.utilityOpen = false; return; }
+    if (this.modelPickerOpen) { this.modelPickerOpen = false; return; }
     if (this.workspacePickerOpen) { this.workspacePickerOpen = false; return; }
     if (this.newSessionOpen) { this.newSessionOpen = false; return; }
     if (this.toolsOpen) {
@@ -295,6 +299,11 @@ export struct NativeWorkspace {
   private utilityMenu() {
     NativeActionMenu({ items: this.utilityItems(), onSelect: (id: string): void => { if (id === 'copy') this.copyMarkdown(); else if (id === 'download') this.downloadLog(); } })
   }
+  @Builder
+  private modelPicker() {
+    NativeModelPicker({ client: this.client, sessionId: this.selected, currentCaption: this.modelCaption,
+      onClose: (): void => { this.modelPickerOpen = false; } })
+  }
   private utilityItems(): NativeMenuItem[] {
     const rows: NativeMenuItem[] = [];
     if (this.utilityKnown && this.exportCapabilities.copyMarkdown) rows.push({ id: 'copy', title: '复制 Markdown', icon: 'copy-outline', disabled: this.copying, danger: false, separator: false });
@@ -303,6 +312,7 @@ export struct NativeWorkspace {
     return rows;
   }
   private async openUtilities(): Promise<void> {
+    this.modelPickerOpen = false;
     this.utilityOpen = !this.utilityOpen; if (!this.utilityOpen) return;
     const id = this.selected; this.utilityKnown = false;
     try {
@@ -415,7 +425,7 @@ export struct NativeWorkspace {
   private select(id: string): void {
     if (this.selected) this.client.models.set(this.selected, this.model);
     this.client.drafts.set(this.selected, this.draft);
-    this.continued = []; this.interactions = []; this.toolsOpen = false; this.client.selectedId = id;
+    this.continued = []; this.interactions = []; this.toolsOpen = false; this.modelPickerOpen = false; this.client.selectedId = id;
     const session = this.sessions.find((item: NativeSession) => item.id === id);
     this.title = session ? session.title.trim() || '未命名会话' : '会话';
     this.draft = this.client.drafts.get(id) || '';
@@ -804,7 +814,12 @@ export struct NativeWorkspace {
               DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 10, color: this.dark ? '#93969B' : '#8A8D91' }).rotate({ angle: -90 })
             }.width('100%')
           }.layoutWeight(1).height(32).padding({ left: 3, right: 3 }).backgroundColor(Color.Transparent)
-            .fontColor(this.dark ? '#CFD3D6' : '#61666B').accessibilityText('模型与推理').onClick(() => { this.openTools('modelsRoot'); })
+            .fontColor(this.dark ? '#CFD3D6' : '#61666B').accessibilityText('模型与推理')
+            .onClick(() => { this.utilityOpen = false; this.modelPickerOpen = true; })
+            .bindPopup(this.modelPickerOpen, { builder: this.modelPicker, placement: Placement.Top,
+              enableArrow: true, targetSpace: 8, radius: 16, mask: false,
+              popupColor: this.dark ? '#242527' : '#FFFFFF', backgroundBlurStyle: BlurStyle.NONE,
+              onStateChange: (event): void => { if (!event.isVisible) this.modelPickerOpen = false; } })
           Button({ type: ButtonType.Normal }) {
             if (this.attaching) { LoadingProgress().width(14).height(14).color(this.dark ? '#F9FAFB' : '#0F1115') }
             else { DSHIcon({ glyph: 'plus-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }

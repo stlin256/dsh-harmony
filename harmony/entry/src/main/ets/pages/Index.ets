@@ -30,6 +30,7 @@ struct Index {
   @State private authSurface: boolean = false;
   @State private compatibilitySurface: boolean = false;
   @State @Watch('settingsChanged') private nativeSettings: boolean = false;
+  @State private settingsCached: boolean = false;
   @State private connectionManager: boolean = false;
   @State private modePicker: boolean = false;
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
@@ -104,6 +105,8 @@ struct Index {
       this.error = '';
       this.accessKey = '';
       this.ready = true;
+      // Mount the settings tree while hidden so the first open paints from cache.
+      this.settingsCached = true;
       if (this.uiMode === 'native') this.openPocketRoute();
     } catch (error) {
       this.origin = ''; this.ready = false;
@@ -205,7 +208,7 @@ struct Index {
     WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.images.clear(); this.nativeClient.uncertain.clear();
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);
-    this.nativeSettings = false; this.connectionManager = false; this.compatibilitySurface = false;
+    this.nativeSettings = false; this.settingsCached = false; this.connectionManager = false; this.compatibilitySurface = false;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
     this.ready = false; this.origin = ''; this.authOrigin = ''; this.proxyAuth = false; this.address = ''; this.accessKey = ''; this.error = '';
     this.bridge = null; this.controller = new webview.WebviewController();
@@ -419,7 +422,10 @@ struct Index {
       .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: true,
         onDisappear: (): void => { this.closeCompatibility(); } })
       .visibility(this.nativeSettings ? Visibility.Hidden : Visibility.Visible)
-      if (this.nativeSettings) { this.settingsSheet() }
+      if (this.ready && this.settingsCached) {
+        Column() { this.settingsSheet() }.width('100%').height('100%')
+          .visibility(this.nativeSettings ? Visibility.Visible : Visibility.Hidden)
+      }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
   }
 

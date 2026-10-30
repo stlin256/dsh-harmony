@@ -207,6 +207,39 @@ test('native inline markdown preserves literal code and malformed text while sty
   assert.equal(nativeInlineMarkdown('`**literal**`').map(x => x.text).join(''),'**literal**');
 });
 
+test('model directory paints per-session cache before refresh and updates the shared caption', async () => {
+  const { NativeModelDirectory } = load('NativeModelDirectory', {});
+  const calls = [];
+  let revisions = 0;
+  const directory = new NativeModelDirectory(async body => {
+    const value = JSON.parse(body);
+    calls.push(value);
+    if (value.operation === 'modelCatalog') {
+      return JSON.stringify({ default: { provider: 'deepseek', model: 'flash', reasoningEffort: 'high' },
+        groups: [{ id: 'deepseek', name: 'DeepSeek', models: [
+          { id: 'flash', name: 'Flash', reasoning: { defaultEffort: 'high',
+            efforts: [{ id: 'high', name: 'High', description: '' }] } }
+        ] }], failures: [] });
+    }
+    if (value.operation === 'projections') {
+      return JSON.stringify({ values: { modelSelection: { next: { provider: 'deepseek', model: 'flash', reasoningEffort: 'high' } } } });
+    }
+    if (value.operation === 'selectModel') {
+      return JSON.stringify({ selected: { provider: value.provider, model: value.model, reasoningEffort: value.reasoningEffort || 'high' } });
+    }
+    throw Error('Unexpected operation: ' + value.operation);
+  }, () => { revisions++; });
+
+  const loaded = await directory.load('session-a');
+  assert.equal(directory.state('session-a'), loaded, 'the popover must receive the same cached state instance');
+  assert.equal(directory.caption('session-a'), 'Flash · High');
+  assert.equal(calls.length, 2);
+  assert.equal(revisions, 1);
+  const cachedCalls = calls.length;
+  assert.equal(directory.state('session-a').selected.model, 'flash');
+  assert.equal(calls.length, cachedCalls, 'reading cached state must not issue network calls');
+});
+
 test('native GFM tables preserve escaped pipes, alignment and uneven rows', () => {
   const { nativeMarkdownTable } = load('NativeMarkdownTable', {});
   const table = nativeMarkdownTable('| Name | Result | Notes |\n| :--- | ---: | :---: |\n| `a|b` | 12\\|34 | **ok** |\n| short |');
