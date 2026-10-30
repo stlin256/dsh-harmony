@@ -1,75 +1,94 @@
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeMessage } from '../services/NativeSessionModel';
-import { NativeMessageView } from './NativeMessageView';
-import { NativeToolCallView } from './NativeToolCallView';
 import { DSHIcon } from './DSHIcon';
-import { nativeProcessIcon } from '../services/NativeTranscript';
 import { NativeMotion } from '../services/NativeMotion';
+import { NativeProcessStepView } from './NativeProcessStepView';
+import { NativeListSource } from '../services/NativeListSource';
 
+/** Turn-level process disclosure containing direct operation rows. */
 @Component
 export struct NativeProcessView {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   disclosures: Map<string, boolean> = new Map<string, boolean>();
   @Prop @Watch('changed') message: NativeMessage = new NativeMessage();
+  @Prop maxExpandedHeight: number = 240;
+  @Prop maxChildExpandedHeight: number = 160;
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private expanded: boolean = false;
-  @State private headline: string = '';
-  private titleTimer: number = -1;
-  private shownAt: number = 0;
   private disclosureId: string = '';
-  private syncDisclosure(): void {
-    const key = this.message.turnKey + '|' + this.message.id;
-    if (key === this.disclosureId) return;
-    this.disclosureId = key;
-    this.expanded = this.disclosures.get(key) === true;
+  private flatApplied: boolean = false;
+  private source: NativeListSource<NativeMessage> = new NativeListSource<NativeMessage>();
+
+  aboutToAppear(): void {
+    this.flatApplied = this.message.flat;
+    this.expanded = this.message.flat ||
+      this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true;
+    this.changed();
   }
-  aboutToAppear(): void { this.expanded = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true; this.changed(); }
-  aboutToDisappear(): void { clearTimeout(this.titleTimer); }
+
   private changed(): void {
-    clearTimeout(this.titleTimer);
-    const remaining = 150 - (Date.now() - this.shownAt);
-    const update = (): void => { this.headline = this.message.label; this.shownAt = Date.now(); };
-    if (this.message.closed || remaining <= 0 || !this.headline) update();
-    else this.titleTimer = setTimeout(update, remaining);
-    this.syncDisclosure();
+    this.source.set(this.message.children, (child: NativeMessage): string => child.id);
+    const key = this.message.turnKey + '|' + this.message.id;
+    if (key !== this.disclosureId) {
+      this.disclosureId = key;
+      this.flatApplied = this.message.flat;
+      this.expanded = this.message.flat || this.disclosures.get(key) === true;
+    } else if (this.flatApplied !== this.message.flat) {
+      this.flatApplied = this.message.flat;
+      this.expanded = this.message.flat || this.disclosures.get(key) === true;
+    }
   }
+
   private toggle(): void {
-    const update = (): void => {
+    NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
       this.expanded = !this.expanded;
-      this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded);
-    };
-    NativeMotion.animate(this.getUIContext(), 'micro', update);
+      this.disclosures.set(this.disclosureId, this.expanded);
+    });
   }
+
   @Builder
   private members() {
-    Column({ space: 2 }) {
-      ForEach(this.message.children, (child: NativeMessage) => {
-        if (child.role === 'tool') { NativeToolCallView({ client: this.client, sessionId: this.sessionId, message: child, disclosures: this.disclosures }) }
-        else if (child.role === 'reasoning') { NativeMessageView({ client: this.client, sessionId: this.sessionId, message: child,
-          preview: this.message.preview, runningReasoning: !this.message.closed, disclosures: this.disclosures }) }
-        else { Text(child.label).fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91') }
+    List({ space: 2 }) {
+      LazyForEach(this.source, (child: NativeMessage) => {
+        ListItem() {
+          NativeProcessStepView({ client: this.client, sessionId: this.sessionId, message: child,
+            disclosures: this.disclosures, maxExpandedHeight: this.maxChildExpandedHeight })
+        }
       }, (child: NativeMessage) => child.id)
-    }.width('100%').alignItems(HorizontalAlign.Start)
+    }.width('100%').padding({ right: 10 })
+      .constraintSize({ maxHeight: Math.max(96, this.maxExpandedHeight) })
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.None)
+      .cachedCount(4)
+      .transition(NativeMotion.rowTransition())
   }
+
   build() {
-    Column({ space: this.expanded && !this.message.flat ? 8 : 0 }) {
-      if (!this.message.flat) {
+    Column({ space: this.expanded ? 6 : 0 }) {
       Button({ type: ButtonType.Normal }) {
-        Row({ space: 6 }) {
-          DSHIcon({ glyph: nativeProcessIcon(this.message.toolName), color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 14 })
-          Text(this.headline).fontSize(12).layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        Row({ space: 4 }) {
+          DSHIcon({ glyph: 'think-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 14 })
+          Text('工作过程').fontSize(12).fontWeight(FontWeight.Medium)
             .fontColor(this.dark ? '#CFD3D6' : '#61666B')
-          DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
+          if (this.message.detail) {
+            Text('·').fontSize(12).fontColor(this.dark ? '#777A80' : '#A1A4A9')
+            Text(this.message.detail).fontSize(12).layoutWeight(1).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(this.dark ? '#93969B' : '#8A8D91')
+              .opacity(this.expanded ? 0 : 1)
+              .animation(NativeMotion.implicit('micro'))
+          } else {
+            Blank().layoutWeight(1)
+          }
+          DSHIcon({ glyph: 'chevron-left-outline',
+            color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
             .rotate({ angle: this.expanded ? -90 : 180 })
+            .animation(NativeMotion.implicit('micro'))
         }.width('100%')
-      }.height(30).width('100%').padding({ left: 2, right: 2 }).backgroundColor(Color.Transparent)
-        .onClick(() => { this.toggle(); })
-      }
-      if (this.message.flat) { this.members() }
-      else if (this.expanded) {
-        this.members()
-      }
+      }.height(30).width('100%').padding({ left: 2, right: 2 })
+        .backgroundColor(Color.Transparent).onClick((): void => { this.toggle(); })
+      if (this.expanded) { this.members() }
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 }

@@ -25,6 +25,8 @@ export struct NativeActionMenu {
           .accessibilityText(item.title).onClick(() => { this.onSelect(item.id); })
       }, (item: NativeMenuItem) => item.id)
     }.width(208).padding(4).borderRadius(16)
+      .backgroundColor(this.dark ? '#2C2C2E' : '#F7F8FA')
+      .border({ width: 0.5, color: this.dark ? '#4A4B4F' : '#D8DADF' })
       .transition(NativeMotion.overlayTransition())
   }
 }

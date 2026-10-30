@@ -3,6 +3,7 @@ import { NativeTextContent } from './NativeTextContent';
 import { DSHIcon } from './DSHIcon';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeImageView } from './NativeImageView';
+import { NativeImageStrip } from './NativeImageStrip';
 import { NativeExperience } from '../services/NativeExperience';
 import { nativeReasoningPreview } from '../services/NativeTranscript';
 import { NativeMessage, NativeTextBlock, NativeImageAttachment } from '../services/NativeSessionModel';
@@ -94,15 +95,27 @@ export struct NativeMessageView {
           }
         }, (_block: NativeTextBlock, index: number) => index.toString())
       }
-      ForEach(this.message.images || [], (attachment: NativeImageAttachment) => {
-        NativeImageView({ client: this.client, sessionId: this.sessionId, attachment })
-      }, (attachment: NativeImageAttachment) => attachment.attachmentId)
+      if (this.message.images?.length) {
+        if (this.message.role === 'user') {
+          NativeImageStrip({
+            client: this.client,
+            sessionId: this.sessionId,
+            attachments: this.message.images,
+            thumbnailSize: 72,
+            trailingInset: 0
+          })
+        } else {
+          ForEach(this.message.images, (attachment: NativeImageAttachment) => {
+            NativeImageView({ client: this.client, sessionId: this.sessionId, attachment })
+          }, (attachment: NativeImageAttachment) => attachment.attachmentId)
+        }
+      }
       if (this.message.role === 'notice') {
         Button('打开完整交互', { type: ButtonType.Normal }).height(36).fontSize(12).borderRadius(10)
           .backgroundColor(this.dark ? '#353638' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onClick(this.onCompatibility)
       }
-      if (!this.message.text && !this.message.reasoning) {
+      if (!this.message.text && !this.message.reasoning && !this.message.images?.length) {
         Text('此消息包含高级内容，请在兼容模式查看。').fontSize(13)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }

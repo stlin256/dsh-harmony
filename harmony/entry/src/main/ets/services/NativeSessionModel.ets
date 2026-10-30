@@ -7,12 +7,22 @@ export class NativeImageAttachment {
   attachmentId: string = ''; mediaType: string = ''; bytes: number = 0;
   width: number = 0; height: number = 0; name: string = '';
 }
+export class NativeImagePreviewRequest {
+  sessionId: string = '';
+  attachment: NativeImageAttachment = new NativeImageAttachment();
+}
+export class NativeFileViewRequest {
+  kind: string = 'file';
+  sessionId: string = '';
+  path: string = '';
+}
 export class NativeAssistantSegment {
   kind: string = ''; text: string = ''; blocks: NativeTextBlock[] = []; images: NativeImageAttachment[] = [];
 }
 export class NativeMessage {
   metaRaw: string = ''; contentRaw: string = ''; errorRaw: string = '';
   flat: boolean = false; preview: boolean = true; runningTurn: boolean = false;
+  groupedProcess: boolean = false;
   segments: NativeAssistantSegment[] = [];
   eventType: string = ''; sourceKind: string = '';
   turn: number = -1; step: number = -1; time: number = 0;

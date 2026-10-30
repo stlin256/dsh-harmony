@@ -1,5 +1,6 @@
 param(
   [string]$DevEcoHome = $env:DEVECO_STUDIO_HOME,
+  [ValidateSet('default','store')][string]$Product = 'default',
   [ValidateSet('debug','release')][string]$BuildMode = 'debug'
 )
 $ErrorActionPreference = 'Stop'
@@ -22,7 +23,7 @@ try {
   $env:Path = "$env:NODE_HOME;$env:JAVA_HOME/bin;$savedPath"
   & (Join-Path $ide 'tools/ohpm/bin/ohpm.bat') install
   if ($LASTEXITCODE -ne 0) { throw 'ohpm install failed' }
-  & (Join-Path $env:NODE_HOME 'node.exe') (Join-Path $ide 'tools/hvigor/bin/hvigorw.js') --mode module -p product=default -p module=entry@default -p "buildMode=$BuildMode" assembleHap --no-daemon
+  & (Join-Path $env:NODE_HOME 'node.exe') (Join-Path $ide 'tools/hvigor/bin/hvigorw.js') --mode module -p "product=$Product" -p "module=entry@$Product" -p "buildMode=$BuildMode" assembleHap --no-daemon
   if ($LASTEXITCODE -ne 0) { throw "HarmonyOS build failed: $LASTEXITCODE" }
 } finally {
   Pop-Location

@@ -51,6 +51,18 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-plugin-self-contained.md](docs/requirements/2026-10-31-plugin-self-contained.md)
 - Self-contained plugin implementation spec:
   [2026-10-31-plugin-self-contained.md](docs/specs/2026-10-31-plugin-self-contained.md)
+- Plugin activation recovery requirement:
+  [2026-10-31-plugin-activation-recovery.md](docs/requirements/2026-10-31-plugin-activation-recovery.md)
+- Plugin activation recovery implementation spec:
+  [2026-10-31-plugin-activation-recovery.md](docs/specs/2026-10-31-plugin-activation-recovery.md)
+- Plugin activation recovery device E2E:
+  [2026-10-31-plugin-activation-recovery-e2e.md](docs/testing/2026-10-31-plugin-activation-recovery-e2e.md)
+- Navigation and process refinement requirement:
+  [2026-10-31-navigation-process-refinement.md](docs/requirements/2026-10-31-navigation-process-refinement.md)
+- Navigation and process refinement spec:
+  [2026-10-31-navigation-process-refinement.md](docs/specs/2026-10-31-navigation-process-refinement.md)
+- Navigation and process device E2E:
+  [2026-10-31-navigation-process-refinement-e2e.md](docs/testing/2026-10-31-navigation-process-refinement-e2e.md)
 - HarmonyOS 7 motion research:
   [2026-10-31-harmonyos7-motion-strategy.md](docs/research/2026-10-31-harmonyos7-motion-strategy.md)
 - Control motion audit:
@@ -67,6 +79,27 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-chat-controls-refinement.md](docs/requirements/2026-10-31-chat-controls-refinement.md)
 - Chat controls and drawer implementation spec:
   [2026-10-31-chat-controls-refinement.md](docs/specs/2026-10-31-chat-controls-refinement.md)
+- Workspace file preview, mode switch, download and browser requirement:
+  [2026-10-31-workspace-file-preview-browser.md](docs/requirements/2026-10-31-workspace-file-preview-browser.md)
+- Workspace file preview implementation spec:
+  [2026-10-31-workspace-file-preview-browser.md](docs/specs/2026-10-31-workspace-file-preview-browser.md)
+- Workspace file preview and read-only E2E:
+  [2026-10-31-workspace-file-preview-browser-e2e.md](docs/testing/2026-10-31-workspace-file-preview-browser-e2e.md)
+- Sidebar scrollbar and browser-navigation requirement:
+  [2026-10-31-sidebar-scrollbar-file-browser-navigation.md](docs/requirements/2026-10-31-sidebar-scrollbar-file-browser-navigation.md)
+- Sidebar scrollbar and browser-navigation implementation spec:
+  [2026-10-31-sidebar-scrollbar-file-browser-navigation.md](docs/specs/2026-10-31-sidebar-scrollbar-file-browser-navigation.md)
+- Sidebar scrollbar and browser-navigation E2E:
+  [2026-10-31-sidebar-scrollbar-file-browser-navigation-e2e.md](docs/testing/2026-10-31-sidebar-scrollbar-file-browser-navigation-e2e.md)
+- Stability, settings feedback, notification prominence and composer inset
+  requirement:
+  [2026-10-31-stability-settings-notification-composer.md](docs/requirements/2026-10-31-stability-settings-notification-composer.md)
+- Stability, settings feedback, notification prominence and composer inset
+  implementation spec:
+  [2026-10-31-stability-settings-notification-composer.md](docs/specs/2026-10-31-stability-settings-notification-composer.md)
+- Stability, settings feedback, notification prominence and composer inset
+  E2E:
+  [2026-10-31-stability-settings-notification-composer-e2e.md](docs/testing/2026-10-31-stability-settings-notification-composer-e2e.md)
 - Native interaction baseline:
   [NATIVE-INTERACTION-SPEC.md](docs/NATIVE-INTERACTION-SPEC.md)
 - Existing shell/performance E2E:

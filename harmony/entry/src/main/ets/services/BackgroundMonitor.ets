@@ -55,12 +55,16 @@ export class BackgroundMonitor {
     const request: notificationManager.NotificationRequest = {
       id,
       notificationSlotType: slotType,
+      deliveryTime: Date.now(),
       content: {
         notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
         normal: { title: title.slice(0, 80), text: text.slice(0, 160) }
       },
       wantAgent: action
     };
+    if (level === 'prominent') {
+      request.priorityNotificationType = notificationManager.PriorityNotificationType.URGENT_MESSAGE;
+    }
     await new Promise<void>((resolve, reject) => {
       notificationManager.publish(request, (error) => { if (error) reject(error); else resolve(); });
     });

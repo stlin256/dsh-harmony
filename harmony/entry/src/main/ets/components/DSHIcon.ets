@@ -87,7 +87,7 @@ export struct DSHIcon {
     }, drawing.BlendMode.SRC_IN);
   }
   build() {
-    if (['think-outline', 'browse-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline', 'deepseek-logo'].includes(this.glyph)) {
+    if (['think-outline', 'browse-outline', 'folder-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'eye-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline', 'deepseek-logo'].includes(this.glyph)) {
       Stack() {
         Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
           .objectFit(ImageFit.Contain)

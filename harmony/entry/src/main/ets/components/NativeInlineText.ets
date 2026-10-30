@@ -2,9 +2,8 @@ import { common } from '@kit.AbilityKit';
 import { nativeInlineMarkdown, NativeInlineRun } from '../services/NativeInlineMarkdown';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeDirectoryListing, NativeFileStat } from '../services/NativeHarnessClient';
-import { nativeFileTarget, nativeLinkKind } from '../services/NativeLinkResolver';
-import { NativeFilePreview } from './NativeFilePreview';
-import { NativeFileBrowser } from './NativeFileBrowser';
+import { nativeBareFileName, nativeFileTarget, nativeLinkKind } from '../services/NativeLinkResolver';
+import { NativeFileViewRequest } from '../services/NativeSessionModel';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
 
@@ -24,10 +23,6 @@ export struct NativeInlineText {
   @StorageLink('nativeSafeLeft') private safeLeft: number = 0;
   @StorageLink('nativeSafeRight') private safeRight: number = 0;
   @State private runs: NativeInlineRun[] = [];
-  @State private filePreviewOpen: boolean = false;
-  @State private filePreviewPath: string = '';
-  @State private browserOpen: boolean = false;
-  @State private browserPath: string = '';
   @State private remotePreview: boolean = false;
   @State private remoteUrl: string = '';
   @State private remoteTitle: string = '';
@@ -72,6 +67,15 @@ export struct NativeInlineText {
   private fileTarget(href: string): string {
     return nativeFileTarget(href, this.client.sessionCwd(this.sessionId));
   }
+  private openFileView(kind: string, path: string): void {
+    const request = new NativeFileViewRequest();
+    request.kind = kind;
+    request.sessionId = this.sessionId;
+    request.path = path;
+    AppStorage.setOrCreate<string>('nativeFileViewPayload', JSON.stringify(request));
+    AppStorage.setOrCreate<number>('nativeFileViewRevision',
+      (AppStorage.get<number>('nativeFileViewRevision') || 0) + 1);
+  }
   private async openFile(href: string): Promise<void> {
     if (!this.sessionId) {
       this.getUIContext().getPromptAction().showToast({ message: '请先在会话中打开此链接', duration: 1500 });
@@ -83,38 +87,26 @@ export struct NativeInlineText {
     try {
       const stat: NativeFileStat = await this.client.statFile(this.sessionId, path);
       if (!stat.version) throw new Error('Invalid file');
-      this.filePreviewPath = path; this.filePreviewOpen = true;
+      this.resolvingFile = false;
+      this.openFileView('file', path);
     } catch (_) {
+      const basename = nativeBareFileName(href);
+      if (basename) {
+        const resolved = await this.client.findWorkspaceFile(this.sessionId, basename);
+        if (resolved) {
+          this.resolvingFile = false;
+          this.openFileView('file', resolved);
+          return;
+        }
+      }
       try {
         const listing: NativeDirectoryListing = await this.client.listFiles(this.sessionId, path);
-        this.browserPath = listing.path || path; this.browserOpen = true;
+        this.resolvingFile = false;
+        this.openFileView('browser', path);
       } catch (_) {
-        this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
+        this.getUIContext().getPromptAction().showToast({ message: '文件或文件夹不可用', duration: 1500 });
       }
     } finally { this.resolvingFile = false; }
-  }
-  private openSingleLink(): void {
-    const linked = this.runs.filter((run: NativeInlineRun): boolean => run.href.length > 0);
-    if (linked.length === 1) this.open(linked[0]);
-  }
-  @Builder
-  private resolvingOverlay() {
-    Column({ space: 10 }) {
-      LoadingProgress().width(24).height(24).color(this.dark ? '#8AB4FF' : '#3964FE')
-      Text('正在打开…').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-    }.width(132).height(88).justifyContent(FlexAlign.Center).borderRadius(16)
-      .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
-      .border({ width: 0.5, color: this.dark ? '#45464B' : '#E2E4E8' })
-  }
-  @Builder
-  private filePreview() {
-    NativeFilePreview({ client: this.client, sessionId: this.sessionId, path: this.filePreviewPath,
-      onClose: (): void => { this.filePreviewOpen = false; } })
-  }
-  @Builder
-  private fileBrowser() {
-    NativeFileBrowser({ client: this.client, sessionId: this.sessionId, path: this.browserPath,
-      onClose: (): void => { this.browserOpen = false; } })
   }
   @Builder
   private remoteImagePreview() {
@@ -151,24 +143,13 @@ export struct NativeInlineText {
           .fontFamily(run.code ? 'Noto Sans Mono, monospace' : 'HarmonyOS Sans')
           .fontColor(this.runColor(run)).textBackgroundStyle(this.runBackground(run))
           .decoration({ type: run.strike ? TextDecorationType.LineThrough : run.href ? TextDecorationType.Underline : TextDecorationType.None })
-          .onClick(() => { this.open(run); })
+          .onClick((): void => {
+            if (run.href) this.open(run);
+          })
       }, (_run: NativeInlineRun, index: number) => index.toString())
     }.fontSize(this.textSize).lineHeight(this.lineHeight)
       .width('100%').wordBreak(WordBreak.BREAK_WORD)
       .textAlign(this.alignment === 'right' ? TextAlign.End : this.alignment === 'center' ? TextAlign.Center : TextAlign.Start)
-      .onClick((): void => { this.openSingleLink(); })
-      .bindContentCover(this.resolvingFile, this.resolvingOverlay, {
-        modalTransition: ModalTransition.NONE,
-        onDisappear: (): void => { this.resolvingFile = false; }
-      })
-      .bindContentCover(this.filePreviewOpen, this.filePreview, {
-        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
-        onDisappear: (): void => { this.filePreviewOpen = false; }
-      })
-      .bindContentCover(this.browserOpen, this.fileBrowser, {
-        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
-        onDisappear: (): void => { this.browserOpen = false; }
-      })
       .bindContentCover(this.remotePreview, this.remoteImagePreview, {
         modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
         onDisappear: (): void => { this.remotePreview = false; }

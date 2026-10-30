@@ -2,11 +2,8 @@ import { image } from '@kit.ImageKit';
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
-import { NativeImageAttachment } from '../services/NativeSessionModel';
+import { NativeImageAttachment, NativeImagePreviewRequest } from '../services/NativeSessionModel';
 import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
-import { DSHIcon } from './DSHIcon';
-import { NativeExperience } from '../services/NativeExperience';
-import { NativeMotion } from '../services/NativeMotion';
 
 class AttachmentResult { data: string = ''; }
 @Component
@@ -14,24 +11,19 @@ export struct NativeImageView {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   @Prop attachment: NativeImageAttachment = new NativeImageAttachment();
+  @Prop compact: boolean = false;
+  @Prop compactSize: number = 84;
   @StorageLink('nativeDark') private dark: boolean = false;
-  @StorageLink('nativeSafeTop') private safeTop: number = 0;
-  @StorageLink('nativeSafeBottom') private safeBottom: number = 0;
-  @StorageLink('nativeSafeLeft') private safeLeft: number = 0;
-  @StorageLink('nativeSafeRight') private safeRight: number = 0;
   @State private bitmap: image.PixelMap | null = null;
-  @State private fullBitmap: image.PixelMap | null = null;
   @State private loading: boolean = false;
   @State private error: string = '';
-  @State private preview: boolean = false;
-  @State private previewScale: number = 1;
   private mounted: boolean = false;
   private source: image.ImageSource | null = null;
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
   aboutToAppear(): void { this.mounted = true; this.load(); }
   aboutToDisappear(): void {
-    this.mounted = false; this.fullBitmap?.release(); this.bitmap?.release(); this.source?.release();
-    this.fullBitmap = null; this.bitmap = null; this.source = null;
+    this.mounted = false; this.bitmap?.release(); this.source?.release();
+    this.bitmap = null; this.source = null;
   }
   private async load(): Promise<void> {
     if (this.loading) return;
@@ -57,69 +49,53 @@ export struct NativeImageView {
     } catch (_) { if (this.mounted) this.error = '图片加载失败，点击重试'; }
     finally { if (this.mounted) this.loading = false; }
   }
-  private async openPreview(): Promise<void> {
-    if (!this.source) return;
-    this.preview = true; this.previewScale = 1;
-    if (this.fullBitmap || this.loading) return;
-    this.loading = true;
-    try {
-      const bitmap = await this.source.createPixelMap();
-      if (!this.mounted) { bitmap.release(); return; }
-      this.fullBitmap = bitmap;
-    } catch (_) {
-      if (this.mounted) this.error = '图片预览失败，请重试';
-    } finally { if (this.mounted) this.loading = false; }
+  private openLightbox(): void {
+    const request = new NativeImagePreviewRequest();
+    request.sessionId = this.sessionId;
+    request.attachment = this.attachment;
+    AppStorage.setOrCreate<string>('nativeImagePreviewPayload', JSON.stringify(request));
+    AppStorage.setOrCreate<number>('nativeImagePreviewRevision',
+      (AppStorage.get<number>('nativeImagePreviewRevision') || 0) + 1);
   }
-  private animate(action: () => void): void {
-    NativeMotion.animate(this.getUIContext(), 'micro', action);
-  }
-  @Builder
-  private fullImage() {
-    Column({ space: 8 }) {
-      Row({ space: 4 }) {
-        Text(this.attachment.name || '图片').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .fontColor(this.dark ? '#F9FAFB' : '#17181B')
-        Button({ type: ButtonType.Normal }) {
-          DSHIcon({ glyph: 'close-outline', glyphSize: 15, color: this.dark ? '#F9FAFB' : '#17181B' })
-        }.width(32).height(32).borderRadius(9).backgroundColor(Color.Transparent)
-          .accessibilityText('关闭图片预览').onClick(() => { this.preview = false; this.previewScale = 1; })
-      }.height(40).width('100%')
-      if (this.fullBitmap || this.bitmap) {
-        Scroll() {
-          Image(this.fullBitmap || this.bitmap).objectFit(ImageFit.Contain).width('100%').scale({ x: this.previewScale, y: this.previewScale })
-            .gesture(PinchGesture().onActionUpdate((event: GestureEvent) => {
-              this.previewScale = Math.max(1, Math.min(4, event.scale));
-            }))
-            .gesture(TapGesture({ count: 2 }).onAction(() => {
-              this.animate(() => { this.previewScale = 1; });
-            }))
-        }.scrollable(ScrollDirection.Free).layoutWeight(1).width('100%')
-      } else {
-        LoadingProgress().width(28).height(28)
-      }
-    }.width('100%').height('100%').padding({
-      left: 12 + this.safeLeft, right: 12 + this.safeRight,
-      top: 8 + this.safeTop, bottom: 10 + this.safeBottom
-    }).backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+  private compactHeight(): number {
+    return Math.max(52, Math.round(this.compactSize * 0.76));
   }
   build() {
-    Column({ space: 8 }) {
-      Text(this.attachment.name || '图片').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-      if (this.bitmap) {
-        Image(this.bitmap).width('100%').height(Math.min(320, Math.max(140, 320 * this.attachment.height /
-          Math.max(1, this.attachment.width)))).objectFit(ImageFit.Contain).borderRadius(12)
-          .backgroundColor(this.dark ? '#232324' : '#F5F6F7').onClick(() => { this.openPreview(); })
-      } else {
-        Button(this.loading ? '正在加载图片…' : this.error || '图片 · ' + this.attachment.width + ' × ' + this.attachment.height)
-          .height(48).width('100%').borderRadius(12).enabled(!this.loading)
-          .backgroundColor(this.dark ? '#232324' : '#F5F6F7').fontColor(this.dark ? '#CFD3D6' : '#61666B')
-          .onClick(() => { if (!this.loading) this.load(); })
+    Column({ space: this.compact ? 0 : 8 }) {
+      if (!this.compact) {
+        Text(this.attachment.name || '图片').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
-    }.width('100%').alignItems(HorizontalAlign.Start)
-      .bindContentCover(this.preview, this.fullImage, {
-        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
-        onDisappear: (): void => { this.preview = false; }
-      })
+      if (this.bitmap) {
+        Button({ type: ButtonType.Normal }) {
+          Image(this.bitmap).width('100%').height('100%')
+            .objectFit(this.compact ? ImageFit.Cover : ImageFit.Contain)
+            .borderRadius(12).hitTestBehavior(HitTestMode.None)
+        }.width(this.compact ? this.compactSize : '100%')
+          .height(this.compact ? this.compactHeight() : Math.min(320, Math.max(140, 320 * this.attachment.height /
+            Math.max(1, this.attachment.width))))
+          .padding(0).borderRadius(this.compact ? 10 : 12)
+          .backgroundColor(this.dark ? '#232324' : '#F5F6F7').clip(true)
+          .accessibilityText('预览图片 ' + (this.attachment.name || ''))
+          .onClick((): void => { this.openLightbox(); })
+      } else {
+        Button({ type: ButtonType.Normal }) {
+          if (this.loading) {
+            LoadingProgress().width(this.compact ? Math.max(16, Math.round(this.compactSize * 0.22)) : 24)
+              .height(this.compact ? Math.max(16, Math.round(this.compactSize * 0.22)) : 24)
+              .color(this.dark ? '#8AB4FF' : '#3964FE')
+          } else {
+            Text(this.compact ? '重试' : (this.error || '图片 · ' + this.attachment.width + ' × ' +
+              this.attachment.height))
+              .fontSize(this.compact ? 10 : 12)
+              .fontColor(this.dark ? '#CFD3D6' : '#61666B')
+          }
+        }.height(this.compact ? this.compactHeight() : 48).width(this.compact ? this.compactSize : '100%')
+          .borderRadius(this.compact ? 10 : 12).enabled(!this.loading)
+          .backgroundColor(this.dark ? '#232324' : '#F5F6F7')
+          .accessibilityText(this.loading ? '正在加载图片' : '重试加载图片')
+          .onClick((): void => { if (!this.loading) this.load(); })
+      }
+    }.width(this.compact ? this.compactSize : '100%').alignItems(HorizontalAlign.Start)
+      .margin(this.compact ? { right: 8, bottom: 8 } : 0)
   }
 }

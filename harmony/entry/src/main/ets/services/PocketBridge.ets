@@ -213,8 +213,8 @@ export class PocketBridge {
       if (!await notificationManager.isNotificationEnabled()) {
         throw new Error('Notification permission was not granted');
       }
-      await BackgroundMonitor.notify('test-notification', 'DSH Harmony', '通知已连接',
-        BackgroundMonitor.notificationId('test', 'notification'), 'standard');
+      await BackgroundMonitor.notify('test-notification', 'DSH Harmony 测试通知', '通知已连接',
+        BackgroundMonitor.notificationId('test', 'notification'), 'prominent');
       return '';
     }
     if (command === 'openNotificationSettings') {

@@ -5,6 +5,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { NativeFrame, NativeSession, NativeSessionList, NativeSessionModel, NativeWorkspaceSnapshot } from './NativeSessionModel';
 import { NativeHostSettings } from './NativeHostSettings';
 import { NativeModelDirectory } from './NativeModelDirectory';
+import { nativeFileWindowMetadata } from './NativeFileWindow';
 
 export class NativeHttpError extends Error {
   status: number;
@@ -50,6 +51,14 @@ class NativeFileBytesRequest {
     this.length = length;
   }
 }
+class NativeDirectorySearch {
+  path: string;
+  depth: number;
+  constructor(path: string, depth: number) {
+    this.path = path;
+    this.depth = depth;
+  }
+}
 
 export class NativeHarnessClient {
   readonly modelDirectory: NativeModelDirectory = new NativeModelDirectory((value: string): Promise<string> => this.operation(value), (): void => {
@@ -67,6 +76,8 @@ export class NativeHarnessClient {
   private workspaceRead: Promise<NativeWorkspaceSnapshot> | null = null;
   private pageReads: Map<string, Promise<NativeFrame>> = new Map<string, Promise<NativeFrame>>();
   private sessionCwds: Map<string, string> = new Map<string, string>();
+  private browsePaths: Map<string, string> = new Map<string, string>();
+  private fileLookups: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
@@ -173,6 +184,32 @@ export class NativeHarnessClient {
     return pending;
   }
   sessionCwd(id: string): string { return this.sessionCwds.get(id) || ''; }
+  workspaceRelativePath(sessionId: string, value: string, workspaceRoot: string = ''): string {
+    const normalize = (input: string): string => {
+      const clean = input.replace(/\\/g, '/').replace(/^\/+/, '').replace(/^\.\/+/, '')
+        .replace(/\/+/g, '/').replace(/\/+$/, '');
+      if (!clean || clean === '.') return '';
+      const parts: string[] = [];
+      clean.split('/').forEach((part: string): void => {
+        if (!part || part === '.') return;
+        if (part === '..') {
+          if (parts.length) parts.pop();
+          return;
+        }
+        parts.push(part);
+      });
+      return parts.join('/');
+    };
+    let path = normalize(value);
+    const cwd = normalize(workspaceRoot || this.sessionCwd(sessionId));
+    if (cwd && path === cwd) return '';
+    if (cwd && path.startsWith(cwd + '/')) path = path.slice(cwd.length + 1);
+    return normalize(path);
+  }
+  rememberBrowsePath(sessionId: string, path: string): void {
+    if (sessionId) this.browsePaths.set(sessionId, this.workspaceRelativePath(sessionId, path));
+  }
+  lastBrowsePath(sessionId: string): string { return this.browsePaths.get(sessionId) || ''; }
   async workspaces(): Promise<NativeWorkspaceSnapshot> {
     if (this.workspaceRead) return this.workspaceRead;
     const pending = this.request('/pocket/api/native/workspaces')
@@ -210,16 +247,65 @@ export class NativeHarnessClient {
     return JSON.parse(await this.request('/pocket/api/native/file/list', http.RequestMethod.POST,
       JSON.stringify({ sessionId: id, path: path }))) as NativeDirectoryListing;
   }
+  /**
+   * Resolve a model-emitted basename that was written to a nested directory.
+   * Exact paths never reach this method. Directory enumeration remains scoped
+   * to the Session and is bounded so a link tap cannot walk an entire project.
+   */
+  async findWorkspaceFile(id: string, name: string): Promise<string> {
+    if (!id || !name) return '';
+    const key = id + '\n' + name;
+    const pending = this.fileLookups.get(key);
+    if (pending) return pending;
+    const lookup = this.searchWorkspaceFile(id, name)
+      .finally((): void => { this.fileLookups.delete(key); });
+    this.fileLookups.set(key, lookup);
+    return lookup;
+  }
+  private async searchWorkspaceFile(id: string, name: string): Promise<string> {
+    const pending: NativeDirectorySearch[] = [new NativeDirectorySearch('', 0)];
+    const visited: Set<string> = new Set<string>();
+    while (pending.length > 0 && visited.size < 64) {
+      const directory = pending.shift() as NativeDirectorySearch;
+      if (visited.has(directory.path)) continue;
+      visited.add(directory.path);
+      let listing: NativeDirectoryListing;
+      try {
+        listing = await this.listFiles(id, directory.path || '.');
+      } catch (_) {
+        continue;
+      }
+      const match = listing.entries.find((entry: NativeDirectoryEntry): boolean =>
+        entry.type === 'file' && entry.name === name);
+      if (match) return this.childPath(directory.path, match.name);
+      if (directory.depth >= 4) continue;
+      listing.entries.forEach((entry: NativeDirectoryEntry): void => {
+        if (entry.type === 'directory') {
+          pending.push(new NativeDirectorySearch(this.childPath(directory.path, entry.name), directory.depth + 1));
+        }
+      });
+    }
+    return '';
+  }
+  private childPath(parent: string, name: string): string {
+    if (!parent) return name;
+    return parent.replace(/\/+$/, '') + '/' + name;
+  }
   async readFileBytes(id: string, path: string, baseFile: string = '',
-    offset: number = 0, length: number = 262144): Promise<NativeFileBytes> {
+    offset: number = 0, length: number = 262144,
+    expectedVersion: string = '', expectedBytes: number = -1): Promise<NativeFileBytes> {
     const task = http.createHttp();
     try {
       let header = '';
       task.on('headersReceive', (headers: Object): void => {
         const values = headers as Record<string, Object>;
         Object.keys(values).forEach((key: string): void => {
-          if (key.toLowerCase() === 'x-dsh-file-window' && typeof values[key] === 'string') {
-            header = values[key] as string;
+          if (key.toLowerCase() !== 'x-dsh-file-window') return;
+          const value = values[key];
+          if (typeof value === 'string') {
+            header = value;
+          } else if (Array.isArray(value) && typeof value[0] === 'string') {
+            header = value[0] as string;
           }
         });
       });
@@ -239,17 +325,30 @@ export class NativeHarnessClient {
       });
       await ended;
       if (status < 200 || status >= 300) throw new NativeHttpError(status);
-      const encoded = header.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = encoded + '='.repeat((4 - encoded.length % 4) % 4);
-      const decoded = new util.Base64Helper().decodeSync(padded);
-      const metadata = JSON.parse(util.TextDecoder.create('utf-8').decodeToString(decoded)) as NativeFileBytes;
-      if (metadata.protocol !== 1 || typeof metadata.version !== 'string' ||
-          metadata.offset !== offset || typeof metadata.eof !== 'boolean') {
-        throw new Error('Invalid file window');
-      }
       const bytes = new Uint8Array(total);
       let cursor: number = 0;
       chunks.forEach((part: Uint8Array): void => { bytes.set(part, cursor); cursor += part.byteLength; });
+      let metadata: NativeFileBytes;
+      if (header) {
+        const encoded = header.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = encoded + '='.repeat((4 - encoded.length % 4) % 4);
+        const decoded = new util.Base64Helper().decodeSync(padded);
+        metadata = JSON.parse(util.TextDecoder.create('utf-8').decodeToString(decoded)) as NativeFileBytes;
+        if (metadata.protocol !== 1 || typeof metadata.version !== 'string' ||
+            metadata.offset !== offset || typeof metadata.eof !== 'boolean') {
+          throw new Error('Invalid file window');
+        }
+      } else {
+        const fallback = nativeFileWindowMetadata(expectedVersion, expectedBytes, offset, total, length);
+        if (!fallback.version) throw new Error('Missing file window metadata');
+        metadata = new NativeFileBytes();
+        metadata.protocol = 1;
+        metadata.version = fallback.version;
+        metadata.bytes = fallback.bytes;
+        metadata.offset = fallback.offset;
+        metadata.eof = fallback.eof;
+        metadata.length = fallback.length;
+      }
       metadata.data = bytes;
       if (typeof metadata.length !== 'number' || metadata.length !== bytes.length) {
         throw new Error('Invalid file window length');
@@ -308,7 +407,8 @@ export class NativeHarnessClient {
   clearLocalState(): void {
     this.modelDirectory.clear();
     this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear();
-    this.pageReads.clear(); this.sessionCwds.clear(); this.selectedId = '';
+    this.pageReads.clear(); this.sessionCwds.clear(); this.browsePaths.clear();
+    this.fileLookups.clear(); this.selectedId = '';
   }
   async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');

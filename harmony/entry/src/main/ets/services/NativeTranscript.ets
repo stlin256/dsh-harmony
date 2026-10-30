@@ -1,6 +1,12 @@
 import { NativeMessage, NativeAssistantSegment } from './NativeSessionModel';
 import { NativeChatPreferences } from './NativeHostSettings';
 
+/** Flatten editor, terminal and reasoning text into one width-fillable preview. */
+export function nativeOneLinePreview(value: string, limit: number = 160): string {
+  const text = (value || '').replace(/\s+/g, ' ').trim();
+  return limit > 0 && text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+}
+
 // Mirrors Chat's event projection, call-id lifecycle, process boundaries and exact tool-name categories.
 export function nativeToolCategory(name: string): string {
   if (name === 'read') return 'read';
@@ -53,10 +59,16 @@ export function nativeToolDetail(tool: NativeMessage): string {
       const match = new RegExp('"' + field + '"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)').exec(tool.args);
       if (match) { try { text = JSON.parse('"' + match[1] + '"') as string; } catch (_) {} }
     }
-    text = text.replace(/\s+/g, ' ').trim();
-    if (text) return text.length > 160 ? text.slice(0, 159) + '…' : text;
+    text = nativeOneLinePreview(text);
+    if (text) return text;
   }
   return tool.phase === 'preparing' ? '' : tool.toolName;
+}
+export function nativeToolArgumentsVisible(tool: NativeMessage): boolean {
+  return nativeToolCategory(tool.toolName) !== 'readImage';
+}
+export function nativeToolOutputVisible(tool: NativeMessage): boolean {
+  return nativeToolCategory(tool.toolName) !== 'readImage';
 }
 function copy(value: NativeMessage): NativeMessage {
   const row = new NativeMessage();
@@ -70,43 +82,69 @@ function copy(value: NativeMessage): NativeMessage {
   row.metaRaw = value.metaRaw || ''; row.contentRaw = value.contentRaw || ''; row.errorRaw = value.errorRaw || '';
   return row;
 }
-function visit(calls: NativeMessage[], fn: (tool: NativeMessage) => void, seen: Set<string> = new Set<string>()): void {
-  const pending = calls.slice().reverse();
-  while (pending.length) {
-    const call = pending.pop() as NativeMessage;
-    if (seen.has(call.id)) continue;
-    seen.add(call.id); fn(call); pending.push(...call.children.slice().reverse());
+export function nativeProcessLead(group: NativeMessage): string {
+  const operation = group.children[0];
+  if (!operation) { group.toolName = 'thinking'; return group.closed ? '已完成分析' : '正在分析请求'; }
+  if (operation.role === 'tool') {
+    const category = nativeToolCategory(operation.toolName);
+    const active = operation.status === 'running' || operation.status === 'preparing';
+    group.toolName = category;
+    return nativeActivity(category, active);
   }
+  if (operation.role === 'reasoning') {
+    group.toolName = 'thinking';
+    return '思考过程';
+  }
+  group.toolName = 'thinking';
+  return nativeOneLinePreview(operation.label || operation.text ||
+    (group.closed ? '已完成分析' : '正在分析请求'));
+}
+export function nativeProcessPreview(group: NativeMessage): string {
+  const operation = group.children[0];
+  if (!operation) return '';
+  if (operation.role === 'tool') return nativeOneLinePreview(nativeToolDetail(operation));
+  if (operation.role === 'reasoning') {
+    return nativeOneLinePreview(nativeReasoningPreview(operation.reasoning || operation.text, !group.closed));
+  }
+  const lead = nativeProcessLead(group);
+  const body = nativeOneLinePreview(operation.label || operation.text || '');
+  return body && body !== lead ? body : '';
+}
+export function nativeOperationLead(operation: NativeMessage): string {
+  if (operation.role !== 'tool') {
+    return operation.role === 'reasoning' ? '思考过程' :
+      nativeOneLinePreview(operation.label || '工作过程');
+  }
+  return nativeActivity(nativeToolCategory(operation.toolName),
+    operation.status === 'running' || operation.status === 'preparing');
+}
+export function nativeOperationPreview(operation: NativeMessage): string {
+  if (operation.role === 'tool') return nativeOneLinePreview(nativeToolDetail(operation));
+  if (operation.role === 'reasoning') {
+    return nativeOneLinePreview(nativeReasoningPreview(operation.reasoning || operation.text, false));
+  }
+  return nativeOneLinePreview(operation.text || operation.label || '');
+}
+export function nativeProcessGroupPreview(group: NativeMessage): string {
+  const labels: string[] = [];
+  group.children.forEach((operation: NativeMessage): void => {
+    const label = nativeOperationLead(operation);
+    if (label && !labels.includes(label)) labels.push(label);
+  });
+  if (!labels.length) return '';
+  return nativeOneLinePreview(labels.slice(0, 3).join('、') +
+    (group.children.length > 3 ? '等' + group.children.length + '项' : ''));
 }
 export function nativeProcessTitle(group: NativeMessage, showDetail: boolean = true): string {
-  const active: NativeMessage[] = [];
-  const counts: Map<string, number> = new Map<string, number>();
-  visit(group.children, (tool: NativeMessage): void => {
-    if (tool.role !== 'tool') return;
-    const category = nativeToolCategory(tool.toolName);
-    counts.set(category, (counts.get(category) || 0) + 1);
-    if (tool.status === 'running' || tool.status === 'preparing') active.push(tool);
-  });
-  if (!group.closed) {
-    if (!active.length) { group.toolName = 'thinking'; return '正在分析请求'; }
-    const latest = active.sort((a: NativeMessage, b: NativeMessage) => a.time - b.time)[active.length - 1];
-    group.toolName = nativeToolCategory(latest.toolName);
-    const detail = nativeToolDetail(latest);
-    return nativeActivity(nativeToolCategory(latest.toolName), true) + (showDetail && detail ? ' · ' + detail : '');
-  }
-  const ranked: string[] = Array.from(counts.keys()).sort((a: string, b: string) => (counts.get(b) || 0) - (counts.get(a) || 0));
-  group.toolName = ranked[0] || 'thinking';
-  const labels = ranked.slice(0, 3).map((category: string) => nativeActivity(category, false));
-  if (!labels.length) return '已完成分析';
-  if (labels.length === 2) return labels[0] + '并' + (labels[0].startsWith('已') && labels[1].startsWith('已') ? labels[1].slice(1) : labels[1]);
-  return labels.join('，') + (ranked.length > 3 ? '等' : '');
+  const lead = nativeProcessLead(group);
+  const preview = showDetail ? nativeProcessPreview(group) : '';
+  return lead + (preview ? ' · ' + preview : '');
 }
 
 export function nativeTranscript(records: NativeMessage[], running: boolean, streamTools: NativeMessage[] = [], reasoning: string = '', text: string = ''): NativeMessage[] {
   const calls: Map<string, NativeMessage> = new Map<string, NativeMessage>();
   const ordered: NativeMessage[] = [];
   const ends: Map<string, NativeMessage> = new Map<string, NativeMessage>();
-  const starts: Map<string, number> = new Map<string, number>();
   const closedSteps: Set<string> = new Set<string>();
   let turnKey = 'legacy:0';
   for (const input of records) {
@@ -116,8 +154,7 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
     row.turnKey = turnKey;
     if (row.role === 'detail' || (row.role === 'user' && row.sourceKind && !['user', 'client', 'steer'].includes(row.sourceKind))) continue;
     if (row.role === 'turn') {
-      if (row.eventType === 'turn/start') starts.set(turnKey, row.time);
-      else ends.set(turnKey, row);
+      if (row.eventType !== 'turn/start') ends.set(turnKey, row);
       ordered.push(row); continue;
     }
     if (row.role === 'boundary') { closedSteps.add(turnKey + ':' + row.step); continue; }
@@ -135,7 +172,8 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
         tool.args = row.text; tool.status = row.phase === 'preparing' ? 'preparing' : 'running'; tool.phase = row.phase; tool.time = row.time;
       } else {
         tool.output = row.text; tool.failed = row.failed; tool.status = row.failed ? 'error' : 'success'; tool.phase = 'result'; tool.error = row.error;
-        tool.images = row.images; tool.metaRaw = row.metaRaw; tool.contentRaw = row.contentRaw; tool.errorRaw = row.errorRaw;
+        tool.blocks = row.blocks; tool.images = row.images; tool.metaRaw = row.metaRaw;
+        tool.contentRaw = row.contentRaw; tool.errorRaw = row.errorRaw;
       }
       continue;
     }
@@ -182,39 +220,51 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
     }
   }
   const rows: NativeMessage[] = [];
-  let group: NativeMessage | null = null;
-  const flush = (closed: boolean): void => {
-    if (!group) return;
-    group.closed = closed; group.label = nativeProcessTitle(group); rows.push(group); group = null;
+  let processGroup: NativeMessage | null = null;
+  const flushProcess = (closed: boolean): void => {
+    if (!processGroup) return;
+    processGroup.closed = closed;
+    processGroup.label = '工作过程';
+    processGroup.detail = nativeProcessGroupPreview(processGroup);
+    processGroup.children.forEach((operation: NativeMessage): void => {
+      operation.label = nativeOperationLead(operation);
+      operation.detail = nativeOperationPreview(operation);
+    });
+    rows.push(processGroup);
+    processGroup = null;
   };
   for (const row of ordered) {
-    if (row.role === 'tool' && row.parentCallId && (calls.has(row.parentCallId) || calls.has(row.rootCallId))) continue;
+    if (row.role === 'tool' && row.parentCallId &&
+      (calls.has(row.parentCallId) || calls.has(row.rootCallId))) continue;
     if (row.role === 'tool' || row.role === 'reasoning' || row.role === 'notice') {
-      if (group && group.turnKey !== row.turnKey) flush(true);
-      if (!group) { group = new NativeMessage(); group.id = 'process:' + row.id; group.role = 'process'; group.turnKey = row.turnKey; }
-      group.children.push(row); continue;
-    }
-    flush(true);
-    if (row.role !== 'turn' || row.eventType !== 'turn/start') rows.push(row);
-  }
-  flush(!running || ends.has(turnKey));
-  const foldable: Set<string> = new Set<string>();
-  const firstProcess: Set<string> = new Set<string>();
-  const inputAfterProcess: Set<string> = new Set<string>();
-  const finalAssistant: Map<string, NativeMessage> = new Map<string, NativeMessage>();
-  for (const row of rows) {
-    if (row.role === 'process') {
-      firstProcess.add(row.turnKey);
+      if (processGroup && processGroup.turnKey !== row.turnKey) {
+        flushProcess(ends.has(processGroup.turnKey));
+      }
+      if (!processGroup) {
+        processGroup = new NativeMessage();
+        processGroup.id = 'process:' + row.id;
+        processGroup.role = 'process';
+        processGroup.turnKey = row.turnKey;
+        processGroup.groupedProcess = true;
+      }
+      processGroup.children.push(row);
       continue;
     }
-    if (row.role === 'user' && firstProcess.has(row.turnKey)) inputAfterProcess.add(row.turnKey);
+    flushProcess(ends.has(row.turnKey));
+    if (row.role !== 'turn' || row.eventType !== 'turn/start') rows.push(row);
+  }
+  if (processGroup) {
+    const group: NativeMessage = processGroup;
+    flushProcess(ends.has(group.turnKey));
+  }
+  const finalAssistant: Map<string, NativeMessage> = new Map<string, NativeMessage>();
+  for (const row of rows) {
     if (row.role === 'assistant' &&
       (row.text.trim().length > 0 || row.blocks.some((block) => block.text.trim().length > 0))) {
       finalAssistant.set(row.turnKey, row);
     }
   }
   ends.forEach((end: NativeMessage, key: string): void => {
-    if (firstProcess.has(key) && !inputAfterProcess.has(key) && end.outcome === 'completed') foldable.add(key);
     if (end.outcome === 'completed') {
       const final = finalAssistant.get(key);
       end.footerOutcome = 'completed';
@@ -226,17 +276,7 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
     }
   });
   const result: NativeMessage[] = [];
-  const controls: Set<string> = new Set<string>();
   for (const row of rows) {
-    if (row.role === 'process' && foldable.has(row.turnKey)) {
-      row.foldable = true;
-      if (!controls.has(row.turnKey)) {
-        const control = new NativeMessage(); control.id = 'turn-control:' + row.turnKey; control.role = 'turn-control'; control.turnKey = row.turnKey;
-        const end = ends.get(row.turnKey); const start = starts.get(row.turnKey) || 0;
-        control.label = start > 0 && end && end.time >= start ? '工作过程 · ' + Math.round((end.time - start) / 1000) + ' 秒' : '工作过程';
-        result.push(control); controls.add(row.turnKey);
-      }
-    }
     if (row.role === 'turn') row.role = 'turn-footer';
     result.push(row);
   }
@@ -264,29 +304,28 @@ export function nativePresentTranscript(rows: NativeMessage[], preferences: Nati
   }
   const open = (key: string): boolean => preferences.mode === 'verbose' || (manual.has(key) ? manual.get(key) === true : deferred.has(key));
   return rows.filter((row: NativeMessage): boolean => {
-    if (row.role === 'turn-control') { row.foldable = preferences.mode !== 'verbose'; return true; }
+    if (row.role === 'turn-control') return false;
     if (row.role === 'process') {
       row.runningTurn = !ended.has(row.turnKey) || deferred.has(row.turnKey);
       row.flat = preferences.mode === 'verbose' || (preferences.mode === 'detailed' && row.runningTurn);
-      row.preview = preferences.mode !== 'compact';
-      row.label = nativeProcessTitle(row, preferences.mode !== 'compact');
-      return !row.foldable || open(row.turnKey);
+      row.preview = true;
+      row.label = '工作过程';
+      row.detail = nativeProcessGroupPreview(row);
+      row.children.forEach((operation: NativeMessage): void => {
+        operation.label = nativeOperationLead(operation);
+        operation.detail = nativeOperationPreview(operation);
+      });
+      return true;
     }
     if (row.role === 'assistant' && preferences.foldedReplies === 'final' &&
-      rows.some((item: NativeMessage) => item.turnKey === row.turnKey && item.role === 'turn-control') && row.seq !== lastReply.get(row.turnKey)) return open(row.turnKey);
+      rows.some((item: NativeMessage) => item.turnKey === row.turnKey && item.role === 'process') &&
+      row.seq !== lastReply.get(row.turnKey)) return open(row.turnKey);
     return true;
   });
 }
 
 export function nativeReasoningPreview(text: string, running: boolean): string {
-  const value = text.trimStart();
-  if (!running) return (value.split('\n')[0] || '').replace(/\*\*/g, '').trim();
-  // A complete first line is required; later deltas do not animate an unfinished preview.
-  const lines = value.split('\n');
-  if (lines.length < 2) return '';
-  let first = '';
-  for (let index = 0; index < lines.length - 1; index++) {
-    if (index === 0 || !lines[index - 1].trim()) { if (lines[index].trim()) first = lines[index]; }
-  }
-  return first.replace(/\*\*/g, '').trim();
+  // `running` remains part of the public contract for callers, but every
+  // preview now shares the same newline-flattening and width policy.
+  return nativeOneLinePreview(text.replace(/\*\*/g, ''), 160);
 }

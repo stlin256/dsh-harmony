@@ -1,49 +1,91 @@
-# DSH Harmony
+<p align="center">
+  <img src="docs/assets/dsh-harmony.svg" width="96" height="96" alt="DSH Harmony">
+</p>
 
-![DSH Harmony](harmony/AppScope/resources/base/media/app_icon.svg)
+<h1 align="center">DSH Harmony</h1>
 
-Native interaction work follows the [source-backed specification](docs/NATIVE-INTERACTION-SPEC.md). The [implementation ledger](docs/NATIVE-INTERACTION-STATUS.md) distinguishes implementation, automated checks, and device validation.
+<p align="center">
+  <strong>DeepSeek Harness, made for HarmonyOS</strong><br>
+  The original workflow with a native touch.
+</p>
 
-[简体中文](README.md) · English
+<p align="center">
+  <a href="https://github.com/deepseek-ai/deepseek-harness">
+    <img src="docs/assets/deepseek.svg" width="22" height="22" alt="DeepSeek">
+  </a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><strong>DeepSeek Harness</strong></a>
+  &nbsp;·&nbsp;
+  <img src="https://img.shields.io/badge/HarmonyOS-7-4D6BFE?style=flat-square" alt="HarmonyOS 7">
+  <img src="https://img.shields.io/badge/API-23%2B-2EA44F?style=flat-square" alt="HarmonyOS API 23+">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-6E7781?style=flat-square" alt="AGPL 3.0">
+</p>
 
-A HarmonyOS companion for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Compatibility mode preserves the original Web workspace. The experimental native interface provides sessions, messages, tools and live interactions, with system notifications and home-screen widgets.
+<p align="center">
+  <strong>English</strong> · <a href="README.md">简体中文</a>
+</p>
 
-## Login options
+---
 
-| Method | Server requirements | App input |
-| --- | --- | --- |
-| **Native login — default** | Harness and this repository's single DSH plugin | Web origin and Harness access key |
-| **Pocket ID / Passkey — optional** | The plugin and a Pocket ID OIDC entry | Workspace HTTPS origin and system Passkey |
+## Harness, designed for a phone
 
-Native login uses Harness's official launch-token exchange and signed cookies. No separate relay or companion daemon is required. HTTP and HTTPS are supported. Pocket ID requires HTTPS. Both methods support LAN and public deployments. Login method and interface mode are separate choices.
+DSH Harmony brings DeepSeek Harness workspaces, sessions, tool calls and live output to HarmonyOS. Keep every capability of the original web workspace, or switch to a native surface redesigned for touch, keyboards, safe areas and system Back.
 
-## Getting started
+The goal goes beyond making Harness fit. From cold start to long-history scrolling, from a tool call to a background notification, DSH Harmony is built around less waiting, clearer state and more natural interaction.
 
-1. Prepare a reachable Harness Web instance on Node.js 24.9+.
-2. Run `npm ci` in `gateway/`, then `node scripts/package-plugin.mjs` from the repository root.
-3. Install `.artifacts/dsh-harmony-plugin-0.3.1.tgz` using Harness's plugin manager and enable `@dsh-harmony/plugin`. See the [plugin guide](plugins/dsh-harmony/README.md) for manual installation.
-4. Install the app. Use the default native login with the Web origin and access key from the startup URL's `token` parameter. The key is not saved in app preferences; the signed cookie is used for later sessions.
-5. Optional Pocket ID setup instructions and tools are in the [Passkey deployment guide](docs/OIDC-DEPLOYMENT.md). Choose the lower Passkey option after configuring the server.
+## Fluid, focused and complete
 
-Configure binding, trusted hosts, port forwarding and TLS for your environment. See [deployment](docs/DEPLOYMENT.md).
+| **Fluid** | **Focused** |
+| --- | --- |
+| Cache-first rendering and incremental sync preload nearby history. Stable lists and virtualized rendering keep long conversations light, while transitions follow HarmonyOS motion. | DSH's compact hierarchy and visual language keep tools, reasoning, files and messages distinct without letting chrome compete with content. |
 
-## Features and status
+| **Native** | **Complete** |
+| --- | --- |
+| Press feedback, drawers, navigation, safe areas and system Back are implemented natively, with respect for reduced-motion preferences. | Sessions, models, tools, approvals, questions, images, Markdown, code, file browsing and tiered notifications cover real mobile workflows. |
 
-- Original Web workspace, plugins and advanced interactions in compatibility mode.
-- Experimental native sessions, text/images, tools, models, queues, approvals, questions and live output. See [interface modes](docs/UI-MODES.md) and [coverage](docs/NATIVE-COVERAGE.md).
-- Cold start restores the last session. A left overlay drawer owns workspace/session navigation while chat scroll, drafts and disclosure state stay mounted underneath.
-- Native chat uses DSH glyphs and a compact layout, with Markdown tables, language-aware code highlighting, one copy action for the final reply, hidden empty sessions and filtered injected messages.
-- Opened transcripts live in an encrypted app-private RDB. Cache-first paint is followed by incremental sync, early history prefetch and stable-key virtual rendering.
-- Settings use vertical categories and consistent child pages, with independent state and errors for theme/motion, DSH preferences, notifications, cards, account and About.
-- Entry and overview widgets prioritize waiting, running, failed and completed tasks and route directly to the most relevant session.
-- Task/approval collection and a durable SQLite notification queue. The personal Push Kit build supports notification levels; the AppGallery build omits Push Kit and can optionally monitor active tasks in the background.
+## Two experiences, one workspace
 
-SDK 26, API 23 compatibility. The `default` and `store` products build the personal Push Kit and AppGallery variants. See the [mobile build guide](harmony/README.md).
+**Compatibility mode** preserves the original Harness web workspace, plugins and advanced controls. Native settings integrate into its sidebar, so the familiar interface stays one product.
 
-## Development
+**Native mode** rebuilds high-frequency flows in ArkUI: sessions, live messages, tool steps, approvals, questions, model selection, file previews and an image lightbox all use DSH's visual language. It remembers the last session, workspace, scroll position and disclosure state.
 
-[Plugin](plugins/dsh-harmony/README.md) · [Deployment](docs/DEPLOYMENT.md) · [Pocket ID](docs/OIDC-DEPLOYMENT.md) · [HarmonyOS 7](docs/HARMONY7.md) · [Validation](docs/VALIDATION.md)
+Login stays flexible:
 
-Run `npm ci && npm test` in `gateway/`. The native project is in `harmony/`; optional authentication tooling is in `deploy/`. `gateway/` contains modules reused inside the plugin and does not need to run separately. Keep signing configuration, deployment addresses, service accounts and user data outside Git; run `node scripts/check-publication.mjs` before publishing.
+- **Harness native login** is the default and works with LAN or public deployments.
+- **Pocket ID / Passkey** is optional for HTTPS environments and uses the system Passkey flow.
 
-[AGPL v3](LICENSE); see [NOTICE](NOTICE). The optional OIDC gateway retains its [MIT license](deploy/pocket-id-gateway/LICENSE) and [upstream revision](deploy/pocket-id-gateway/UPSTREAM.md).
+## Get started
+
+1. Install the DSH plugin from this repository in DeepSeek Harness.
+2. Install DSH Harmony and enter the Harness service origin.
+3. Choose native login or Passkey, then use compatibility or native mode.
+
+Setup guides:
+
+[Plugin](plugins/dsh-harmony/README.md) · [Deployment](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [Interface modes](docs/UI-MODES.md)
+
+## Stay close to every task
+
+DSH Harmony can send tiered HarmonyOS notifications when a task completes, fails or waits for approval. Tapping a notification returns to its session, while home-screen service widgets summarize workspaces and task state.
+
+Personal builds can use Push Kit for immediate delivery. The planned AppGallery build will use a store-specific configuration and provide background status monitoring where system policy allows.
+
+## Coming to AppGallery
+
+<p align="left">
+  <a href="https://developer.huawei.com/consumer/en/appgallery/">
+    <img src="docs/assets/huawei-appgallery.svg" width="34" height="34" alt="Huawei AppGallery">
+  </a>
+  <strong>HarmonyOS AppGallery · In preparation</strong>
+</p>
+
+We are preparing an AppGallery release for every HarmonyOS user. It will keep the same fluid interface, complete session experience and DSH-native design while following AppGallery distribution and notification requirements.
+
+## Build it with us
+
+DSH Harmony is open source. Issues, ideas and pull requests are welcome; start with the [validation guide](docs/VALIDATION.md) and the implementation specs in the repository.
+
+[Report an issue](https://github.com/stlin256/dsh-harmony/issues) · [View source](https://github.com/stlin256/dsh-harmony) · [Author](https://github.com/stlin256)
+
+<p align="center">
+  <sub>Built for HarmonyOS with care. AGPL-3.0.</sub>
+</p>

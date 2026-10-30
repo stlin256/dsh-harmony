@@ -12,24 +12,31 @@ export struct NativeWorkspacePicker {
   @Prop snapshot: NativeWorkspaceSnapshot = new NativeWorkspaceSnapshot();
   @Prop sessions: NativeSession[] = [];
   @Prop selectedId: string = '';
+  @Prop page: string = 'root';
+  @Prop navigationDirection: number = 1;
   onClose: () => void = (): void => {};
+  onPageChange: (page: string) => void = (): void => {};
   onSelect: (id: string) => void = (): void => {};
   onChanged: (value: NativeWorkspaceSnapshot) => void = (): void => {};
   @StorageLink('nativeDark') private dark: boolean = false;
-  @State private creating: boolean = false;
-  @State private archived: boolean = false;
+  @StorageLink('nativeSafeTop') private safeTop: number = 0;
+  @StorageLink('nativeSafeBottom') private safeBottom: number = 0;
+  @StorageLink('nativeSafeLeft') private safeLeft: number = 0;
+  @StorageLink('nativeSafeRight') private safeRight: number = 0;
   @State private path: string = '';
   @State private editingId: string = '';
   @State private title: string = '';
   @State private busy: boolean = false;
   @State private error: string = '';
+  private creating(): boolean { return this.page === 'create'; }
+  private archived(): boolean { return this.page === 'archive'; }
   private async command(body: string): Promise<void> {
     if (this.busy) return;
     this.busy = true; this.error = '';
     try {
       const value = await this.client.operation(body);
       this.onChanged(await this.client.workspaces());
-      if (this.creating) { this.creating = false; this.onSelect((JSON.parse(value) as WorkspaceCreated).workspace.workspaceId); }
+      if (this.creating()) { this.onPageChange('root'); this.onSelect((JSON.parse(value) as WorkspaceCreated).workspace.workspaceId); }
       this.editingId = '';
     } catch (_) { this.error = '操作未确认，请刷新'; }
     finally { this.busy = false; }
@@ -55,19 +62,20 @@ export struct NativeWorkspacePicker {
         Button({ type: ButtonType.Normal }) {
           DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#F9FAFB' : '#17181B' })
         }.width(36).height(36).backgroundColor(Color.Transparent)
-          .onClick(() => { if (this.creating || this.archived) { this.creating = false; this.archived = false; } else this.onClose(); })
-        Text(this.creating ? '添加工作区' : this.archived ? '已归档会话' : '工作区').fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1)
+          .onClick(() => { if (this.page !== 'root') this.onPageChange('root'); else this.onClose(); })
+        Text(this.creating() ? '添加工作区' : this.archived() ? '已归档会话' : '工作区')
+          .fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1)
           .fontColor(this.dark ? '#F9FAFB' : '#17181B')
       }.width('100%')
       Scroll() {
         Column({ space: 5 }) {
-          if (this.creating) {
+          if (this.creating()) {
             TextInput({ text: this.path, placeholder: '服务器上的目录路径' }).height(42).fontSize(14)
               .onChange((value: string) => { this.path = value; })
             Button('添加', { type: ButtonType.Normal }).height(40).width('100%').borderRadius(10)
               .backgroundColor(this.dark ? '#679EFE' : '#3964FE').fontColor('#FFFFFF').enabled(!this.busy && this.path.trim().length > 0)
               .onClick(() => { this.command(JSON.stringify({ operation: 'workspaceCreate', path: this.path.trim() })); })
-          } else if (this.archived) {
+          } else if (this.archived()) {
             ForEach(this.snapshot.archivedSessionIds, (id: string) => {
               Row({ space: 8 }) {
                 Text(this.sessions.find((row: NativeSession) => row.id === id)?.title || '未命名会话')
@@ -97,16 +105,18 @@ export struct NativeWorkspacePicker {
             }, (workspace: NativeWorkspaceItem) => workspace.workspaceId)
             if (this.snapshot.available) {
               Divider().color(this.dark ? '#353538' : '#E8E9EC').margin({ top: 8, bottom: 8 })
-              this.row('添加工作区', '', false, () => { this.creating = true; })
-              this.row('已归档会话', '', false, () => { this.archived = true; })
+              this.row('添加工作区', '', false, () => { this.onPageChange('create'); })
+              this.row('已归档会话', '', false, () => { this.onPageChange('archive'); })
             }
           }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }.layoutWeight(1).width('100%').align(Alignment.Top)
       if (this.busy) { LoadingProgress().width(20).height(20) }
       if (this.error) { Text(this.error).fontSize(12).fontColor('#D55E5E') }
-    }.padding(12).width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+    }.padding({ left: 12 + this.safeLeft, right: 12 + this.safeRight,
+      top: this.safeTop + 8, bottom: this.safeBottom + 8 })
+      .width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
       .foregroundColor(this.dark ? '#F9FAFB' : '#17181B')
-      .transition(NativeMotion.navigationTransition())
+      .transition(NativeMotion.navigationTransition(this.navigationDirection))
   }
 }

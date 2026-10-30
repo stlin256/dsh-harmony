@@ -25,6 +25,9 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const error = new Error('Harness rejected this operation');
       if (['workspace/session-active', 'workspace/name-conflict', 'workspace/invalid-path', 'settings/conflict', 'settings/rejected',
         'directory-picker/unavailable', 'directory-picker/unreadable', 'directory-picker/exists', 'directory-picker/create-failed',
+        'workspace-file/not-found', 'workspace-file/not-directory', 'workspace-file/not-regular-file',
+        'workspace-file/not-text', 'workspace-file/outside-workspace', 'workspace-file/too-large',
+        'gateway/bad-request', 'gateway/lookup-not-found',
         'session/writer-held', 'session/migration-required'].includes(envelope.result?.error?.code)) error.code = envelope.result.error.code;
       throw error;
     }
@@ -204,7 +207,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     app.post('/pocket/api/native/file/list', guarded(async (req, res, signal) => {
       const { sessionId, path } = req.body || {};
       if (!sessionIdValid(sessionId) || typeof path !== 'string' || path.length > 4096) return res.sendStatus(400);
-      const value = await rpc('workspaceFiles/list', { workspaceFileScopeId: sessionId, path }, signal);
+      const value = await rpc('workspaceFiles/list', { workspaceFileScopeId: sessionId, path: path || '.' }, signal);
       if (typeof value?.path !== 'string' || !Array.isArray(value.entries) || typeof value.truncated !== 'boolean') {
         throw Error('Invalid workspace directory listing');
       }

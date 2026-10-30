@@ -1,49 +1,91 @@
-# DSH Harmony
+<p align="center">
+  <img src="docs/assets/dsh-harmony.svg" width="96" height="96" alt="DSH Harmony">
+</p>
 
-![DSH Harmony](harmony/AppScope/resources/base/media/app_icon.svg)
+<h1 align="center">DSH Harmony</h1>
 
-简体中文 · [English](README.en.md)
+<p align="center">
+  <strong>把 DeepSeek Harness 装进 HarmonyOS</strong><br>
+  原版能力，原生触感。为手机重新设计的 Harness 客户端。
+</p>
 
-面向 HarmonyOS 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 伴侣应用。兼容界面保留原版网页；实验性原生界面提供会话、消息、工具与实时交互，并接入系统通知和桌面服务卡片。
+<p align="center">
+  <a href="https://github.com/deepseek-ai/deepseek-harness">
+    <img src="docs/assets/deepseek.svg" width="22" height="22" alt="DeepSeek">
+  </a>
+  <a href="https://github.com/deepseek-ai/deepseek-harness"><strong>DeepSeek Harness</strong></a>
+  &nbsp;·&nbsp;
+  <img src="https://img.shields.io/badge/HarmonyOS-7-4D6BFE?style=flat-square" alt="HarmonyOS 7">
+  <img src="https://img.shields.io/badge/API-23%2B-2EA44F?style=flat-square" alt="HarmonyOS API 23+">
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-6E7781?style=flat-square" alt="AGPL 3.0">
+</p>
 
-## 两种登录方式
+<p align="center">
+  <a href="README.en.md">English</a> · <strong>简体中文</strong>
+</p>
 
-| 方式 | 服务端需要 | App 填写 |
-| --- | --- | --- |
-| **原生登录（默认）** | Harness + 本仓库一个 DSH 插件 | 服务地址、Harness 访问密钥 |
-| **Pocket ID · Passkey** | 上述插件 + 可选 Pocket ID OIDC 认证入口 | 工作空间 HTTPS 地址、系统 Passkey |
+---
 
-原生登录复用 Harness 正式的启动密钥交换和签名 Cookie，不要求额外 relay 或网关进程，兼容 HTTP/HTTPS。Pocket ID 登录复用已有 Passkey，要求 HTTPS。两者均支持局域网和公网部署。登录方式与界面模式分别选择。
+## 为手机而生的 Harness
 
-## 快速开始
+DSH Harmony 将 DeepSeek Harness 的工作空间、会话、工具调用和实时输出带到 HarmonyOS。你可以保留原版网页的全部能力，也可以切换到为触控、键盘、安全区与系统返回重新设计的原生界面。
 
-1. 准备可访问的 Harness Web，服务器 Node.js 24.9+。
-2. 在 `gateway/` 运行 `npm ci`，回到仓库根目录运行 `node scripts/package-plugin.mjs`。
-3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.3.1.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
-4. 安装 App，默认选原生登录，填写地址和 Harness 启动 URL 中 `token=` 后的访问密钥。密钥不保存在 App 配置中；后续使用有效 Cookie。
-5. 可选 Pocket ID 的[流程与工具](docs/OIDC-DEPLOYMENT.md)均在仓库中，配置后选择下面的 Passkey 登录。
+它关心的不只是“能不能用”。从冷启动到长对话滚动，从一次工具调用到一条后台通知，DSH Harmony 都围绕更少的等待、更清楚的状态和更自然的操作展开。
 
-网络监听、受信任主机、端口映射和 TLS 按环境配置，见[部署指南](docs/DEPLOYMENT.md)。
+## 顺滑、简洁，也足够完整
 
-## 功能与状态
+| **顺滑** | **简洁** |
+| --- | --- |
+| 缓存先行、增量同步，历史内容提前预取；稳定列表与虚拟化渲染让长对话保持轻盈，页面切换和展开状态遵循 HarmonyOS 的节奏。 | 沿用 DSH 的紧凑信息层级与视觉语义。工具、思考、文件和消息保持清楚，但不让界面替内容抢戏。 |
 
-原生交互以[实现规格](docs/NATIVE-INTERACTION-SPEC.md)为基线，附官方源码研究和逐项验收要求；[进度表](docs/NATIVE-INTERACTION-STATUS.md)区分已实现、测试通过和真机验证。
+| **原生触感** | **功能完整** |
+| --- | --- |
+| 触控反馈、抽屉、页面动线、安全区和系统 Back 都为 HarmonyOS 重新实现，并尊重系统的减少动态效果设置。 | 覆盖会话、模型、工具、审批、提问、图片、Markdown、代码、文件浏览与分级通知，让移动端真正完成工作流。 |
 
-- 兼容模式保留 Harness 原版工作空间、插件和高级控件。
-- 原生模式（实验）提供会话、文本/图片、工具、模型、队列、审批、提问和实时输出。覆盖范围见[界面模式](docs/UI-MODES.md)与[能力核对表](docs/NATIVE-COVERAGE.md)。
-- 冷启动恢复上次会话；工作区和会话从左侧覆盖抽屉进入，聊天滚动、草稿和展开状态在浏览期间保留。
-- 原生聊天沿用 DSH 图标与紧凑布局，支持 Markdown 表格、带语言高亮的代码块、最终回复单一复制入口，并隐藏空会话及系统注入消息。
-- 会话正文进入应用私有加密 RDB；缓存先绘制、后台增量同步，接近历史顶部时提前分页预取，列表使用稳定键和虚拟化渲染。
-- 设置采用垂直分类和统一二级页，主题/动效、DSH 设置、通知、桌面卡片、服务账户和关于各有独立状态与错误反馈。
-- 2×2 工作空间入口和 2×4 任务概览卡片，按待确认、运行中、失败、完成排序，可直达最相关会话。
-- 插件收集任务/审批事件，SQLite 保存通知队列。个人 Push Kit 构建支持分级推送；应用商店构建不含 Push Kit，可选在有任务运行时监测状态。
+## 两种体验，一套工作空间
 
-目标 SDK 26，最低 API 23。`default` 与 `store` 两个产品分别构建自用 Push Kit 版和应用商店版；构建方式见[移动端说明](harmony/README.md)。
+**兼容模式**完整呈现 Harness 原版网页、插件和高级控件。原生设置会无缝注入侧边栏，熟悉的界面不必被拆成两套产品。
 
-## 开发与文档
+**原生模式**用 ArkUI 重写高频工作流：会话列表、实时消息、工具步骤、审批、提问、模型选择、文件预览和图片灯箱都以 DSH 的视觉语言呈现。它会记住上次会话、工作区、滚动位置和展开状态。
 
-[插件](plugins/dsh-harmony/README.md) · [部署](docs/DEPLOYMENT.md) · [Pocket ID](docs/OIDC-DEPLOYMENT.md) · [HarmonyOS 7](docs/HARMONY7.md) · [验证](docs/VALIDATION.md)
+登录同样保持灵活：
 
-运行检查：`cd gateway && npm ci && npm test`。原生工程在 `harmony/`，可选认证工具在 `deploy/`。`gateway/` 是由插件复用的服务模块，不要求独立运行。签名、实际地址、服务账号和用户数据保留在本机；提交前运行 `node scripts/check-publication.mjs`。
+- **Harness 原生登录**是默认选项，可连接局域网或公网地址。
+- **Pocket ID · Passkey**是可选选项，在 HTTPS 环境中使用系统 Passkey。
 
-[AGPL v3](LICENSE)，来源见 [NOTICE](NOTICE)。可选 OIDC 网关保留 [MIT 许可证](deploy/pocket-id-gateway/LICENSE)和[上游版本](deploy/pocket-id-gateway/UPSTREAM.md)。
+## 开始使用
+
+1. 在 DeepSeek Harness 中安装本仓库发布的 DSH 插件。
+2. 安装 DSH Harmony，填写 Harness 服务地址。
+3. 选择原生登录或 Passkey，然后选用兼容模式或原生模式。
+
+插件安装、服务部署与 Passkey 配置都在仓库文档中：
+
+[插件指南](plugins/dsh-harmony/README.md) · [部署](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [界面模式](docs/UI-MODES.md)
+
+## 连接状态，随时知道
+
+任务完成、失败或等待确认时，DSH Harmony 可以按级别发送 HarmonyOS 通知。点击通知会回到对应会话；桌面服务卡片则以紧凑方式呈现工作区与任务状态。
+
+个人构建支持使用 Push Kit 的即时推送。准备中的 AppGallery 版本会按应用商店能力单独构建，并在受系统约束的场景下提供后台状态监测。
+
+## 即将登陆 AppGallery
+
+<p align="left">
+  <a href="https://developer.huawei.com/consumer/cn/appgallery/">
+    <img src="docs/assets/huawei-appgallery.svg" width="34" height="34" alt="Huawei AppGallery">
+  </a>
+  <strong>HarmonyOS AppGallery · 准备中</strong>
+</p>
+
+我们正在准备面向所有 HarmonyOS 用户的商店版本。它会保留同样流畅的界面、完整的会话体验与 DSH 原生设计，并按照 AppGallery 的分发与通知规范持续更新。
+
+## 参与共建
+
+DSH Harmony 是开源项目。欢迎提交问题、改进建议和代码；开始开发前，请阅读 [验证说明](docs/VALIDATION.md) 与仓库中的实现规格。
+
+[报告问题](https://github.com/stlin256/dsh-harmony/issues) · [查看源码](https://github.com/stlin256/dsh-harmony) · [作者主页](https://github.com/stlin256)
+
+<p align="center">
+  <sub>Built for HarmonyOS with care. AGPL-3.0.</sub>
+</p>

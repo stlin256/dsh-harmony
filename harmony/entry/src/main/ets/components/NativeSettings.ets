@@ -224,7 +224,6 @@ export struct NativeSettings {
     this.updateState((): void => { this.themeMode = value; });
     try {
       await this.invoke('themeMode', value);
-      this.status = '已保存';
     } catch (_) {
       this.updateState((): void => { this.themeMode = previous; });
       this.error = '外观保存失败';
@@ -238,11 +237,19 @@ export struct NativeSettings {
     const previous = this.localValue(command);
     this.updateState((): void => { this.setLocalValue(command, value); });
     try {
-      await this.invoke(command, value ? 'true' : 'false');
-      this.status = '已保存';
+      const response = await this.invoke(command, value ? 'true' : 'false');
+      if (this.mounted && (command === 'reduceMotion' || command === 'reduceTransparency')) {
+        const state = JSON.parse(response) as Record<string, Object>;
+        const persisted = state[command];
+        if (typeof persisted === 'boolean') {
+          this.updateState((): void => { this.setLocalValue(command, persisted); });
+        }
+      }
     } catch (_) {
-      this.updateState((): void => { this.setLocalValue(command, previous); });
-      this.error = command === 'backgroundMonitor' ? '后台投递启动失败' : '保存失败';
+      if (this.mounted) {
+        this.updateState((): void => { this.setLocalValue(command, previous); });
+        this.error = command === 'backgroundMonitor' ? '后台投递启动失败' : '保存失败';
+      }
     } finally {
       this.end(command);
     }
@@ -301,13 +308,12 @@ export struct NativeSettings {
       });
       this.notificationWrites = write;
       await write;
-      this.status = '通知偏好已保存';
     } catch (_) {
       if (!localSaved) {
         this.updateState((): void => { this.setNotificationValue(category, previous); });
         this.error = '通知偏好保存失败';
       } else {
-        this.status = '已保存本机，服务端同步待重试';
+        this.error = '本机已保存，但服务端同步失败';
       }
     } finally {
       this.end(key);
@@ -334,10 +340,7 @@ export struct NativeSettings {
 
   private async action(command: string): Promise<void> {
     if (command === 'logout') {
-      if (!this.begin('logout')) return;
-      try { await this.onLogout(); }
-      catch (_) { this.error = '退出失败，请重试'; }
-      finally { this.end('logout'); }
+      this.confirmLogout();
       return;
     }
     if (command === 'connection') { this.openPage('connection'); return; }
@@ -365,17 +368,14 @@ export struct NativeSettings {
         await this.syncDevice(this.notificationPreferences());
         await this.invoke('pushEnabled', 'true');
         this.pushEnabled = true;
-        this.status = '系统推送已开启';
       } else if (command === 'disablePush') {
         await this.client.request('/pocket/api/device', http.RequestMethod.DELETE, JSON.stringify({ allForSession: true }));
         await this.invoke('disablePush', '');
         await this.invoke('pushEnabled', 'false');
         this.pushEnabled = false;
-        this.status = '系统推送已关闭';
       } else if (command === 'sync') {
         const value = await this.client.request('/pocket/api/overview');
         await this.invoke('widgetSnapshot', value);
-        this.status = '桌面卡片已同步';
       } else if (command === 'testNotification') {
         await this.invoke('testNotification', '');
         await this.refreshNotificationState();
@@ -391,16 +391,40 @@ export struct NativeSettings {
       this.end(command);
     }
   }
+  private confirmLogout(): void {
+    this.getUIContext().showAlertDialog({
+      title: '退出登录',
+      message: '退出后将清除本机登录状态和会话缓存，并保留当前服务地址。',
+      autoCancel: true,
+      primaryButton: {
+        value: '取消',
+        action: (): void => {}
+      },
+      secondaryButton: {
+        value: '退出',
+        fontColor: '#D44A4A',
+        action: (): void => {
+          this.performLogout().catch((): void => {});
+        }
+      }
+    });
+  }
+  private async performLogout(): Promise<void> {
+    if (!this.begin('logout')) return;
+    try {
+      await this.onLogout();
+    } catch (_) {
+      this.error = '退出失败，请重试';
+    } finally {
+      this.end('logout');
+    }
+  }
 
   @Builder
   private rootHeader() {
-    Row({ space: 8 }) {
+    Row() {
       Text('设置').fontSize(24).fontWeight(FontWeight.Bold).fontColor(this.dark ? '#F9FAFB' : '#111216')
         .layoutWeight(1)
-      Button({ type: ButtonType.Normal }) {
-        DSHIcon({ glyph: 'close-outline', glyphSize: 17, color: this.dark ? '#F9FAFB' : '#17181B' })
-      }.width(40).height(40).borderRadius(12).backgroundColor(Color.Transparent)
-        .accessibilityText('关闭设置').onClick(this.onReturn)
     }.width('100%').height(58).padding({ left: 4, right: 4 })
   }
 
@@ -589,7 +613,7 @@ export struct NativeSettings {
   }
 
   @Builder
-  private toggleRow(key: string, title: string, detail: string, enabled: boolean,
+  private toggleRow(key: string, title: string, detail: string,
     unavailable: string = '', showToggle: boolean = true) {
     Row({ space: 12 }) {
       Column({ space: 3 }) {
@@ -601,13 +625,18 @@ export struct NativeSettings {
           .fontColor(this.dark ? '#C9A66C' : '#8B641F')
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       if (this.pendingFor(key)) LoadingProgress().width(18).height(18)
-      else if (showToggle) {
-        Toggle({ type: ToggleType.Switch, isOn: enabled })
-          .enabled(!this.initializing && unavailable.length === 0)
+      if (showToggle) {
+        Toggle({ type: ToggleType.Switch, isOn: this.localValue(key) })
+          .enabled(!this.initializing && unavailable.length === 0 && !this.pendingFor(key))
           .selectedColor(this.dark ? '#83AFFF' : '#3B66D4')
-          .onChange((value: boolean) => { this.setting(key, value); })
+          .hitTestBehavior(HitTestMode.None)
+          .animation(NativeMotion.implicit('micro'))
       }
     }.width('100%').constraintSize({ minHeight: 54 }).padding({ left: 14, right: 12, top: 7, bottom: 7 })
+      .enabled(!this.initializing && unavailable.length === 0 && !this.pendingFor(key))
+      .onClick(() => {
+        if (showToggle) this.setting(key, !this.localValue(key));
+      })
   }
 
   @Builder
@@ -640,9 +669,9 @@ export struct NativeSettings {
             this.themeChoice('system', 'followsystem-outline', '跟随系统')
           }.width('100%').padding(6).borderRadius(16).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           Column() {
-            this.toggleRow('reduceMotion', '减少动态效果', '关闭页面与抽屉动画', this.reduceMotion)
+            this.toggleRow('reduceMotion', '减少动态效果', '关闭页面与抽屉动画')
             Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')
-            this.toggleRow('reduceTransparency', '减少透明效果', '使用不透明表面', this.reduceTransparency)
+            this.toggleRow('reduceTransparency', '减少透明效果', '使用不透明表面')
           }.width('100%').borderRadius(16).clip(true).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           if (this.error) Text(this.error).fontSize(12)
             .fontColor(this.dark ? '#FF9999' : '#B83A3A').padding(12)
@@ -729,7 +758,7 @@ export struct NativeSettings {
               this.actionRow('发送测试通知', '验证通知权限和跳转', 'testNotification')
             } else {
               this.toggleRow('backgroundMonitor', '后台任务监控',
-                '商店版本无 Push Kit；任务运行时保持后台连接', this.backgroundMonitor)
+                '商店版本无 Push Kit；任务运行时保持后台连接')
               Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')
               this.actionRow('发送测试通知', '验证本地通知权限', 'testNotification')
             }
@@ -762,7 +791,7 @@ export struct NativeSettings {
       Scroll() {
         Column({ space: 10 }) {
           Column() {
-            this.toggleRow('widgetDetails', '显示任务名称', '关闭后仍显示匿名数量和状态', this.widgetDetails)
+            this.toggleRow('widgetDetails', '显示任务名称', '关闭后仍显示匿名数量和状态')
             Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')
             this.actionRow('立即同步', '刷新运行、待确认、完成与失败数量', 'sync')
           }.width('100%').borderRadius(16).clip(true).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
@@ -788,7 +817,8 @@ export struct NativeSettings {
             Text('当前服务').fontSize(12).fontColor(this.dark ? '#85888D' : '#777B81')
             Text(this.serverOrigin).fontSize(14).width('100%').wordBreak(WordBreak.BREAK_ALL)
               .fontColor(this.dark ? '#F0F1F2' : '#24262A').copyOption(CopyOptions.InApp)
-          }.padding(14).width('100%').borderRadius(16).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
+          }.padding(14).width('100%').alignItems(HorizontalAlign.Start).borderRadius(16)
+            .backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           Column() {
             this.actionRow('界面模式', '原生或兼容网页', 'modes')
             Divider().strokeWidth(0.5).margin({ left: 14 }).color(this.dark ? '#323236' : '#E9EAEC')

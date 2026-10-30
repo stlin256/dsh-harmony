@@ -7,10 +7,13 @@ export class NativeNavigationState {
   create: boolean = false;
   tools: boolean = false;
   menu: boolean = false;
+  imagePreview: boolean = false;
+  filePreview: boolean = false;
 }
 export function nativeCanGoBack(state: NativeNavigationState): boolean {
   return state.drawerOpen === true || state.picker === true || state.create === true ||
-    state.tools === true || state.menu === true;
+    state.tools === true || state.menu === true || state.imagePreview === true ||
+    state.filePreview === true;
 }
 export class NativeMenuItem {
   id: string = '';
@@ -33,13 +36,14 @@ export function nativeSessionMenu(pinned: boolean, archived: boolean = false): N
 /** The more menu is complete before asynchronous capability discovery finishes. */
 export function nativeUtilityMenu(known: boolean, copyMarkdown: boolean, downloadLog: boolean,
   copying: boolean, downloading: boolean): NativeMenuItem[] {
-  const rows: NativeMenuItem[] = [];
+  const rows: NativeMenuItem[] = [
+    { id: 'files', title: '文件浏览', icon: 'browse-outline',
+      danger: false, disabled: false, separator: false }
+  ];
   if (!known || copyMarkdown) rows.push({ id: 'copy', title: '复制 Markdown', icon: 'copy-outline',
     danger: false, disabled: copying, separator: false });
   if (!known || downloadLog) rows.push({ id: 'download', title: '下载日志', icon: 'download-outline',
     danger: false, disabled: downloading, separator: false });
-  if (!rows.length) rows.push({ id: 'none', title: '此服务未提供导出', icon: 'download-outline',
-    danger: false, disabled: true, separator: false });
   return rows;
 }
 

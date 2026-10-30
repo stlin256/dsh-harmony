@@ -4,3 +4,4 @@ DeepSeek Harness API research baseline (MIT): f3803c96974ad4a94195fb97e5c637e9c2
 DSHIcon glyph geometry is adapted from that revision's ui-primitives artwork and ui-conversation InputBar. The upstream MIT notice is retained in licenses/deepseek-harness-MIT.txt.
 See LICENSE for AGPL-3.0 terms.
 Optional OIDC gateway in deploy/pocket-id-gateway is adapted from stlin256/harness-passkey-gateway, MIT, f442a33294c4046929d48b4b9a95f4ad482a6d2b. Its original license is retained there.
+README DeepSeek artwork comes from Simple Icons (CC0). README Huawei AppGallery artwork is the public-domain Huawei AppGallery.svg from Wikimedia Commons.

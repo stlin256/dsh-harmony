@@ -4,16 +4,8 @@ function cleanPath(value: string): string {
   return value.replace(/\\/g, '/');
 }
 
-export function nativeLinkKind(href: string): string {
-  const value = href.trim();
-  if (/^https?:/i.test(value)) return 'http';
-  if (/^(?:mailto|tel):/i.test(value)) return 'external';
-  if (value.startsWith('dsh-resource://file/session/')) return 'workspace';
-  return 'file';
-}
-
-export function nativeFileTarget(href: string, cwd: string = ''): string {
-  let target = href.trim();
+function linkTarget(value: string): string {
+  let target = value.trim();
   if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1);
   if (target.startsWith('dsh-resource://file/session/')) {
     const suffix = target.slice('dsh-resource://file/session/'.length);
@@ -26,10 +18,22 @@ export function nativeFileTarget(href: string, cwd: string = ''): string {
     if (/^\/[A-Za-z]:\//.test(target)) target = target.slice(1);
   }
   const hash = target.lastIndexOf('#L');
-  if (hash >= 0 && /^#L\d+(?:-L?\d+)?$/i.test(target.slice(hash))) {
-    target = target.slice(0, hash);
-  }
-  target = cleanPath(decodeURIComponent(target));
+  if (hash >= 0 && /^#L\d+(?:-L?\d+)?$/i.test(target.slice(hash))) target = target.slice(0, hash);
+  const line = target.match(/^(.*\.[A-Za-z0-9]{1,16}):\d+(?::\d+)?$/);
+  if (line) target = line[1];
+  try { return cleanPath(decodeURIComponent(target)); } catch (_) { return cleanPath(target); }
+}
+
+export function nativeLinkKind(href: string): string {
+  const value = href.trim();
+  if (/^https?:/i.test(value)) return 'http';
+  if (/^(?:mailto|tel):/i.test(value)) return 'external';
+  if (value.startsWith('dsh-resource://file/session/')) return 'workspace';
+  return 'file';
+}
+
+export function nativeFileTarget(href: string, cwd: string = ''): string {
+  const target = linkTarget(href);
   if (!cwd || target.startsWith('/') || target.startsWith('//') ||
       /^[A-Za-z]:\//.test(target)) return target;
 
@@ -46,4 +50,12 @@ export function nativeFileTarget(href: string, cwd: string = ''): string {
     parts.push(part);
   });
   return (absolute ? '/' : '') + parts.join('/');
+}
+
+/** A basename-only file reference can be resolved by a bounded workspace lookup. */
+export function nativeBareFileName(href: string): string {
+  const target = linkTarget(href);
+  if (!target || target.includes('/') || target === '.' || target === '..') return '';
+  const name = target.slice(target.lastIndexOf('/') + 1);
+  return name && !/\s/.test(name) && (name.startsWith('.') || name.includes('.')) ? name : '';
 }

@@ -60,6 +60,22 @@ export class NativeMotion {
       .animation(NativeMotion.implicit('micro'));
   }
 
+  /**
+   * Workspace children unfold down from the header. Their exit retracts toward
+   * the same anchor before the list closes the space.
+   */
+  static workspaceChildrenTransition(): TransitionEffect {
+    if (!NativeMotion.enabled()) return TransitionEffect.IDENTITY;
+    const motion = NativeMotion.implicit('micro');
+    const enter = TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: -5 }))
+      .animation(motion);
+    const leave = TransitionEffect.OPACITY
+      .combine(TransitionEffect.translate({ y: -3 }))
+      .animation(motion);
+    return TransitionEffect.asymmetric(enter, leave);
+  }
+
   static overlayTransition(): TransitionEffect {
     if (!NativeMotion.enabled()) return TransitionEffect.IDENTITY;
     return TransitionEffect.OPACITY.combine(

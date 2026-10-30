@@ -15,4 +15,5 @@ gateway/data/
 *.log
 .DS_Store
 .artifacts/
+dist/
 __pycache__/

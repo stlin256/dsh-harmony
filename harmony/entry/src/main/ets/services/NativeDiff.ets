@@ -3,17 +3,28 @@ import { NativeMessage } from './NativeSessionModel';
 export class NativeDiffRow {
   kind: string = 'context';
   text: string = '';
+  oldLine: number = 0;
+  newLine: number = 0;
 }
 
 export class NativeDiffDocument {
   matched: boolean = false;
   path: string = '';
+  added: number = 0;
+  removed: number = 0;
   rows: NativeDiffRow[] = [];
 }
 
-function add(rows: NativeDiffRow[], kind: string, text: string, path: string): void {
+function countRows(document: NativeDiffDocument): void {
+  document.added = document.rows.filter((row: NativeDiffRow): boolean => row.kind === 'add').length;
+  document.removed = document.rows.filter((row: NativeDiffRow): boolean => row.kind === 'del').length;
+}
+
+function add(rows: NativeDiffRow[], kind: string, text: string, path: string,
+  oldLine: number = 0, newLine: number = 0): void {
   const row = new NativeDiffRow();
   row.kind = kind; row.text = kind === 'path' ? path : text;
+  row.oldLine = oldLine; row.newLine = newLine;
   rows.push(row);
 }
 
@@ -24,6 +35,8 @@ function parsePatch(patch: string, fallbackPath: string): NativeDiffDocument {
   let seen = false;
   let inHunk = false;
   let seenHunk = false;
+  let oldNumber = 1;
+  let newNumber = 1;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (line.startsWith('*** Update File:') || line.startsWith('*** Add File:') ||
@@ -34,14 +47,22 @@ function parsePatch(patch: string, fallbackPath: string): NativeDiffDocument {
         add(out.rows, 'path', '', path);
         out.path = path;
       }
-      seen = true; inHunk = false; seenHunk = false; continue;
+      seen = true; inHunk = false; seenHunk = false;
+      oldNumber = 1; newNumber = 1; continue;
     }
     if (line.startsWith('*** Begin Patch') || line.startsWith('*** End Patch') ||
         line.startsWith('diff --git ') || line.startsWith('index ') ||
         line.startsWith('@@')) {
       if (line.startsWith('@@') && seenHunk) add(out.rows, 'gap', '⋯', path);
       inHunk = line.startsWith('@@');
-      if (inHunk) seenHunk = true;
+      if (inHunk) {
+        const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
+        if (hunk) {
+          oldNumber = Number(hunk[1]);
+          newNumber = Number(hunk[2]);
+        }
+        seenHunk = true;
+      }
       continue;
     }
     if (line.startsWith('--- ') || line.startsWith('+++ ')) {
@@ -56,13 +77,26 @@ function parsePatch(patch: string, fallbackPath: string): NativeDiffDocument {
       }
       continue;
     }
-    if (line.startsWith('+')) { add(out.rows, 'add', line.slice(1), path); seen = true; continue; }
-    if (line.startsWith('-')) { add(out.rows, 'del', line.slice(1), path); seen = true; continue; }
-    if (line.startsWith(' ')) { add(out.rows, 'context', line.slice(1), path); seen = true; continue; }
-    if (inHunk && line) { add(out.rows, 'context', line, path); seen = true; }
+    if (line.startsWith('+')) {
+      add(out.rows, 'add', line.slice(1), path, 0, newNumber++);
+      seen = true; continue;
+    }
+    if (line.startsWith('-')) {
+      add(out.rows, 'del', line.slice(1), path, oldNumber++, 0);
+      seen = true; continue;
+    }
+    if (line.startsWith(' ')) {
+      add(out.rows, 'context', line.slice(1), path, oldNumber++, newNumber++);
+      seen = true; continue;
+    }
+    if (inHunk && line) {
+      add(out.rows, 'context', line, path, oldNumber++, newNumber++);
+      seen = true;
+    }
   }
   if (seen && !out.path) { out.path = fallbackPath || '变更'; add(out.rows, 'path', '', out.path); }
   out.matched = seen && out.rows.some((row: NativeDiffRow) => row.kind === 'add' || row.kind === 'del');
+  countRows(out);
   return out;
 }
 
@@ -79,8 +113,9 @@ function lineDocument(oldText: string, newText: string, path: string): NativeDif
   const before = splitLines(oldText);
   const after = splitLines(newText);
   if (before.length > 300 || after.length > 300) {
-    before.forEach((line: string) => add(out.rows, 'del', line, out.path));
-    after.forEach((line: string) => add(out.rows, 'add', line, out.path));
+    before.forEach((line: string, index: number) => add(out.rows, 'del', line, out.path, index + 1, 0));
+    after.forEach((line: string, index: number) => add(out.rows, 'add', line, out.path, 0, index + 1));
+    countRows(out);
     return out;
   }
   const width = after.length + 1;
@@ -93,16 +128,18 @@ function lineDocument(oldText: string, newText: string, path: string): NativeDif
     }
   }
   let left = 0; let right = 0;
+  let oldNumber = 1; let newNumber = 1;
   while (left < before.length || right < after.length) {
     if (left < before.length && right < after.length && before[left] === after[right]) {
-      add(out.rows, 'context', before[left], out.path); left++; right++;
+      add(out.rows, 'context', before[left], out.path, oldNumber++, newNumber++); left++; right++;
     } else if (right < after.length &&
       (left >= before.length || table[left * width + right + 1] >= table[(left + 1) * width + right])) {
-      add(out.rows, 'add', after[right], out.path); right++;
+      add(out.rows, 'add', after[right], out.path, 0, newNumber++); right++;
     } else {
-      add(out.rows, 'del', before[left], out.path); left++;
+      add(out.rows, 'del', before[left], out.path, oldNumber++, 0); left++;
     }
   }
+  countRows(out);
   return out;
 }
 function appendDocument(target: NativeDiffDocument, value: NativeDiffDocument): void {
@@ -110,6 +147,8 @@ function appendDocument(target: NativeDiffDocument, value: NativeDiffDocument): 
     const copy = new NativeDiffRow();
     copy.kind = row.kind;
     copy.text = row.text;
+    copy.oldLine = row.oldLine;
+    copy.newLine = row.newLine;
     target.rows.push(copy);
   });
   if (!target.path && value.path) target.path = value.path;
@@ -131,6 +170,7 @@ function explicitDiffs(value: Object, fallbackPath: string): NativeDiffDocument 
   });
   combined.matched = combined.rows.some((row: NativeDiffRow): boolean =>
     row.kind === 'add' || row.kind === 'del');
+  countRows(combined);
   return combined;
 }
 

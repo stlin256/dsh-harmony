@@ -251,6 +251,21 @@ test('native session reducer restores streams, deduplicates replay and replaces 
   assert.equal(model.messages.length,2);
 });
 
+test('file windows derive exact EOF when HarmonyOS omits the custom header', () => {
+  const { nativeFileWindowMetadata } = load('NativeFileWindow', {});
+  const small = nativeFileWindowMetadata('version-a', 280 * 1024, 0, 280 * 1024, 2 * 1024 * 1024);
+  assert.equal(small.eof, true);
+  const exact = nativeFileWindowMetadata('version-a', 2 * 1024 * 1024, 0, 2 * 1024 * 1024, 2 * 1024 * 1024);
+  assert.equal(exact.eof, true, 'an exact final window must not require a trailing empty request');
+  const first = nativeFileWindowMetadata('version-a', 3 * 1024 * 1024, 0, 2 * 1024 * 1024, 2 * 1024 * 1024);
+  assert.equal(first.eof, false);
+  const last = nativeFileWindowMetadata('version-a', 3 * 1024 * 1024, 2 * 1024 * 1024,
+    1024 * 1024, 2 * 1024 * 1024);
+  assert.equal(last.eof, true);
+  const empty = nativeFileWindowMetadata('version-a', 0, 0, 0, 2 * 1024 * 1024);
+  assert.equal(empty.eof, true);
+});
+
 test('native transcript hides protocol bookkeeping across snapshots, live events and history', () => {
   const { NativeSessionModel } = load('NativeSessionModel', {});
   const model = new NativeSessionModel();
@@ -361,7 +376,7 @@ test('native inline markdown preserves literal code and malformed text while sty
 });
 
 test('native links resolve workspace files relative to the session cwd', () => {
-  const { nativeFileTarget, nativeLinkKind } = load('NativeLinkResolver', {});
+  const { nativeFileTarget, nativeLinkKind, nativeBareFileName } = load('NativeLinkResolver', {});
   assert.equal(nativeLinkKind('https://example.com/image.png'), 'http');
   assert.equal(nativeLinkKind('mailto:author@example.com'), 'external');
   assert.equal(nativeLinkKind('docs/readme.md'), 'file');
@@ -382,11 +397,18 @@ test('native links resolve workspace files relative to the session cwd', () => {
     '/workspace/project/docs/view.ts'
   );
   assert.equal(
+    nativeFileTarget('src/app.ts:42:7', '/workspace/project'),
+    '/workspace/project/src/app.ts'
+  );
+  assert.equal(
     nativeFileTarget('docs\\view.ts', 'C:\\workspace\\project'),
     'C:/workspace/project/docs/view.ts'
   );
   assert.equal(nativeFileTarget('../../../outside.md', '/workspace/project'), '/outside.md');
   assert.equal(nativeFileTarget('/workspace/shared.md', '/workspace/project'), '/workspace/shared.md');
+  assert.equal(nativeBareFileName('check_repo.py:42'), 'check_repo.py');
+  assert.equal(nativeBareFileName('scripts/check_repo.py'), '');
+  assert.equal(nativeBareFileName('notes with spaces.md'), '');
 });
 
 test('native diff renders only explicit or applied edits and honors null old text', () => {
@@ -399,8 +421,12 @@ test('native diff renders only explicit or applied edits and honors null old tex
     args: JSON.stringify({ path: 'src/new.ts', oldText: null, newText: 'one\ntwo\n' })
   }));
   assert.equal(created.matched, true);
+  assert.equal(created.added, 2);
+  assert.equal(created.removed, 0);
   assert.equal(created.rows.filter(row => row.kind === 'add').length, 2);
   assert.equal(created.rows.filter(row => row.kind === 'del').length, 0);
+  assert.deepEqual(Array.from(created.rows.filter(row => row.kind === 'add')
+    .map(row => [row.oldLine, row.newLine])), [[0, 1], [0, 2]]);
   assert.equal(nativeDiffText(created.rows), 'src/new.ts\n+ one\n+ two');
 
   const multiple = nativeDiff(message({
@@ -411,12 +437,20 @@ test('native diff renders only explicit or applied edits and honors null old tex
   }));
   assert.equal(multiple.matched, true);
   assert.equal(multiple.path, 'a.ts');
+  assert.equal(multiple.added, 2);
+  assert.equal(multiple.removed, 1);
   assert.deepEqual(Array.from(multiple.rows.filter(row => row.kind === 'path')
     .map(row => row.text)), ['a.ts', 'b.ts']);
 
-  const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch';
-  assert.deepEqual(Array.from(nativeDiff(message({ output: patch })).rows
-    .map(row => row.kind)), ['path', 'del', 'add']);
+  const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@ -10,1 +20,1 @@\n-old\n+new\n*** End Patch';
+  const patched = nativeDiff(message({ output: patch }));
+  assert.deepEqual(Array.from(patched.rows.map(row => row.kind)), ['path', 'del', 'add']);
+  assert.deepEqual(Array.from(patched.rows.filter(row => row.kind === 'del')
+    .map(row => [row.oldLine, row.newLine])), [[10, 0]]);
+  assert.deepEqual(Array.from(patched.rows.filter(row => row.kind === 'add')
+    .map(row => [row.oldLine, row.newLine])), [[0, 20]]);
+  assert.equal(patched.added, 1);
+  assert.equal(patched.removed, 1);
   assert.equal(nativeDiff(message({ output: patch, failed: true })).matched, false);
   assert.equal(nativeDiff(message({ output: patch, status: 'interrupted' })).matched, false);
   assert.equal(nativeDiff(message({ output: patch, output: 'AUTO_REVIEW_DENIED\n' + patch })).matched,
@@ -501,6 +535,8 @@ test('foreground navigation wins over width changes and the session menu keeps t
   assert.equal(nativeCanGoBack({wide:true,drawerOpen:false,tools:true}),true);
   assert.equal(nativeCanGoBack({wide:false,drawerOpen:true,menu:true}),true);
   assert.equal(nativeCanGoBack({wide:false,drawerOpen:true}),true);
+  assert.equal(nativeCanGoBack({wide:false,drawerOpen:false,imagePreview:true}),true);
+  assert.equal(nativeCanGoBack({wide:false,drawerOpen:false,filePreview:true}),true);
   assert.equal(nativeCanGoBack({wide:true,drawerOpen:false}),false);
   assert.equal(nativeSessionMenu(false).map(x=>x.id).join(','),'pin,rename,fork,archive,copyId');
   assert.equal(nativeSessionMenu(true,true).map(x=>x.id).join(','),'rename,fork,unarchive,copyId');
@@ -508,8 +544,49 @@ test('foreground navigation wins over width changes and the session menu keeps t
   assert.equal(nativeForkTitle('任务（009）'),'任务（10）');
   assert.equal(nativeForkTitle('task'),'task (1)');
   assert.equal(nativeUtilityMenu(false,false,false,false,false).map(x=>x.title).join(','),
-    '复制 Markdown,下载日志');
-  assert.equal(nativeUtilityMenu(true,true,false,false,false).map(x=>x.id).join(','),'copy');
+    '文件浏览,复制 Markdown,下载日志');
+  assert.equal(nativeUtilityMenu(true,true,false,false,false).map(x=>x.id).join(','),'files,copy');
+  assert.equal(nativeUtilityMenu(true,false,false,false,false).map(x=>x.id).join(','),'files');
+});
+
+test('workspace document model distinguishes previewable images, SVG and Markdown from source files', () => {
+  const document = load('NativeDocumentModel', {});
+  assert.equal(document.nativeDocumentDescriptor('assets/photo.PNG').kind, 'image');
+  assert.equal(document.nativeDocumentDescriptor('assets/photo.png').defaultMode, 'preview');
+  assert.equal(document.nativeDocumentDescriptor('diagram.svg').kind, 'svg');
+  assert.equal(document.nativeDocumentDescriptor('diagram.svg').defaultMode, 'preview');
+  assert.equal(document.nativeDocumentDescriptor('diagram.svg').language, 'svg');
+  assert.equal(document.nativeDocumentDescriptor('README.MD').kind, 'markdown');
+  assert.equal(document.nativeDocumentDescriptor('README.MD').canToggle, true);
+  assert.equal(document.nativeDocumentDescriptor('src/main.ets').kind, 'code');
+  assert.equal(document.nativeDocumentDescriptor('src/main.ets').language, 'arkts');
+  assert.equal(document.nativeDocumentDescriptor('LICENSE').kind, 'unknown');
+  assert.equal(document.nativeDocumentExtension('archive.tar.gz'), 'gz');
+});
+
+test('workspace document projections preserve source offsets and Markdown block order', () => {
+  const document = load('NativeDocumentModel', {});
+  assert.deepEqual(JSON.parse(JSON.stringify(
+    document.nativeSourceLines('a\r\nb\r', 500).map(line => [line.number, line.text]))),
+  [[500, 'a'], [501, 'b'], [502, '']]);
+  const blocks = document.nativeMarkdownBlocks([
+    '# Title',
+    '',
+    '| A | B |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+    '',
+    '> quote',
+    '',
+    '```ts',
+    'const value = 1;',
+    '```'
+  ].join('\n'));
+  assert.deepEqual(JSON.parse(JSON.stringify(blocks.map(block => block.kind))),
+    ['heading', 'table', 'quote', 'code']);
+  assert.equal(blocks[0].level, 1);
+  assert.equal(blocks[3].language, 'ts');
+  assert.equal(blocks[3].text, 'const value = 1;');
 });
 
 test('Host profile mirror serializes writes with the latest revision and restores authority after conflicts', async () => {
@@ -550,7 +627,7 @@ test('Host chat settings project every supported ArkUI selector value', () => {
   assert.equal(detailed.mode, 'detailed');
 });
 
-test('presentation policies share grouping while handling four modes, deferred collapse and final-only replies', () => {
+test('presentation policies keep direct operations visible while handling four modes, deferred collapse and final-only replies', () => {
   const types=load('NativeSessionModel',{}), preferences=load('NativeHostSettings',{});
   const {nativeTranscript,nativePresentTranscript,nativeReasoningPreview}=load('NativeTranscript',{'./NativeSessionModel':types});
   const message=(id,role,seq,rest={})=>Object.assign(new types.NativeMessage(),{id,role,seq,turn:1,step:1,...rest});
@@ -561,11 +638,28 @@ test('presentation policies share grouping while handling four modes, deferred c
   for(const mode of ['compact','standard','detailed','verbose']) {
     const prefs=Object.assign(new preferences.NativeChatPreferences(),{mode});
     const visible=nativePresentTranscript(nativeTranscript(records,false),prefs,new Map());
-    assert.equal(visible.filter(x=>x.role==='process').length,mode==='verbose'?2:0);
+    assert.equal(visible.filter(x=>x.role==='process').length,2);
     const open=nativePresentTranscript(nativeTranscript(records,false),prefs,new Map([['turn:1',true]]));
     assert.equal(open.filter(x=>x.role==='process').length,2);
     assert.equal(open.find(x=>x.role==='process').flat,mode==='verbose');
-    assert.equal(open.find(x=>x.role==='process').preview,mode!=='compact');
+    assert.equal(open.find(x=>x.role==='process').preview,true);
+    assert.ok(open.filter(x=>x.role==='process').every(x=>x.groupedProcess));
+  }
+  for(const mode of ['compact','standard','detailed','verbose']) {
+    const thoughtPrefs=Object.assign(new preferences.NativeChatPreferences(),{mode});
+    const thought=nativePresentTranscript(nativeTranscript(records,false),thoughtPrefs,new Map())
+      .find(x=>x.role==='process'&&x.children.some(y=>y.role==='reasoning'));
+    const tool=nativePresentTranscript(nativeTranscript(records,false),thoughtPrefs,new Map())
+      .find(x=>x.role==='process'&&x.children.some(y=>y.role==='tool'));
+    const reasoning=thought.children.find(x=>x.role==='reasoning');
+    const operation=tool.children.find(x=>x.role==='tool');
+    assert.equal(thought.label,'工作过程');
+    assert.equal(tool.label,'工作过程');
+    assert.equal(reasoning.label,'思考过程',`${mode} reasoning keeps a separate activity lead`);
+    assert.equal(reasoning.detail,'Thought more',`${mode} reasoning keeps its flattened single-line preview`);
+    assert.equal(reasoning.detail.includes('\n'),false,`${mode} reasoning preview has one line`);
+    assert.equal(operation.label,'已读取文件',`${mode} tool keeps a separate activity lead`);
+    assert.equal(operation.detail,'src/app.ts',`${mode} tool keeps its operation preview`);
   }
   const prefs=Object.assign(new preferences.NativeChatPreferences(),{collapseTiming:'next-input',foldedReplies:'final'});
   assert.equal(nativePresentTranscript(nativeTranscript(records,false),prefs,new Map()).filter(x=>x.role==='process').length,2);
@@ -573,11 +667,15 @@ test('presentation policies share grouping while handling four modes, deferred c
   assert.equal(collapsed.some(x=>x.id==='intermediate'),false);assert.equal(collapsed.some(x=>x.id==='answer'),true);
   const live=nativePresentTranscript(nativeTranscript(records.slice(0,-1),true),prefs,new Map());
   assert.equal(live.find(x=>x.role==='process').flat,true);
-  assert.equal(nativeReasoningPreview('unfinished line',true),'');
-  assert.equal(nativeReasoningPreview('**First**\nmore\n\nSecond\nnot complete',true),'Second');
-  assert.equal(nativeReasoningPreview('**First**\nbody',false),'First');
+  assert.equal(nativeReasoningPreview('unfinished line',true),'unfinished line');
+  assert.equal(nativeReasoningPreview('**First**\nmore\n\nSecond\nnot complete',true),
+    'First more Second not complete');
+  assert.equal(nativeReasoningPreview('**First**\nbody',false),'First body');
   const noAnswer=nativeTranscript(records.filter(x=>x.role!=='assistant'),false);
-  assert.equal(noAnswer.find(x=>x.role==='process').foldable,true,'a completed turn without final answer remains foldable');
+  assert.equal(noAnswer.some(x=>x.role==='turn-control'),false);
+  assert.deepEqual(nativeTranscript(records,false).filter(x=>x.role==='process').map(x=>x.id),
+    nativeTranscript(records,false).filter(x=>x.role==='process').map(x=>x.id),
+    'operation disclosure identities remain stable across projections');
 });
 
 test('the journal retains hidden context and raw tool metadata without resurfacing it in Chat', () => {
@@ -593,7 +691,7 @@ test('the journal retains hidden context and raw tool metadata without resurfaci
   assert.equal(JSON.parse(model.messages[0].contentRaw)[0].text,'result');
 });
 
-test('native Chat merges call/results and nested PTC calls, splitting process groups only at replies or inputs', () => {
+test('native Chat groups contiguous operations and keeps nested PTC calls in a bounded summary tree', () => {
   const types = load('NativeSessionModel', {});
   const { nativeTranscript } = load('NativeTranscript', {'./NativeSessionModel':types});
   const event = (seq,type,data) => ({type:'event',event:{seq,time:1000+seq*100,type,data:{turn:1,step:1,...data}}});
@@ -614,14 +712,18 @@ test('native Chat merges call/results and nested PTC calls, splitting process gr
   const rows = nativeTranscript(history.messages,false);
   const groups = rows.filter(x=>x.role==='process');
   assert.equal(groups.length,2,JSON.stringify(rows.map(x=>({id:x.id,role:x.role,turn:x.turnKey,children:x.children.map(y=>y.id)}))));
-  const root=groups[0].children.find(x=>x.role==='tool');
+  const rootGroup=groups.find(x=>x.children.some(y=>y.callId==='root'));
+  const root=rootGroup.children.find(x=>x.role==='tool');
   assert.equal(root.toolName,'run_code'); assert.equal(root.status,'success');
   assert.equal(root.args,'{"code":"read()"}'); assert.equal(root.output,'done');
   assert.equal(root.children.length,1); assert.equal(root.children[0].toolName,'read');
   assert.equal(root.children[0].output,'source');
-  assert.equal(groups[0].children.filter(x=>x.role==='reasoning').length,1);
-  assert.equal(rows.filter(x=>x.role==='turn-control').length,1);
-  assert.ok(groups.every(x=>x.foldable));
+  assert.equal(groups.filter(x=>x.children.some(y=>y.role==='reasoning')).length,1);
+  assert.equal(rows.filter(x=>x.role==='turn-control').length,0);
+  assert.ok(groups.every(x=>x.foldable===false&&x.groupedProcess));
+  assert.equal(groups.map(x=>x.id).join(','),'process:event-2:part:0,process:call:shell');
+  assert.equal(nativeTranscript(history.messages,false).filter(x=>x.role==='process').map(x=>x.id).join(','),
+    groups.map(x=>x.id).join(','));
   assert.equal(rows.filter(x=>x.role==='assistant').map(x=>x.text).join(','),'progress,answer');
   assert.equal(rows.filter(x=>x.role==='turn-footer').length,1);
   const mixed=nativeTranscript(normalizedHistory([
@@ -632,20 +734,53 @@ test('native Chat merges call/results and nested PTC calls, splitting process gr
 
 test('running activity uses latest still-running start time and exact upstream tool-name categories', () => {
   const types=load('NativeSessionModel',{});
-  const {nativeTranscript,nativeToolCategory,nativeToolDetail}=load('NativeTranscript',{'./NativeSessionModel':types});
+  const {nativeTranscript,nativeProcessGroupPreview,nativeToolArgumentsVisible,nativeToolCategory,
+    nativeToolDetail,nativeOneLinePreview,nativeToolOutputVisible}=load(
+    'NativeTranscript',{'./NativeSessionModel':types});
   const rows=[
     {id:'a',seq:1,turn:1,step:1,role:'tool',callId:'a',toolName:'exec_command',phase:'start',time:10,text:'{"cmd":"test","description":"Run checks"}'},
     {id:'b',seq:2,turn:1,step:1,role:'tool',callId:'b',toolName:'read',phase:'start',time:20,text:'{"file_path":"src/app.ts"}'},
     {id:'c',seq:3,turn:1,step:1,role:'tool',callId:'b',phase:'result',time:30,text:'contents'}
   ];
   const group=nativeTranscript(rows,true)[0];
-  assert.equal(group.label,'正在运行命令 · Run checks');
+  assert.equal(group.label,'工作过程');
+  assert.equal(group.groupedProcess,true);
+  assert.equal(group.children.map(x=>x.label).join(','),'正在运行命令,已读取文件');
+  assert.equal(group.detail,'正在运行命令、已读取文件');
+  const many = new types.NativeMessage();
+  many.children = Array.from({length:11},()=>Object.assign(new types.NativeMessage(),{
+    role:'tool', toolName:'read', status:'success'
+  }));
+  assert.equal(nativeProcessGroupPreview(many),'已读取文件等11项');
   assert.equal(nativeToolCategory('functions.read'),'tools');
   assert.equal(nativeToolCategory('terminal_inspect'),'search');
   assert.equal(nativeToolCategory('subagent_codex'),'subagents');
   assert.equal(nativeToolDetail({args:'{"questions":[{"question":"Choose scope"}]}',phase:'start',toolName:'request_user_input'}),'Choose scope');
+  assert.equal(nativeToolDetail({args:'{"command":"first\\nsecond"}',phase:'start',toolName:'exec_command'}),
+    'first second');
+  assert.equal(nativeOneLinePreview('abc\ndef',4),'abc…');
   const ended=nativeTranscript(rows.concat([{id:'end',seq:4,turn:1,step:1,role:'boundary'}]),true)[0];
   assert.equal(ended.children.find(x=>x.callId==='a').status,'interrupted');
+
+  const imageAttachment=(id,name)=>({attachmentId:id,mediaType:'image/png',bytes:69,width:80,height:60,name});
+  const imageHistory=normalizedHistory([
+    {type:'event',event:{seq:10,time:40,type:'tool/call',data:{turn:2,step:1,callId:'images',
+      name:'read_image',arguments:'{"file_path":"docs/preview.png"}'}}},
+    {type:'event',event:{seq:11,time:50,type:'tool/result',data:{turn:2,step:1,
+      message:{source:{callId:'images'},content:[
+        {type:'text',text:'# Preview\n\n> authenticated image\n\n```ts\nconst width = 80;\n```'},
+        {type:'image',attachment:imageAttachment('image-a','a.png')},
+        {type:'image',attachment:imageAttachment('image-b','b.png')}
+      ]}}}}
+  ]);
+  const imageTool=nativeTranscript(imageHistory.messages,false)[0].children
+    .find(row=>row.callId==='images');
+  assert.equal(nativeToolCategory(imageTool.toolName),'readImage');
+  assert.equal(nativeToolArgumentsVisible(imageTool),false);
+  assert.equal(nativeToolOutputVisible(imageTool),false);
+  assert.deepEqual(Array.from(imageTool.images,x=>x.attachmentId),['image-a','image-b']);
+  assert.deepEqual(Array.from(imageTool.blocks,x=>x.kind),['heading','quote','code']);
+  assert.equal(imageTool.blocks[2].language,'ts');
 });
 
 test('interleaved human input keeps per-group disclosure rather than whole-turn folding', () => {
@@ -659,6 +794,7 @@ test('interleaved human input keeps per-group disclosure rather than whole-turn 
   ],false);
   assert.equal(rows.some(x=>x.role==='turn-control'),false);
   assert.equal(rows.find(x=>x.role==='process').foldable,false);
+  assert.equal(rows.find(x=>x.role==='process').groupedProcess,true);
 });
 
 test('streamed tool argument fragments settle once and never become assistant placeholder text', () => {

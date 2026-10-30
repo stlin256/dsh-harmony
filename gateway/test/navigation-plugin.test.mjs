@@ -11,25 +11,73 @@ test('published browser entries register factories with the real Harness module-
     const source = await readFile(new URL(pkg.exports['./client'], root), 'utf8');
     let registration;
     const selected = [];
+    const timers = [];
     const window = { __ModuleLoader__: { load: value => { registration = value; } },
       location: { href: 'https://dsh.example.com/?dshHarmonySession=chosen' }, history: { state: {}, replaceState() {} } };
-    runInNewContext(source, { window, URL });
+    runInNewContext(source, {
+      window, URL,
+      setTimeout: callback => { timers.push(callback); return timers.length; },
+      clearTimeout() {},
+      console: { warn() {} }
+    });
     assert.equal(registration.id, pkg.name);
     const client = registration.factory(() => { throw Error('Unexpected import'); });
-    client.apply({ uiWorkspace: { openSession: id => selected.push(id) } });
+    client.apply({
+      uiWorkspace: { openSession: id => selected.push(id) },
+      effect: factory => factory()
+    });
+    assert.deepEqual(selected, []);
+    timers.shift()();
     assert.deepEqual(selected, ['chosen']);
     assert.equal(/^\s*(?:import|export)\s/m.test(source), false);
   }
 });
 
-test('compatibility handoff uses public workspace navigation and preserves other URL state', () => {
+test('compatibility handoff is deferred, disposable and preserves other URL state', () => {
   const previous=globalThis.window;
+  const previousSetTimeout=globalThis.setTimeout;
+  const previousClearTimeout=globalThis.clearTimeout;
   const selected=[],replaced=[];
+  let timer,cleared,dispose;
   globalThis.window={location:{href:'https://dsh.example.com/?dshHarmonySession=session_1&layout=wide#panel'},history:{state:{tab:1},replaceState:(...args)=>replaced.push(args)}};
+  globalThis.setTimeout=(callback,delay)=>{assert.equal(delay,0);timer=callback;return 7;};
+  globalThis.clearTimeout=id=>{cleared=id;};
   try {
-    apply({uiWorkspace:{openSession:id=>selected.push(id)}});
+    apply({uiWorkspace:{openSession:id=>selected.push(id)},effect:factory=>{dispose=factory();}});
+    assert.deepEqual(selected,[]);
+    assert.equal(typeof timer,'function');
+    timer();
     assert.deepEqual(selected,['session_1']);
     assert.deepEqual(replaced,[[{tab:1},'','/?layout=wide#panel']]);
+    dispose();
+    assert.equal(cleared,7);
     assert.equal(consumeSession(new URL('https://dsh.example.com/?dshHarmonySession=..%2Fother')),'');
-  } finally {globalThis.window=previous;}
+  } finally {
+    globalThis.window=previous;
+    globalThis.setTimeout=previousSetTimeout;
+    globalThis.clearTimeout=previousClearTimeout;
+  }
+});
+
+test('session navigation failure cannot fail plugin activation', () => {
+  const previous=globalThis.window;
+  const previousSetTimeout=globalThis.setTimeout;
+  const previousWarn=console.warn;
+  let timer,warned=false,replaced=false;
+  globalThis.window={location:{href:'https://dsh.example.com/?dshHarmonySession=session_1'},history:{state:{},replaceState:()=>{replaced=true;}}};
+  globalThis.setTimeout=callback=>{timer=callback;return 1;};
+  console.warn=()=>{warned=true;};
+  try {
+    assert.doesNotThrow(()=>apply({
+      uiWorkspace:{openSession:()=>{throw new Error('workspace is not ready');}},
+      effect:factory=>{factory();}
+    }));
+    assert.doesNotThrow(()=>timer());
+    assert.equal(warned,true);
+    assert.equal(replaced,false);
+  } finally {
+    globalThis.window=previous;
+    globalThis.setTimeout=previousSetTimeout;
+    console.warn=previousWarn;
+  }
 });

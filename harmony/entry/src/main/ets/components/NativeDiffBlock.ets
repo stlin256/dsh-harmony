@@ -10,6 +10,7 @@ export struct NativeDiffBlock {
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private expanded: boolean = false;
   @State private wrapped: boolean = false;
+  @State private showLineNumbers: boolean = false;
   @State private copied: boolean = false;
 
   private color(kind: string): ResourceColor {
@@ -28,6 +29,11 @@ export struct NativeDiffBlock {
     const update = (): void => { this.expanded = !this.expanded; };
     NativeMotion.animate(this.getUIContext(), 'micro', update);
   }
+  private toggleLineNumbers(): void {
+    NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
+      this.showLineNumbers = !this.showLineNumbers;
+    });
+  }
   private copy(): void {
     pasteboard.getSystemPasteboard().setData(pasteboard.createData(
       pasteboard.MIMETYPE_TEXT_PLAIN, nativeDiffText(this.document.rows)))
@@ -41,9 +47,31 @@ export struct NativeDiffBlock {
     rows.push(gap);
     return rows.concat(this.document.rows.slice(this.document.rows.length - 8));
   }
+  private lineNumberWidth(): number {
+    let width = 1;
+    this.document.rows.forEach((row: NativeDiffRow): void => {
+      width = Math.max(width, row.oldLine > 0 ? row.oldLine.toString().length : 0,
+        row.newLine > 0 ? row.newLine.toString().length : 0);
+    });
+    return width;
+  }
+  private paddedLineNumber(value: number, width: number): string {
+    let valueText = value > 0 ? value.toString() : '';
+    while (valueText.length < width) valueText = ' ' + valueText;
+    return valueText;
+  }
+  private lineText(row: NativeDiffRow): string {
+    const marker = row.kind === 'add' ? '+ ' : row.kind === 'del' ? '- ' :
+      row.kind === 'context' ? '  ' : '';
+    if (!this.showLineNumbers) return marker + row.text;
+    if (row.kind !== 'add' && row.kind !== 'del' && row.kind !== 'context') return row.text;
+    const width = this.lineNumberWidth();
+    return this.paddedLineNumber(row.oldLine, width) + '  ' +
+      this.paddedLineNumber(row.newLine, width) + '  ' + marker + row.text;
+  }
   @Builder
   private line(row: NativeDiffRow) {
-    Text((row.kind === 'add' ? '+ ' : row.kind === 'del' ? '- ' : row.kind === 'context' ? '  ' : '') + row.text)
+    Text(this.lineText(row))
       .fontSize(11).lineHeight('18fp').fontFamily('Noto Sans Mono, monospace')
       .fontColor(this.color(row.kind)).backgroundColor(this.rowBackground(row.kind))
       .width(this.wrapped ? '100%' : undefined).wordBreak(WordBreak.BREAK_WORD)
@@ -56,10 +84,21 @@ export struct NativeDiffBlock {
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor(this.dark ? '#8AB4FF' : '#315ECA')
         Button({ type: ButtonType.Normal }) {
-          DSHIcon({ glyph: 'code-outline', glyphSize: 13, color: this.dark ? '#93969B' : '#8A8D91' })
-        }.width(28).height(28).borderRadius(7).backgroundColor(Color.Transparent)
+          Text('#').fontSize(13).fontWeight(FontWeight.Medium)
+            .fontFamily('Noto Sans Mono, monospace')
+            .fontColor(this.showLineNumbers ? this.dark ? '#F9FAFB' : '#0F1115' :
+              this.dark ? '#93969B' : '#8A8D91')
+        }.width(28).height(28).padding(0).borderRadius(7)
+          .backgroundColor(this.showLineNumbers ? this.dark ? '#3A3B3F' : '#E9EBEF' : Color.Transparent)
+          .accessibilityText(this.showLineNumbers ? '隐藏行号' : '显示行号')
+          .onClick((): void => { this.toggleLineNumbers(); })
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'drag-handle-outline', glyphSize: 13,
+            color: this.dark ? '#93969B' : '#8A8D91' })
+        }.width(28).height(28).borderRadius(7)
+          .backgroundColor(this.wrapped ? this.dark ? '#3A3B3F' : '#E9EBEF' : Color.Transparent)
           .accessibilityText(this.wrapped ? '关闭自动换行' : '自动换行')
-          .onClick(() => { this.wrapped = !this.wrapped; })
+          .onClick((): void => { this.wrapped = !this.wrapped; })
         Button({ type: ButtonType.Normal }) {
           DSHIcon({ glyph: this.copied ? 'check-outline' : 'copy-outline', glyphSize: 13,
             color: this.dark ? '#93969B' : '#8A8D91' })

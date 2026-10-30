@@ -25,13 +25,20 @@ async function setup(t, options = {}) {
     const chunks = []; for await (const part of req) chunks.push(part);
     const value = JSON.parse(Buffer.concat(chunks).toString());
     calls.push({ headers: req.headers, value });
+    if (options.workspaceFileError && value.method === 'workspaceFiles/stat') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ type: 'server-response', rpcId: value.rpcId,
+        result: { ok: false, error: { code: 'workspace-file/not-found' } } }));
+      return;
+    }
     let result;
     if (value.method === 'workspaceFiles/read') {
       result = { absolutePath: '/workspace/project/README.md', version: 'v7', text: '# Fixture\n\npreview', lines: 3, offset: 1, eof: true };
     } else if (value.method === 'workspaceFiles/stat') {
       result = { absolutePath: '/workspace/project/file.txt', version: 'v8', bytes: 7 };
     } else if (value.method === 'workspaceFiles/list') {
-      result = { path: 'src', entries: [
+      const path = value.payload.args.path;
+      result = { path: path === '.' ? '' : path, entries: [
         { name: 'nested', type: 'directory' },
         { name: 'file.txt', type: 'file', size: 7 },
         { name: 'socket', type: 'other' }
@@ -213,6 +220,19 @@ test('native file browser resolves file types, directories and authenticated bin
   });
   assert.equal(calls.at(-1).value.method, 'workspaceFiles/list');
 
+  const nested = await call('/pocket/api/native/file/list', { sessionId: 'session', path: 'src/nested' });
+  assert.equal(nested.status, 200);
+  assert.deepEqual(calls.at(-1).value.payload.args, {
+    workspaceFileScopeId: 'session', path: 'src/nested'
+  });
+
+  const root = await call('/pocket/api/native/file/list', { sessionId: 'session', path: '' });
+  assert.equal(root.status, 200);
+  assert.equal(JSON.parse(root.text).path, '');
+  assert.deepEqual(calls.at(-1).value.payload.args, {
+    workspaceFileScopeId: 'session', path: '.'
+  });
+
   const bytes = await call('/pocket/api/native/file/bytes', {
     sessionId: 'session', path: 'file.txt', offset: 0, length: 8
   });
@@ -232,6 +252,33 @@ test('native file browser resolves file types, directories and authenticated bin
   assert.equal((await call('/pocket/api/native/file/bytes', {
     sessionId: 'session', path: 'file.txt', length: 2 * 1024 * 1024 + 1
   })).status, 400);
+});
+
+test('native file routes preserve stable workspace-file failures', async t => {
+  const { call } = await setup(t, { workspaceFileError: true });
+  const stat = await call('/pocket/api/native/file/stat', { sessionId: 'session', path: 'missing.py' });
+  assert.equal(stat.status, 409);
+  assert.deepEqual(JSON.parse(stat.text), {
+    error: '操作未确认，请刷新',
+    code: 'workspace-file/not-found'
+  });
+});
+
+test('native workspace file surface is read-only and rejects write-shaped routes', async t => {
+  const { call, calls } = await setup(t);
+  await call('/pocket/api/native/file/stat', { sessionId: 'session', path: 'file.txt' });
+  await call('/pocket/api/native/file/list', { sessionId: 'session', path: '' });
+  await call('/pocket/api/native/file/bytes', {
+    sessionId: 'session', path: 'file.txt', offset: 0, length: 16
+  });
+  assert.deepEqual(calls.map(row => row.value.method), [
+    'workspaceFiles/stat', 'workspaceFiles/list', 'workspaceFiles/readBytes'
+  ]);
+  for (const route of ['write', 'delete', 'rename', 'create', 'upload']) {
+    assert.equal((await call('/pocket/api/native/file/' + route, {
+      sessionId: 'session', path: 'file.txt'
+    })).status, 404);
+  }
 });
 
 test('native binary windows accept empty files and reject unexpected multipart parts', async t => {

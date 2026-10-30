@@ -36,6 +36,9 @@ struct Index {
   @State private compatibilityDestination: string = '';
   @State @Watch('settingsChanged') private nativeSettings: boolean = false;
   @State private settingsCached: boolean = false;
+  @State private settingsLayer: boolean = false;
+  @State private settingsOpacity: number = 0;
+  @State private settingsShift: number = 16;
   @State private connectionManager: boolean = false;
   @State private modePicker: boolean = false;
   @StorageLink('nativeTitleHeight') private titleHeight: number = 56;
@@ -53,10 +56,16 @@ struct Index {
   @State private busy: boolean = false;
   @State private error: string = '';
   @State private progress: number = 0;
+  private settingsExitTimer: number = -1;
+  private exitGestureArmedAt: number = 0;
   @StorageLink('requestedSession') @Watch('openNotification') private requestedSession: string = '';
 
   aboutToAppear(): void {
     this.initialize().catch((error: Error) => { this.error = error.message || '连接失败'; });
+  }
+
+  aboutToDisappear(): void {
+    clearTimeout(this.settingsExitTimer);
   }
 
   private async initialize(): Promise<void> {
@@ -159,10 +168,11 @@ struct Index {
   private openPocketRoute(): void {
     if (!this.ready || !this.requestedPocketRoute) return;
     if (this.requestedPocketRoute === 'settings') {
-      this.nativeSettings = true; this.requestedPocketRoute = ''; return;
+      this.openSettings(); this.requestedPocketRoute = ''; return;
     }
     if (this.uiMode === 'native' && !this.authSurface) {
-      this.nativeSettings = this.requestedPocketRoute !== 'workspace';
+      if (this.requestedPocketRoute !== 'workspace') this.openSettings();
+      else this.closeSettings();
       this.requestedPocketRoute = ''; return;
     }
     try { if (!this.allowed(this.controller.getUrl())) return; } catch (_) { return; }
@@ -176,7 +186,7 @@ struct Index {
     this.getUIContext().setKeyboardAvoidMode(this.uiMode === 'native' ? KeyboardAvoidMode.RESIZE : KeyboardAvoidMode.OFFSET);
     this.nativeClient.pause(); this.compatibilitySurface = false;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
-    this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.nativeSettings = false;
+    this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.hideSettingsImmediately();
     this.error = '';
     if (this.uiMode === 'native') {
       this.applyNativeTheme();
@@ -210,6 +220,7 @@ struct Index {
     return await this.bridge.performNative(command, value);
   }
   private async resetConnectionState(): Promise<void> {
+    const retainedAddress = this.origin || this.address;
     if (this.origin) {
       const scope = this.nativeClient.cacheKey();
       NativeMetadataCache.clear(this.context, scope);
@@ -225,13 +236,14 @@ struct Index {
       await notices.flush();
     } catch (_) {}
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);
-    this.nativeSettings = false; this.settingsCached = false; this.connectionManager = false; this.compatibilitySurface = false;
+    this.hideSettingsImmediately(); this.settingsCached = false; this.connectionManager = false; this.compatibilitySurface = false;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
-    this.ready = false; this.origin = ''; this.authOrigin = ''; this.proxyAuth = false; this.address = ''; this.accessKey = ''; this.error = '';
+    this.ready = false; this.origin = ''; this.authOrigin = ''; this.proxyAuth = false;
+    this.address = retainedAddress; this.accessKey = ''; this.error = '';
     this.bridge = null; this.controller = new webview.WebviewController();
     this.nativeClient = new NativeHarnessClient('');
     this.requestedPocketRoute = ''; this.requestedSession = '';
-    try { this.store?.putSync('origin', ''); await this.store?.flush(); } catch (_) {}
+    try { this.store?.putSync('origin', retainedAddress); await this.store?.flush(); } catch (_) {}
   }
   private async disconnectConnection(): Promise<void> {
     this.busy = true;
@@ -240,7 +252,7 @@ struct Index {
       // escapable, so local cookies and the saved origin are always cleared.
       try { await this.nativeClient.request('/pocket/api/logout', http.RequestMethod.POST, '{}'); } catch (_) {}
       if (this.bridge) {
-        try { await this.bridge.performNative('clearSession', ''); return; } catch (_) {}
+        try { await this.bridge.performNative('clearSession', ''); } catch (_) {}
       }
       try { await webview.WebCookieManager.clearAllCookies(); } catch (_) {}
       try { webview.WebStorage.deleteAllData(); } catch (_) {}
@@ -268,14 +280,51 @@ struct Index {
   private settingsSheet() {
     NativeSettings({ client: this.nativeClient, serverOrigin: this.origin,
       invoke: (command: string, value: string): Promise<string> => this.invokeNative(command, value),
-      onReturn: (): void => { this.nativeSettings = false; },
+      onReturn: (): void => { this.closeSettings(); },
       onModes: (): void => { this.modePicker = true; },
-      onConnection: (): void => { this.nativeSettings = false; this.connectionManager = true; },
-      onLogin: (): void => { this.loginSurface(); },
+      onConnection: (): void => { this.closeSettings(); this.connectionManager = true; },
+      onLogin: (): void => { this.closeSettings(); this.loginSurface(); },
       onLogout: (): Promise<void> => this.disconnectConnection() })
   }
   private settingsChanged(): void {
+    this.applyNativeTheme();
+  }
+  private openSettings(): void {
+    clearTimeout(this.settingsExitTimer);
+    this.settingsCached = true;
+    this.settingsLayer = true;
     if (!this.nativeSettings) AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
+    NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
+      this.nativeSettings = true;
+      this.settingsOpacity = 1;
+      this.settingsShift = 0;
+    });
+    this.applyNativeTheme();
+  }
+  private closeSettings(): void {
+    if (!this.nativeSettings && !this.settingsLayer) return;
+    clearTimeout(this.settingsExitTimer);
+    NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
+      this.nativeSettings = false;
+      this.settingsOpacity = 0;
+      this.settingsShift = -12;
+    });
+    this.settingsExitTimer = setTimeout((): void => {
+      this.settingsLayer = false;
+      this.settingsOpacity = 0;
+      this.settingsShift = 16;
+      AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
+      this.applyNativeTheme();
+    }, NativeMotion.enabled() ? NativeMotion.duration('surface') + 20 : 0);
+    this.applyNativeTheme();
+  }
+  private hideSettingsImmediately(): void {
+    clearTimeout(this.settingsExitTimer);
+    this.nativeSettings = false;
+    this.settingsLayer = false;
+    this.settingsOpacity = 0;
+    this.settingsShift = 16;
+    AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
     this.applyNativeTheme();
   }
   private changeSettingsPage(page: string): void {
@@ -284,7 +333,7 @@ struct Index {
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
-      this.nativeSettings = false;
+      this.closeSettings();
       AppStorage.setOrCreate<number>('nativeRefreshRevision', (AppStorage.get<number>('nativeRefreshRevision') || 0) + 1);
     } else this.controller.refresh();
   }
@@ -311,7 +360,7 @@ struct Index {
     if (this.nativeSettings) {
       if ((AppStorage.get<string>('nativeSettingsPage') || 'root') !== 'root') {
         this.changeSettingsPage('root');
-      } else this.nativeSettings = false;
+      } else this.closeSettings();
       return true;
     }
     if (this.connectionManager) { this.connectionManager = false; return true; }
@@ -320,10 +369,27 @@ struct Index {
       if (AppStorage.get<boolean>('nativeWorkspaceCanGoBack') === true) {
         AppStorage.setOrCreate<number>('nativeBackRevision', (AppStorage.get<number>('nativeBackRevision') || 0) + 1); return true;
       }
+      if (AppStorage.get<boolean>('nativeWorkspaceHasSelection') === true) {
+        this.confirmChatExit();
+        return true;
+      }
       return false;
     }
     if (this.ready && this.controller.accessBackward()) { this.controller.backward(); return true; }
     return false;
+  }
+  private confirmChatExit(): void {
+    const now = Date.now();
+    if (now - this.exitGestureArmedAt <= 2000) {
+      this.exitGestureArmedAt = 0;
+      this.context.terminateSelf().catch((): void => {});
+      return;
+    }
+    this.exitGestureArmedAt = now;
+    this.getUIContext().getPromptAction().showToast({
+      message: '再次滑动退出',
+      duration: 1500
+    });
   }
 
   @Builder
@@ -357,7 +423,7 @@ struct Index {
         if (this.uiMode === 'native' && !this.authSurface) {
           NativeWorkspace({ client: this.nativeClient, context: this.context, supportsPush: PushKitAdapter.supported,
             onLogin: (): void => { this.loginSurface(); },
-            onSettings: (): void => { this.nativeSettings = true; },
+            onSettings: (): void => { this.openSettings(); },
             onSnapshot: async (value: string): Promise<void> => { await this.invokeNative('widgetSnapshot', value); },
             onLocalNotification: async (sessionId: string, title: string, state: string): Promise<void> => {
               await this.invokeNative('publishLocalNotification', JSON.stringify({ sessionId, title, state }));
@@ -443,12 +509,14 @@ struct Index {
       }
       if (this.error) { Text(this.error).fontColor('#b91c1c').fontSize(13).padding(10) }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
-      .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: true,
+      .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: false,
         onDisappear: (): void => { this.closeCompatibility(); } })
-      .visibility(this.nativeSettings ? Visibility.Hidden : Visibility.Visible)
-      if (this.ready && this.settingsCached) {
+      .visibility(this.nativeSettings || this.settingsLayer ? Visibility.Hidden : Visibility.Visible)
+      if (this.ready && this.settingsCached && this.settingsLayer) {
         Column() { this.settingsSheet() }.width('100%').height('100%')
-          .visibility(this.nativeSettings ? Visibility.Visible : Visibility.Hidden)
+          .opacity(this.settingsOpacity)
+          .translate({ x: this.settingsShift })
+          .hitTestBehavior(this.nativeSettings ? HitTestMode.Default : HitTestMode.None)
       }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
   }
@@ -464,7 +532,11 @@ struct Index {
     .hideToolBar(true)
     .width('100%').height('100%')
     .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
-    .bindSheet(this.modePicker, this.modeSheet, { height: SheetSize.FIT_CONTENT, showClose: true })
+    .bindSheet(this.modePicker, this.modeSheet, {
+      height: SheetSize.FIT_CONTENT,
+      showClose: true,
+      onDisappear: (): void => { this.modePicker = false; }
+    })
     }
   }
 

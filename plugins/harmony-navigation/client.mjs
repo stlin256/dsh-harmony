@@ -8,7 +8,22 @@ export function apply(ctx) {
   const url = new URL(window.location.href);
   const id = consumeSession(url);
   if (!id) return;
-  ctx.uiWorkspace.openSession(id);
-  url.searchParams.delete('dshHarmonySession');
-  window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+  const handoff = () => {
+    try {
+      ctx.uiWorkspace.openSession(id);
+      url.searchParams.delete('dshHarmonySession');
+      window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+    } catch (error) {
+      globalThis.console?.warn?.('@dsh-harmony/navigation: session handoff failed', error);
+    }
+  };
+  const schedule = () => {
+    const timer = setTimeout(handoff, 0);
+    return () => clearTimeout(timer);
+  };
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(schedule, 'dsh-harmony: session handoff');
+  } else {
+    schedule();
+  }
 }

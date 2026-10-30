@@ -3,7 +3,10 @@ import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeHarnessClient, NativeHttpError, NativeImageDraft } from '../services/NativeHarnessClient';
-import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, nativeWorkspaceRows, nativeToolsParent, nativeWorkspaceDragOrder, nativeBackToBottomAvailable, nativeBackToBottomHasNewContent } from '../services/NativeSessionModel';
+import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion,
+  NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, NativeImagePreviewRequest,
+  NativeFileViewRequest, nativeWorkspaceRows, nativeToolsParent, nativeWorkspaceDragOrder,
+  nativeBackToBottomAvailable, nativeBackToBottomHasNewContent } from '../services/NativeSessionModel';
 import { NativeListSource } from '../services/NativeListSource';
 import { NativeExperience } from '../services/NativeExperience';
 import { NativeTextContent } from './NativeTextContent';
@@ -23,6 +26,9 @@ import { NativeMenuItem } from '../services/NativeNavigation';
 import { NativeMetadataCache } from '../services/NativeMetadataCache';
 import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
 import { NativeMotion } from '../services/NativeMotion';
+import { NativeImageLightbox } from './NativeImageLightbox';
+import { NativeFilePreview } from './NativeFilePreview';
+import { NativeFileBrowser } from './NativeFileBrowser';
 
 class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
 class NativeWorkspaceOrderRequest {
@@ -71,6 +77,8 @@ export struct NativeWorkspace {
   onCompatibility: () => void = (): void => {};
   onDestination: (destination: string) => void = (): void => {};
   @StorageLink('nativeBackRevision') @Watch('backToSessions') private backRevision: number = 0;
+  @StorageLink('nativeImagePreviewRevision') @Watch('imagePreviewChanged') private imagePreviewRevision: number = 0;
+  @StorageLink('nativeFileViewRevision') @Watch('fileViewChanged') private fileViewRevision: number = 0;
   @StorageLink('nativeDark') private dark: boolean = false;
   @StorageLink('nativeHostSettingsRevision') @Watch('preferencesChanged') private preferencesRevision: number = 0;
   @StorageLink('nativeModelRevision') @Watch('modelCaptionChanged') private modelRevision: number = 0;
@@ -85,6 +93,10 @@ export struct NativeWorkspace {
   @State private continued: NativeFrame[] = [];
   @State private interactions: NativeFrame[] = [];
   @State private images: NativeImageDraft[] = [];
+  @State private imagePreviewOpen: boolean = false;
+  @State private imagePreview: NativeImagePreviewRequest = new NativeImagePreviewRequest();
+  @State private fileViewOpen: boolean = false;
+  @State private fileView: NativeFileViewRequest = new NativeFileViewRequest();
   @State private attaching: boolean = false;
   @State @Watch('navigationChanged') private toolsOpen: boolean = false;
   @State private toolsId: string = '';
@@ -104,6 +116,8 @@ export struct NativeWorkspace {
   @State private steer: boolean = false;
   @State @Watch('navigationChanged') private newSessionOpen: boolean = false;
   @State @Watch('navigationChanged') private workspacePickerOpen: boolean = false;
+  @State private workspacePickerPage: string = 'root';
+  @State private workspacePickerDirection: number = 1;
   @State @Watch('sessionsChanged') private workspaces: NativeWorkspaceSnapshot = new NativeWorkspaceSnapshot();
   @State @Watch('sessionsChanged') private workspaceId: string = '';
   @State @Watch('sessionsChanged') private query: string = '';
@@ -138,6 +152,7 @@ export struct NativeWorkspace {
   @State private backToBottomNew: boolean = false;
   @State private drawerFollowing: boolean = false;
   @State private drawerTranslation: number = 0;
+  @State private transcriptViewportHeight: number = 0;
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
   @State private footerCopiedId: string = '';
@@ -159,7 +174,6 @@ export struct NativeWorkspace {
   private backgroundActive: boolean = false;
   private backgroundBusy: boolean = false;
   private backgroundStates: Map<string, string> = new Map<string, string>();
-  private openTurns: Set<string> = new Set<string>();
   private visibleRows: NativeMessage[] = [];
   private firstVisible: number = 0;
   private userHasScrolled: boolean = false;
@@ -175,6 +189,8 @@ export struct NativeWorkspace {
   private workspaceOrderQueue: NativeWorkspaceOrderOperation[] = [];
   private workspaceOrderConfirmed: NativeWorkspaceSnapshot | null = null;
   private drawerSettleTimer: number = -1;
+  private destinationTimer: number = -1;
+  private utilityOpenedAt: number = 0;
   private interactionTimes: Map<string, number> = new Map<string, number>();
   private workspaceRowRects: Map<string, number[]> = new Map<string, number[]>();
 
@@ -188,7 +204,65 @@ export struct NativeWorkspace {
     state.picker = this.workspacePickerOpen;
     state.create = this.newSessionOpen; state.tools = this.toolsOpen;
     state.menu = !!this.menuId || this.utilityOpen || this.modelPickerOpen;
+    state.imagePreview = this.imagePreviewOpen;
+    state.filePreview = this.fileViewOpen;
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', nativeCanGoBack(state));
+    AppStorage.setOrCreate<boolean>('nativeWorkspaceHasSelection', this.selected.length > 0);
+  }
+  private imagePreviewChanged(): void {
+    const raw = AppStorage.get<string>('nativeImagePreviewPayload') || '';
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as NativeImagePreviewRequest;
+      if (!parsed.sessionId || !parsed.attachment?.attachmentId) return;
+      const request = new NativeImagePreviewRequest();
+      request.sessionId = parsed.sessionId;
+      request.attachment = parsed.attachment;
+      this.imagePreview = request;
+      this.imagePreviewOpen = true;
+      this.navigationChanged();
+    } catch (_) {}
+  }
+  private closeImagePreview(): void {
+    this.imagePreviewOpen = false;
+    AppStorage.setOrCreate<string>('nativeImagePreviewPayload', '');
+    this.navigationChanged();
+  }
+  private fileViewChanged(): void {
+    const raw = AppStorage.get<string>('nativeFileViewPayload') || '';
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as NativeFileViewRequest;
+      if (!parsed.sessionId || typeof parsed.path !== 'string' ||
+        (parsed.kind !== 'file' && parsed.kind !== 'browser') ||
+        (parsed.kind === 'file' && !parsed.path)) return;
+      const request = new NativeFileViewRequest();
+      request.kind = parsed.kind;
+      request.sessionId = parsed.sessionId;
+      request.path = parsed.path;
+      if (parsed.kind === 'browser') {
+        this.client.rememberBrowsePath(parsed.sessionId, parsed.path);
+      } else {
+        const clean = parsed.path.replace(/\\/g, '/');
+        const slash = clean.lastIndexOf('/');
+        this.client.rememberBrowsePath(parsed.sessionId, slash >= 0 ? clean.slice(0, slash) : '');
+      }
+      this.fileView = request;
+      this.fileViewOpen = true;
+      this.navigationChanged();
+    } catch (_) {}
+  }
+  private closeFileView(): void {
+    this.fileViewOpen = false;
+    AppStorage.setOrCreate<string>('nativeFileViewPayload', '');
+    this.navigationChanged();
+  }
+  private workspaceRootFor(sessionId: string): string {
+    const session = this.sessions.find((item: NativeSession): boolean => item.id === sessionId);
+    if (session?.cwd) return session.cwd;
+    const workspace = this.workspaces.items.find((item: NativeWorkspaceItem): boolean =>
+      item.sessionIds.includes(sessionId));
+    return workspace?.path || '';
   }
 
   private sessionsChanged(): void {
@@ -206,9 +280,11 @@ export struct NativeWorkspace {
     clearTimeout(this.cacheTimer); clearTimeout(this.backToBottomTimer);
     clearTimeout(this.returnToBottomTimer);
     clearTimeout(this.drawerSettleTimer);
+    clearTimeout(this.destinationTimer);
     this.persistCache();
     this.stopBackground();
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', false);
+    AppStorage.setOrCreate<boolean>('nativeWorkspaceHasSelection', false);
   }
   private async reload(): Promise<void> {
     const generation = ++this.generation;
@@ -235,7 +311,7 @@ export struct NativeWorkspace {
           this.select(cachedRequested);
         }
       }
-      if (!this.selected) this.animatePane(() => { this.showSessions = true; });
+      if (!this.selected) this.openDrawer(false);
     } else this.loading = true;
     this.error = '';
     try {
@@ -275,8 +351,8 @@ export struct NativeWorkspace {
           if (this.connectionPhase !== 'opening' && this.connectionPhase !== 'syncing' &&
             this.connectionPhase !== 'live') this.follow();
         } else if (available) this.select(requested);
-        else this.animatePane(() => { this.showSessions = true; });
-      } else this.animatePane(() => { this.showSessions = true; });
+        else this.openDrawer(false);
+      } else this.openDrawer(false);
     } catch (error) {
       if (!this.sessions.length) this.handleError(error as Error);
       if (!(error instanceof NativeHttpError && error.status === 401)) {
@@ -285,7 +361,7 @@ export struct NativeWorkspace {
           this.scheduleReconnect('');
         } else {
           this.connectionPhase = this.selected ? 'syncing' : 'idle';
-          if (!this.selected) this.animatePane(() => { this.showSessions = true; });
+          if (!this.selected) this.openDrawer(false);
           if (!this.selected) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = setTimeout((): void => {
@@ -349,31 +425,74 @@ export struct NativeWorkspace {
   private mobileDrawerWidth(): number {
     return Math.max(240, Math.min(380, this.windowWidth * 0.86, this.windowWidth - 48));
   }
-  private openDrawer(): void {
+  private setDrawerState(open: boolean): void {
+    this.drawerFollowing = false;
+    this.drawerTranslation = open ? 0 : -this.mobileDrawerWidth();
+    this.showSessions = open;
+  }
+  private openDrawer(refresh: boolean = true): void {
+    if (this.showSessions || this.drawerFollowing) {
+      if (refresh) this.refreshSessionList().catch((): void => {});
+      return;
+    }
     clearTimeout(this.backToBottomTimer);
     clearTimeout(this.returnToBottomTimer);
     clearTimeout(this.drawerSettleTimer);
     const width = this.mobileDrawerWidth();
-    this.drawerFollowing = false;
+    this.drawerFollowing = true;
+    this.showSessions = false;
     this.drawerTranslation = -width;
     this.backToBottomVisible = false;
     this.returningToBottom = false;
     NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
-      this.showSessions = true;
       this.drawerTranslation = 0;
     });
-    this.navigationChanged();
-    this.refreshSessionList().catch((): void => {});
+    this.drawerSettleTimer = setTimeout((): void => {
+      if (!this.mounted) return;
+      this.showSessions = true;
+      this.drawerFollowing = false;
+      this.navigationChanged();
+    }, NativeMotion.enabled() ? NativeMotion.duration('surface') : 0);
+    if (refresh) this.refreshSessionList().catch((): void => {});
   }
   private closeDrawer(): void {
     clearTimeout(this.drawerSettleTimer);
-    this.drawerFollowing = false;
+    this.drawerFollowing = true;
+    const width = this.mobileDrawerWidth();
     NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
-      this.showSessions = false;
-      this.drawerTranslation = -this.mobileDrawerWidth();
+      this.drawerTranslation = -width;
     });
-    this.navigationChanged();
+    this.drawerSettleTimer = setTimeout((): void => {
+      if (!this.mounted) return;
+      this.showSessions = false;
+      this.drawerFollowing = false;
+      this.drawerTranslation = -width;
+      this.navigationChanged();
+    }, NativeMotion.enabled() ? NativeMotion.duration('surface') : 0);
     this.restoreScrollTailAfterDrawer();
+  }
+  private openDrawerDestination(destination: string): void {
+    clearTimeout(this.destinationTimer);
+    this.closeDrawer();
+    // Temporary product gate: keep the original compatibility routing here for
+    // restoration after these entries have a native implementation.
+    // Mounting the web surface from the drawer row's press handler can race
+    // the native drawer teardown on some devices. Commit it on the next task.
+    // this.destinationTimer = setTimeout((): void => {
+    //   if (this.mounted) this.onDestination(destination);
+    // }, 0);
+    this.getUIContext().getPromptAction().showToast({
+      message: '功能未开放',
+      duration: 1600
+    });
+  }
+  private toggleWorkspaceGroup(id: string): void {
+    NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
+      this.collapsedGroups = this.collapsedGroups.includes(id) ?
+        this.collapsedGroups.filter((value: string): boolean => value !== id) :
+        this.collapsedGroups.concat([id]);
+      this.sessionsChanged();
+    });
   }
   private restoreScrollTailAfterDrawer(): void {
     setTimeout((): void => {
@@ -409,7 +528,7 @@ export struct NativeWorkspace {
         if (!this.mounted) return;
         if (dismiss) {
           this.showSessions = false;
-          this.drawerTranslation = 0;
+          this.drawerTranslation = -width;
         }
         this.drawerFollowing = false;
         this.navigationChanged();
@@ -444,9 +563,19 @@ export struct NativeWorkspace {
     }, NativeMotion.enabled() ? NativeMotion.duration('surface') : 0);
   }
   private backToSessions(): void {
+    if (this.imagePreviewOpen) { this.closeImagePreview(); return; }
+    if (this.fileViewOpen) {
+      if (this.fileView.kind === 'browser') return;
+      this.closeFileView();
+      return;
+    }
     if (this.menuId || this.utilityOpen) { this.menuId = ''; this.utilityOpen = false; return; }
     if (this.modelPickerOpen) { this.modelPickerOpen = false; return; }
-    if (this.workspacePickerOpen) { this.workspacePickerOpen = false; return; }
+    if (this.workspacePickerOpen) {
+      if (this.workspacePickerPage !== 'root') this.setWorkspacePickerPage('root');
+      else this.closeWorkspacePicker();
+      return;
+    }
     if (this.newSessionOpen) { this.newSessionOpen = false; return; }
     if (this.toolsOpen) {
       const parent = nativeToolsParent(AppStorage.get<string>('nativeSessionToolsPage') || 'root');
@@ -457,6 +586,18 @@ export struct NativeWorkspace {
     if (this.showSessions) this.closeDrawer();
     this.sessionsChanged();
     this.navigationChanged();
+  }
+  private openWorkspacePicker(): void {
+    this.workspacePickerPage = 'root';
+    this.workspacePickerDirection = 1;
+    NativeMotion.animate(this.getUIContext(), 'navigation', (): void => { this.workspacePickerOpen = true; });
+  }
+  private setWorkspacePickerPage(page: string): void {
+    this.workspacePickerDirection = page === 'root' ? -1 : 1;
+    NativeMotion.animate(this.getUIContext(), 'navigation', (): void => { this.workspacePickerPage = page; });
+  }
+  private closeWorkspacePicker(): void {
+    NativeMotion.animate(this.getUIContext(), 'navigation', (): void => { this.workspacePickerOpen = false; });
   }
   private openTools(page: string, id: string = this.selected): void {
     this.toolsId = id; AppStorage.setOrCreate<string>('nativeSessionToolsPage', page); this.toolsOpen = true;
@@ -526,7 +667,7 @@ export struct NativeWorkspace {
       if (action === 'archive') {
         this.archivedUndo = id;
         if (this.selected === id) {
-          this.client.pause(); this.selected = ''; this.client.selectedId = ''; this.showSessions = true;
+          this.client.pause(); this.selected = ''; this.client.selectedId = ''; this.setDrawerState(true);
           NativeMetadataCache.forgetSession(this.context, this.client.cacheKey());
           NativeTranscriptCache.forgetSession(this.context, this.client.cacheKey(), id).catch(() => {});
         }
@@ -685,7 +826,26 @@ export struct NativeWorkspace {
   }
   @Builder
   private utilityMenu() {
-    NativeActionMenu({ items: this.utilityItems(), onSelect: (id: string): void => { if (id === 'copy') this.copyMarkdown(); else if (id === 'download') this.downloadLog(); } })
+    NativeActionMenu({ items: this.utilityItems(),
+      onSelect: (id: string): void => { this.utilityAction(id); } })
+  }
+  @Builder
+  private utilityOverlay() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor(Color.Transparent)
+        .onClick((): void => {
+          if (Date.now() - this.utilityOpenedAt > 250) this.utilityOpen = false;
+        })
+      Column() { this.utilityMenu() }
+        .width(208).margin({ top: this.safeTop + 40, right: 12 })
+        .borderRadius(16)
+        .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
+        .clip(true)
+        .shadow({ radius: 16, color: this.dark ? '#99000000' : '#2E000000', offsetY: 5 })
+        .transition(NativeMotion.rowTransition())
+    }.width('100%').height('100%')
   }
   @Builder
   private modelPicker() {
@@ -696,9 +856,30 @@ export struct NativeWorkspace {
     return nativeUtilityMenu(this.utilityKnown, this.exportCapabilities.copyMarkdown,
       this.exportCapabilities.downloadLog, this.copying, this.downloading);
   }
+  private utilityAction(id: string): void {
+    if (id === 'files') {
+      if (!this.selected) return;
+      this.utilityOpen = false;
+      const request = new NativeFileViewRequest();
+      request.kind = 'browser';
+      request.sessionId = this.selected;
+      request.path = this.client.lastBrowsePath(this.selected);
+      this.fileView = request;
+      this.fileViewOpen = true;
+      this.navigationChanged();
+      return;
+    }
+    if (id === 'copy') this.copyMarkdown();
+    else if (id === 'download') this.downloadLog();
+  }
   private openUtilities(): void {
     this.modelPickerOpen = false;
-    this.utilityOpen = !this.utilityOpen; if (!this.utilityOpen) return;
+    const next = !this.utilityOpen;
+    if (next) this.utilityOpenedAt = Date.now();
+    // Conditional presentation layers must commit on the first frame. Their
+    // NativeMotion transitions animate the inserted menu without delaying state.
+    this.utilityOpen = next;
+    if (!next) return;
     // The action list is complete on the first frame. Capabilities only refine
     // availability and never gate whether the menu can appear immediately.
     this.prefetchUtilities(this.selected);
@@ -750,7 +931,7 @@ export struct NativeWorkspace {
       this.createQuickSession(this.workspaces.items[0].workspaceId);
       return;
     }
-    this.workspacePickerOpen = true;
+    this.openWorkspacePicker();
   }
   private async createQuickSession(workspaceId: string): Promise<void> {
     if (this.loading || !workspaceId) return;
@@ -886,7 +1067,7 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.sessions.some(valid)) {
       if (this.mounted) {
         this.workspaceError = '会话不可用';
-        this.animatePane(() => { this.showSessions = true; });
+        this.openDrawer(false);
         this.navigationChanged();
       }
       return;
@@ -912,7 +1093,7 @@ export struct NativeWorkspace {
     this.images = this.client.images.get(id) || [];
     this.uncertain = this.client.uncertain.has(id);
     this.connectionNotified = false;
-    this.animatePane(() => { this.selected = id; this.showSessions = false; }); this.followTail = true;
+    this.animatePane(() => { this.selected = id; this.setDrawerState(false); }); this.followTail = true;
     this.interactionTimes = NativeMetadataCache.rememberInteraction(
       this.context, this.client.cacheKey(), id);
     this.sessionsChanged();
@@ -1053,7 +1234,6 @@ export struct NativeWorkspace {
   private renderTranscript(): void {
     const rows = nativeTranscript(this.model.messages, this.model.running, this.model.streamTools, this.model.streamReasoning, this.model.streamText);
     const visible = nativePresentTranscript(rows, this.client.hostSettings.chat(), this.model.turnDisclosure, this.model.collapseThrough);
-    this.openTurns = new Set<string>(visible.filter((row: NativeMessage) => row.role === 'process').map((row: NativeMessage) => row.turnKey));
     this.visibleRows = visible;
     this.source.set(visible, (row: NativeMessage): string => row.id);
   }
@@ -1066,12 +1246,6 @@ export struct NativeWorkspace {
           if (this.footerCopiedId === id) this.footerCopiedId = '';
         }, 1000);
       }).catch((): void => {});
-  }
-  private toggleTurn(key: string): void {
-    const next = !this.openTurns.has(key);
-    this.model.turnDisclosure.set(key, next);
-    if (!next) this.model.disclosures.forEach((_value: boolean, id: string): void => { if (id.startsWith(key + '|')) this.model.disclosures.delete(id); });
-    this.renderTranscript();
   }
   private async createSession(): Promise<void> {
     if (this.loading) return;
@@ -1197,7 +1371,6 @@ export struct NativeWorkspace {
       if (this.selected !== id || this.selectionGeneration !== generation || !this.mounted) return;
       const offset = this.hasMore ? 1 : 0;
       let anchorIndex = Math.max(0, this.firstVisible - offset);
-      while (anchorIndex < this.visibleRows.length - 1 && this.visibleRows[anchorIndex].role === 'turn-control') anchorIndex++;
       const anchor = this.visibleRows[anchorIndex]?.id || '';
       let top = 0;
       try {
@@ -1323,7 +1496,7 @@ export struct NativeWorkspace {
       .backgroundColor(this.wide && this.selected === row.session.id ?
         this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
       .animation(NativeMotion.implicit('micro'))
-      .transition(NativeMotion.rowTransition())
+      .transition(NativeMotion.workspaceChildrenTransition())
   }
 
   @Builder
@@ -1336,6 +1509,12 @@ export struct NativeWorkspace {
       Text(entry.title).fontSize(12).fontWeight(FontWeight.Medium).layoutWeight(1)
         .fontColor(this.dark ? '#B5B8BD' : '#61666B')
       Text(String(entry.count)).fontSize(11).fontColor(this.dark ? '#93969B' : '#8A8D91')
+      if (entry.section === 'pinnedHeader') {
+        DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 12,
+          color: this.dark ? '#93969B' : '#777A80' })
+          .rotate({ angle: this.collapsedGroups.includes(entry.workspaceId) ? 180 : -90 })
+          .animation(NativeMotion.implicit('micro'))
+      }
       if (entry.section === 'workspaceHeader') {
         DSHIcon({ glyph: 'drag-handle-outline', glyphSize: 13,
           color: this.dragWorkspaceId === entry.workspaceId ?
@@ -1397,10 +1576,12 @@ export struct NativeWorkspace {
           .accessibilityText(this.searchOpen ? '关闭搜索' : '搜索工作区和会话')
           .onClick(() => {
             if (this.searchOpen) this.query = '';
-            this.searchOpen = !this.searchOpen;
+            NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
+              this.searchOpen = !this.searchOpen;
+            });
           })
         if (!this.wide) {
-          Button({ type: ButtonType.Normal }) {
+          Button({ type: ButtonType.Circle }) {
             DSHIcon({ glyph: 'close-outline', glyphSize: 16, color: this.dark ? '#CFD3D6' : '#61666B' })
           }.width(40).height(40).borderRadius(12).backgroundColor(Color.Transparent)
             .accessibilityText('关闭侧边栏').onClick(() => { this.closeDrawer(); })
@@ -1420,64 +1601,57 @@ export struct NativeWorkspace {
           DSHIcon({ glyph: 'code-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
           Text('插件').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
         }.width('100%').height(40).padding({ left: 10, right: 10 })
-          .onClick(() => { this.closeDrawer(); this.onDestination('plugins'); })
+          .onClick(() => { this.openDrawerDestination('plugins'); })
         Row({ space: 10 }) {
           DSHIcon({ glyph: 'plan-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
           Text('自动化任务').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
         }.width('100%').height(40).padding({ left: 10, right: 10 })
-          .onClick(() => { this.closeDrawer(); this.onDestination('automation'); })
+          .onClick(() => { this.openDrawerDestination('automation'); })
         Row({ space: 10 }) {
           DSHIcon({ glyph: 'ellipsis-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
           Text('更多').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
         }.width('100%').height(40).padding({ left: 10, right: 10 })
-          .onClick(() => { this.closeDrawer(); this.onDestination('more'); })
+          .onClick(() => { this.openDrawerDestination('more'); })
       }.width('100%')
       if (this.searchOpen) {
         TextInput({ text: this.query, placeholder: '搜索工作区和会话' }).height(36).fontSize(13).borderRadius(10)
           .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
           .backgroundColor(this.dark ? '#232324' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onChange((value: string) => { this.query = value; })
+          .transition(NativeMotion.rowTransition())
       }
-      Row({ space: 6 }) {
+      Row() {
         Text('工作区').fontSize(12).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#B5B8BD' : '#61666B')
         Blank()
         Button({ type: ButtonType.Normal }) {
           Row({ space: 5 }) {
             DSHIcon({ glyph: 'browse-outline', glyphSize: 14, color: this.dark ? '#93969B' : '#8A8D91' })
             Text(this.workspaces.items.find((item: NativeWorkspaceItem) => item.workspaceId === this.workspaceId)?.title || '全部')
-              .fontSize(11).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width(88)
+              .fontSize(11).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .constraintSize({ maxWidth: 110 })
+              .textAlign(TextAlign.End)
               .fontColor(this.dark ? '#93969B' : '#8A8D91')
           }
-        }.height(30).padding({ left: 8, right: 8 }).borderRadius(8).backgroundColor(Color.Transparent)
-          .onClick(() => { this.workspacePickerOpen = true; })
-        Button({ type: ButtonType.Normal }) {
-          DSHIcon({ glyph: 'plus-outline', glyphSize: 14, color: this.dark ? '#CFD3D6' : '#61666B' })
-        }.width(30).height(30).borderRadius(8).backgroundColor(Color.Transparent)
-          .accessibilityText('新建会话或管理工作区')
-          .onClick(() => {
-            if (this.workspaceId) this.createQuickSession(this.workspaceId);
-            else if (this.workspaces.items.length) this.createQuickSession(this.workspaces.items[0].workspaceId);
-            else this.openNewSession();
-          })
-      }.width('100%').padding({ left: 4, top: 4 })
+        }.height(30).padding({ left: 8, right: 0 }).borderRadius(8).backgroundColor(Color.Transparent)
+          .onClick(() => { this.openWorkspacePicker(); })
+      }.width('100%').padding({ left: 4, right: 0, top: 4 })
       List({ space: 2 }) {
         LazyForEach(this.sessionSource, (entry: NativeWorkspaceRow) => {
           ListItem() {
-            if (entry.group) this.workspaceHeader(entry)
-            else this.sessionRow(entry)
+            Column() {
+              if (entry.group) this.workspaceHeader(entry)
+              else this.sessionRow(entry)
+            }.width('100%').padding({ right: 8 })
           }.onClick(() => {
             if (!entry.group) this.select(entry.session.id);
-            else {
-              this.collapsedGroups = this.collapsedGroups.includes(entry.workspaceId) ? this.collapsedGroups.filter((id: string) => id !== entry.workspaceId) : this.collapsedGroups.concat([entry.workspaceId]);
-              this.sessionsChanged();
-            }
+            else this.toggleWorkspaceGroup(entry.workspaceId);
           }).accessibilityText(entry.group ? entry.title :
             entry.session.title + (entry.pinned ? '，已置顶' : '') +
             (entry.section === 'pinnedSession' && entry.workspaceTitle ?
               '，工作区 ' + entry.workspaceTitle : '') +
             (entry.session.running ? '，运行中' : ''))
         }, (entry: NativeWorkspaceRow) => entry.key)
-      }.layoutWeight(1).width('100%').cachedCount(8)
+      }.layoutWeight(1).width('100%').margin({ right: -8 }).cachedCount(8).scrollBar(BarState.Auto)
       if (this.workspaceError) {
         Row() {
           Text(this.workspaceError).fontSize(12).layoutWeight(1).fontColor(this.dark ? '#FF9393' : '#C53737')
@@ -1526,12 +1700,10 @@ export struct NativeWorkspace {
         Button({ type: ButtonType.Normal }) {
           DSHIcon({ glyph: 'ellipsis-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
         }.width(36).height(36).borderRadius(10)
-          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .backgroundColor(this.utilityOpen ? this.dark ? '#353638' : '#EBEEF2' : Color.Transparent)
+          .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .animation(NativeMotion.implicit('press'))
           .accessibilityText('更多操作').onClick(() => { this.openUtilities(); })
-          .bindPopup(this.utilityOpen, { builder: this.utilityMenu, placement: Placement.BottomRight,
-            enableArrow: false, targetSpace: 4, radius: 16, mask: true,
-            popupColor: this.dark ? '#37383C' : '#F8F9FA', backgroundBlurStyle: BlurStyle.NONE,
-            onStateChange: (event): void => { if (!event.isVisible) this.utilityOpen = false; } })
       }.width('100%')
       if (this.connectionPhase === 'retrying') {
         Row({ space: 8 }) {
@@ -1564,15 +1736,10 @@ export struct NativeWorkspace {
           LazyForEach(this.source, (message: NativeMessage) => {
             ListItem() {
               if (message.role === 'process') {
-                NativeProcessView({ client: this.client, sessionId: this.selected, message, disclosures: this.model.disclosures })
-              } else if (message.role === 'turn-control') {
-                Button({ type: ButtonType.Normal }) {
-                  Row({ space: 6 }) {
-                    DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 })
-                      .rotate({ angle: this.openTurns.has(message.turnKey) ? -90 : 180 })
-                    Text(message.label).fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91')
-                  }
-                }.height(30).padding(0).backgroundColor(Color.Transparent).enabled(message.foldable).onClick(() => { this.toggleTurn(message.turnKey); })
+                NativeProcessView({ client: this.client, sessionId: this.selected, message,
+                  disclosures: this.model.disclosures,
+                  maxExpandedHeight: Math.max(180, this.transcriptViewportHeight * 0.6),
+                  maxChildExpandedHeight: Math.max(120, this.transcriptViewportHeight * 0.36) })
               } else if (message.role === 'turn-footer') {
                 Row({ space: 8 }) {
                   Text(message.label + (message.text ? ' · ' + message.text : '')).fontSize(11).layoutWeight(1)
@@ -1630,7 +1797,7 @@ export struct NativeWorkspace {
                   .backgroundColor(this.dark ? '#8AB4FF' : '#3964FE')
                 }
             }.width('100%').height('100%')
-          }.width(44).height(44).padding(9).borderRadius(22)
+          }.width(44).height(44).padding(0).borderRadius(22).clip(true)
             .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
             .border({ width: 0.5, color: this.dark ? '#4A4B4F' : '#D8DADF' })
             .shadow({ radius: 10, color: this.dark ? '#66000000' : '#22000000', offsetY: 3 })
@@ -1640,6 +1807,10 @@ export struct NativeWorkspace {
             .transition(NativeMotion.rowTransition())
         }
       }.layoutWeight(1).width('100%')
+        .onAreaChange((_old: Area, area: Area): void => {
+          const height = Number(area.height);
+          if (height > 0 && height !== this.transcriptViewportHeight) this.transcriptViewportHeight = height;
+        })
       ForEach(this.interactions.concat(this.continued), (frame: NativeFrame) => {
         NativeInteraction({ client: this.client, frame, onDone: (): void => {
           this.interactions = this.interactions.filter((item: NativeFrame) => item.eventId !== frame.eventId);
@@ -1729,7 +1900,8 @@ export struct NativeWorkspace {
       }.padding(8).width('100%').borderRadius(16)
         .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
         .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
-    }.padding({ left: 12, right: 12, top: this.safeTop + 4, bottom: this.safeBottom + 8 })
+    }.padding({ left: 12, right: 12, top: this.safeTop + 4,
+      bottom: Math.ceil(this.safeBottom * 1.2) + 8 })
       .height('100%').layoutWeight(1)
       .transition(NativeMotion.navigationTransition())
   }
@@ -1740,22 +1912,34 @@ export struct NativeWorkspace {
       if (this.selected) {
         this.conversation()
       } else {
-        Column({ space: 14 }) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Column({ space: 14 }) {
           Text(this.loading ? '正在恢复会话…' : '开始你的任务').fontSize(22).fontWeight(FontWeight.Medium)
             .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          if (!this.loading) {
+            if (!this.loading) {
+              Button({ type: ButtonType.Normal }) {
+                Row({ space: 8 }) {
+                  DSHIcon({ glyph: 'new-chat-outline', glyphSize: 17, color: this.dark ? '#151517' : '#FFFFFF' })
+                  Text('新建会话').fontSize(14)
+                }
+              }.height(42).padding({ left: 16, right: 16 }).borderRadius(12)
+                .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115')
+                .fontColor(this.dark ? '#151517' : '#FFFFFF').onClick(() => { this.openNewSession(); })
+            } else {
+              LoadingProgress().width(22).height(22).color(this.dark ? '#F9FAFB' : '#0F1115')
+            }
+          }.width('100%').height('100%').justifyContent(FlexAlign.Center).padding(24)
+          if (!this.wide) {
             Button({ type: ButtonType.Normal }) {
-              Row({ space: 8 }) {
-                DSHIcon({ glyph: 'new-chat-outline', glyphSize: 17, color: this.dark ? '#151517' : '#FFFFFF' })
-                Text('新建会话').fontSize(14)
-              }
-            }.height(42).padding({ left: 16, right: 16 }).borderRadius(12)
-              .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115')
-              .fontColor(this.dark ? '#151517' : '#FFFFFF').onClick(() => { this.openNewSession(); })
-          } else {
-            LoadingProgress().width(22).height(22).color(this.dark ? '#F9FAFB' : '#0F1115')
+              DSHIcon({ glyph: 'panel-left-outline', color: this.dark ? '#F9FAFB' : '#0F1115' })
+            }.width(36).height(36).borderRadius(10).padding(0)
+              .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
+              .border({ width: 0.5, color: this.dark ? '#45464A' : '#DDE0E5' })
+              .margin({ left: 12, top: this.safeTop + 8 })
+              .accessibilityText('打开侧边栏')
+              .onClick((): void => { this.openDrawer(); })
           }
-        }.width('100%').height('100%').justifyContent(FlexAlign.Center).padding(24)
+        }.width('100%').height('100%')
       }
       if (this.archivedUndo) {
         Row() {
@@ -1779,23 +1963,29 @@ export struct NativeWorkspace {
 
   @Builder
   private mobileShell() {
-    Stack() {
+    Stack({ alignContent: Alignment.TopStart }) {
       Column() { this.mainSurface() }.width('100%').height('100%')
-      Row() {
-        Column() { this.sessionList(true) }.width(this.mobileDrawerWidth()).height('100%')
-          .translate({ x: this.showSessions || this.drawerFollowing ? this.drawerTranslation : -this.mobileDrawerWidth() })
-          .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
-            .onActionStart((): void => { this.beginDrawerPan(); })
-            .onActionUpdate((event: GestureEvent): void => { this.updateDrawerPan(event); })
-            .onActionEnd((event: GestureEvent): void => { this.settleDrawerPan(event); })
-            .onActionCancel((): void => { this.cancelDrawerPan(); }))
-        Column().layoutWeight(1).height('100%')
-          .backgroundColor(this.dark ? '#66000000' : '#42000000')
-          .opacity(this.showSessions || this.drawerFollowing ?
-            this.drawerProgress(this.mobileDrawerWidth()) : 0)
-          .onClick(() => { this.closeDrawer(); })
-      }.width('100%').height('100%')
+      Column()
+        .width('100%').height('100%')
+        .backgroundColor(this.dark ? '#66000000' : '#3D000000')
+        .opacity(this.drawerProgress(this.mobileDrawerWidth()))
         .hitTestBehavior(this.showSessions || this.drawerFollowing ? HitTestMode.Default : HitTestMode.None)
+        .onClick(() => { this.closeDrawer(); })
+      Column() { this.sessionList(true) }.width(this.mobileDrawerWidth()).height('100%')
+        .translate({ x: this.showSessions || this.drawerFollowing ? this.drawerTranslation : -this.mobileDrawerWidth() })
+        .visibility(this.showSessions || this.drawerFollowing ? Visibility.Visible : Visibility.Hidden)
+        .hitTestBehavior(this.showSessions || this.drawerFollowing ? HitTestMode.Default : HitTestMode.None)
+        .shadow({
+          radius: 20,
+          color: this.dark ? '#99000000' : '#33000000',
+          offsetX: 5,
+          offsetY: 0
+        })
+        .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
+          .onActionStart((): void => { this.beginDrawerPan(); })
+          .onActionUpdate((event: GestureEvent): void => { this.updateDrawerPan(event); })
+          .onActionEnd((event: GestureEvent): void => { this.settleDrawerPan(event); })
+          .onActionCancel((): void => { this.cancelDrawerPan(); }))
       if (!this.showSessions) {
         Row().position({ x: 0, y: 0 }).width(18).height('100%').backgroundColor(Color.Transparent)
           .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
@@ -1837,13 +2027,16 @@ export struct NativeWorkspace {
           })
       }
 
+      if (this.utilityOpen) { this.utilityOverlay() }
       if (this.workspacePickerOpen) {
         Column() {
           NativeWorkspacePicker({ client: this.client, snapshot: this.workspaces, sessions: this.sessions,
-            selectedId: this.workspaceId,
-            onClose: (): void => { this.workspacePickerOpen = false; },
+            selectedId: this.workspaceId, page: this.workspacePickerPage,
+            navigationDirection: this.workspacePickerDirection,
+            onClose: (): void => { this.closeWorkspacePicker(); },
+            onPageChange: (page: string): void => { this.setWorkspacePickerPage(page); },
             onSelect: (id: string): void => {
-              this.workspaceId = id; this.workspacePickerOpen = false; this.showSessions = true;
+              this.workspaceId = id; this.closeWorkspacePicker(); this.setDrawerState(true);
             },
             onChanged: (value: NativeWorkspaceSnapshot): void => { this.workspaces = value; } })
         }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
@@ -1860,6 +2053,21 @@ export struct NativeWorkspace {
             if (this.toolsId === this.selected) this.title = title;
             this.toolsOpen = false; this.refreshSessionList();
           } })
+      }
+      if (this.fileViewOpen) {
+        if (this.fileView.kind === 'browser') {
+          NativeFileBrowser({ client: this.client, sessionId: this.fileView.sessionId,
+            workspaceRoot: this.workspaceRootFor(this.fileView.sessionId),
+            path: this.fileView.path, onClose: (): void => { this.closeFileView(); } })
+        } else {
+          NativeFilePreview({ client: this.client, sessionId: this.fileView.sessionId,
+            path: this.fileView.path, onClose: (): void => { this.closeFileView(); } })
+        }
+      }
+      if (this.imagePreviewOpen) {
+        NativeImageLightbox({ client: this.client, sessionId: this.imagePreview.sessionId,
+          attachment: this.imagePreview.attachment,
+          onClose: (): void => { this.closeImagePreview(); } })
       }
     }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
   }

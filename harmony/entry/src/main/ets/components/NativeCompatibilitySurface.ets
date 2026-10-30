@@ -1,6 +1,8 @@
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
+import { DSHIcon } from './DSHIcon';
+import { NativeMotion } from '../services/NativeMotion';
 
 /** A temporary surface: the native workspace stays mounted underneath. */
 @Component
@@ -13,6 +15,7 @@ export struct NativeCompatibilitySurface {
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private error: string = '';
   @State private progress: number = 0;
+  @State private canGoBack: boolean = false;
   private controller: webview.WebviewController = new webview.WebviewController();
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
   private allowed(url: string): boolean { return url === this.origin || url.startsWith(this.origin + '/'); }
@@ -27,14 +30,44 @@ export struct NativeCompatibilitySurface {
     return this.origin + '/?dshHarmonySession=' + encodeURIComponent(this.sessionId) +
       (destination ? '&dshHarmonyRoute=' + destination : '');
   }
+  private goBack(): void {
+    try {
+      if (!this.controller.accessBackward()) return;
+      NativeMotion.animate(this.getUIContext(), 'navigation', (): void => { this.controller.backward(); });
+    } catch (_) {
+      this.canGoBack = false;
+    }
+  }
+  private refreshHistory(): void {
+    try {
+      this.canGoBack = this.controller.accessBackward();
+    } catch (_) {
+      // The controller is not associated until the Web node reaches page end.
+      this.canGoBack = false;
+    }
+  }
   build() {
     Column({ space: 8 }) {
-      Row({ space: 8 }) {
+      Row({ space: 6 }) {
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 17,
+            color: this.dark ? '#F2F2F3' : '#25262A' })
+        }.width(40).height(40).borderRadius(12)
+          .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
+          .border({ width: 0.5, color: this.dark ? '#45464A' : '#DFE1E5' })
+          .opacity(this.canGoBack ? 1 : 0.42)
+          .enabled(this.canGoBack)
+          .accessibilityText('网页后退').onClick((): void => { this.goBack(); })
         Text(this.title()).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1)
           .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-        Button('后退').height(44).onClick(() => { if (this.controller.accessBackward()) this.controller.backward(); })
-        Button('返回原生').height(44).onClick(this.onClose)
-      }.padding({ left: 16, right: 16 }).width('100%')
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'close-outline', glyphSize: 17,
+            color: this.dark ? '#F2F2F3' : '#25262A' })
+        }.width(40).height(40).borderRadius(12)
+          .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
+          .border({ width: 0.5, color: this.dark ? '#45464A' : '#DFE1E5' })
+          .accessibilityText('关闭并返回原生').onClick(this.onClose)
+      }.height(48).padding({ left: 12, right: 12 }).width('100%')
       if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).height(2).width('100%') }
       Web({ src: this.source(), controller: this.controller })
         .width('100%').layoutWeight(1).javaScriptAccess(true).domStorageAccess(true).databaseAccess(true)
@@ -46,6 +79,7 @@ export struct NativeCompatibilitySurface {
         .onWindowNew((event) => { if (this.allowed(event.targetUrl)) this.controller.loadUrl(event.targetUrl); })
         .onProgressChange((event) => { this.progress = event.newProgress; })
         .onPageEnd(() => {
+          this.refreshHistory();
           if (this.allowed(this.controller.getUrl())) this.controller.runJavaScript(this.presentation).catch(() => {});
         })
         .onErrorReceive((event) => { if (event.request.isMainFrame()) this.error = '加载失败，请检查网络连接'; })
