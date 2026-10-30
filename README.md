@@ -19,7 +19,7 @@
 
 1. 准备可访问的 Harness Web，服务器 Node.js 24.9+。
 2. 在 `gateway/` 运行 `npm ci`，回到仓库根目录运行 `node scripts/package-plugin.mjs`。
-3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.2.5.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
+3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.3.0.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
 4. 安装 App，默认选原生登录，填写地址和 Harness 启动 URL 中 `token=` 后的访问密钥。密钥不保存在 App 配置中；后续使用有效 Cookie。
 5. 可选 Pocket ID 的[流程与工具](docs/OIDC-DEPLOYMENT.md)均在仓库中，配置后选择下面的 Passkey 登录。
 
@@ -31,9 +31,11 @@
 
 - 兼容模式保留 Harness 原版工作空间、插件和高级控件。
 - 原生模式（实验）提供会话、文本/图片、工具、模型、队列、审批、提问和实时输出。覆盖范围见[界面模式](docs/UI-MODES.md)与[能力核对表](docs/NATIVE-COVERAGE.md)。
-- 原生聊天沿用 DSH 图标与紧凑布局，支持正文格式、隐藏空会话及重连后保留已加载历史。
-- 本机主题、动效和连接管理；登录失败或离线时仍可退出。
-- 2×2 工作空间入口和 2×4 任务概览卡片，可显示任务名称并使用带时间的本地快照。
+- 冷启动恢复上次会话；工作区和会话从左侧覆盖抽屉进入，聊天滚动、草稿和展开状态在浏览期间保留。
+- 原生聊天沿用 DSH 图标与紧凑布局，支持 Markdown 表格、带语言高亮的代码块、最终回复单一复制入口，并隐藏空会话及系统注入消息。
+- 会话正文进入应用私有加密 RDB；缓存先绘制、后台增量同步，接近历史顶部时提前分页预取，列表使用稳定键和虚拟化渲染。
+- 设置采用垂直分类和统一二级页，主题/动效、DSH 设置、通知、桌面卡片、服务账户和关于各有独立状态与错误反馈。
+- 2×2 工作空间入口和 2×4 任务概览卡片，按待确认、运行中、失败、完成排序，可直达最相关会话。
 - 插件收集任务/审批事件，SQLite 保存通知队列。个人 Push Kit 构建支持分级推送；应用商店构建不含 Push Kit，可选在有任务运行时监测状态。
 
 目标 SDK 26，最低 API 23。`default` 与 `store` 两个产品分别构建自用 Push Kit 版和应用商店版；构建方式见[移动端说明](harmony/README.md)。

@@ -20,6 +20,7 @@ import { NativeActionMenu } from './NativeActionMenu';
 import { NativeNavigationState, nativeSessionMenu, nativeCanGoBack, nativeForkTitle } from '../services/NativeNavigation';
 import { NativeMenuItem } from '../services/NativeNavigation';
 import { NativeMetadataCache } from '../services/NativeMetadataCache';
+import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
 
 class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
 class NativeSessionInsertRequest {
@@ -33,22 +34,6 @@ class NativeSessionInsertRequest {
   }
 }
 
-class MessageSource implements IDataSource {
-  private rows: NativeMessage[] = [];
-  private listeners: DataChangeListener[] = [];
-  totalCount(): number { return this.rows.length; }
-  getData(index: number): NativeMessage { return this.rows[index]; }
-  registerDataChangeListener(listener: DataChangeListener): void { if (!this.listeners.includes(listener)) this.listeners.push(listener); }
-  unregisterDataChangeListener(listener: DataChangeListener): void { this.listeners = this.listeners.filter((item: DataChangeListener) => item !== listener); }
-  set(rows: NativeMessage[]): void {
-    const append = rows.length === this.rows.length + 1 && this.rows.every((item: NativeMessage, index: number) => item.id === rows[index].id);
-    this.rows = rows;
-    this.listeners.forEach((item: DataChangeListener) => {
-      if (append) item.onDataAdded(rows.length - 1); else item.onDataReloaded();
-    });
-  }
-}
-
 @Component
 export struct NativeWorkspace {
   client: NativeHarnessClient = new NativeHarnessClient('');
@@ -59,6 +44,7 @@ export struct NativeWorkspace {
   onSnapshot: (value: string) => Promise<void> = async (): Promise<void> => {};
   onLocalNotification: (sessionId: string, title: string, state: string) => Promise<void> = async (): Promise<void> => {};
   onCompatibility: () => void = (): void => {};
+  onDestination: (destination: string) => void = (): void => {};
   @StorageLink('nativeBackRevision') @Watch('backToSessions') private backRevision: number = 0;
   @StorageLink('nativeDark') private dark: boolean = false;
   @StorageLink('nativeHostSettingsRevision') @Watch('preferencesChanged') private preferencesRevision: number = 0;
@@ -68,6 +54,8 @@ export struct NativeWorkspace {
   @StorageLink('nativeAppActive') @Watch('activityChanged') private active: boolean = true;
   @StorageLink('nativeBackgroundMonitor') @Watch('activityChanged') private backgroundMonitor: boolean = false;
   @StorageLink('requestedSession') @Watch('openRequested') private requestedSession: string = '';
+  @StorageLink('nativeSafeTop') private safeTop: number = 0;
+  @StorageLink('nativeSafeBottom') private safeBottom: number = 0;
   @State @Watch('sessionsChanged') private sessions: NativeSession[] = [];
   @State private continued: NativeFrame[] = [];
   @State private interactions: NativeFrame[] = [];
@@ -93,20 +81,23 @@ export struct NativeWorkspace {
   @State @Watch('sessionsChanged') private workspaces: NativeWorkspaceSnapshot = new NativeWorkspaceSnapshot();
   @State @Watch('sessionsChanged') private workspaceId: string = '';
   @State @Watch('sessionsChanged') private query: string = '';
+  @State private searchOpen: boolean = false;
   @State private newWorkspaceId: string = '';
   @State private newCwd: string = '';
   @State private newPreset: string = '';
   @State private selected: string = '';
   @State private title: string = '工作空间';
   @State private draft: string = '';
-  @State @Watch('navigationChanged') private showSessions: boolean = true;
+  @State @Watch('navigationChanged') private showSessions: boolean = false;
   @State @Watch('navigationChanged') private wide: boolean = false;
+  @State private windowWidth: number = 0;
   @State private loading: boolean = true;
   @State private sending: boolean = false;
   @State private connectionPhase: string = 'idle';
   @State private running: boolean = false;
   @State private waiting: boolean = false;
   @State private uncertain: boolean = false;
+  private connectionNotified: boolean = false;
   @State private error: string = '';
   @State private paging: boolean = false;
   @State private hasMore: boolean = false;
@@ -119,8 +110,9 @@ export struct NativeWorkspace {
   @State private dropSessionId: string = '';
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
+  @State private footerCopiedId: string = '';
   private sessionSource: NativeListSource<NativeWorkspaceRow> = new NativeListSource<NativeWorkspaceRow>();
-  private source: MessageSource = new MessageSource();
+  private source: NativeListSource<NativeMessage> = new NativeListSource<NativeMessage>();
   private scroller: Scroller = new Scroller();
   private model: NativeSessionModel = new NativeSessionModel();
   private previousRows: NativeMessage[] = [];
@@ -131,6 +123,7 @@ export struct NativeWorkspace {
   private reconnectTimer: number = -1;
   private retries: number = 0;
   private widgetTimer: number = -1;
+  private widgetEventTimer: number = -1;
   private backgroundTimer: number = -1;
   private preloadTimer: number = -1;
   private backgroundActive: boolean = false;
@@ -140,6 +133,10 @@ export struct NativeWorkspace {
   private visibleRows: NativeMessage[] = [];
   private firstVisible: number = 0;
   private userHasScrolled: boolean = false;
+  private prefetchQueue: number = 0;
+  private prefetching: boolean = false;
+  private selectionGeneration: number = 0;
+  private cacheTimer: number = -1;
   private sessionRowRects: Map<string, number[]> = new Map<string, number[]>();
 
   private preferencesChanged(): void { this.steer = this.client.hostSettings.chat().busyEnter === 'steer'; this.renderTranscript(); }
@@ -147,7 +144,9 @@ export struct NativeWorkspace {
 
   private navigationChanged(): void {
     const state = new NativeNavigationState();
-    state.wide = this.wide; state.sessions = this.showSessions; state.picker = this.workspacePickerOpen;
+    state.wide = this.wide; state.drawerOpen = this.showSessions;
+    state.drawerPage = this.searchOpen ? 'search' : 'primary';
+    state.picker = this.workspacePickerOpen;
     state.create = this.newSessionOpen; state.tools = this.toolsOpen;
     state.menu = !!this.menuId || this.utilityOpen || this.modelPickerOpen;
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', nativeCanGoBack(state));
@@ -155,15 +154,18 @@ export struct NativeWorkspace {
 
   private sessionsChanged(): void {
     const visible = nativeWorkspaceRows(this.sessions, this.workspaces, this.workspaceId, this.query, this.client.models,
-      !this.showSessions || this.wide ? this.selected : '', this.collapsedGroups, this.manualOrder);
+      this.selected, this.collapsedGroups, this.manualOrder);
     this.visibleSessionCount = visible.filter((row: NativeWorkspaceRow) => !row.group).length;
-    this.sessionSource.set(visible);
+    this.sessionSource.set(visible, (row: NativeWorkspaceRow): string => row.key);
   }
   aboutToAppear(): void { this.mounted = true; this.reload(); }
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
     clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    clearTimeout(this.widgetEventTimer);
     clearTimeout(this.backgroundTimer); clearTimeout(this.preloadTimer);
+    clearTimeout(this.cacheTimer);
+    this.persistCache();
     this.stopBackground();
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', false);
   }
@@ -176,6 +178,21 @@ export struct NativeWorkspace {
       if (cached.workspaces) { this.workspaces = cached.workspaces; this.manualOrder = true; }
       this.loading = false;
       this.sessionsChanged();
+      // Paint the remembered conversation from the encrypted cache before the
+      // navigation refresh or live socket becomes available.
+      const cachedRequested = this.requestedSession ||
+        await NativeTranscriptCache.loadRoute(this.context, this.client.cacheKey()) ||
+        NativeMetadataCache.readLastSession(this.context, this.client.cacheKey());
+      if (cachedRequested && !this.selected) {
+        const available = this.sessions.some((item: NativeSession): boolean =>
+          item.id === cachedRequested && item.blank !== true && item.origin !== 'subagent' &&
+          !this.workspaces.archivedSessionIds.includes(item.id));
+        if (available) {
+          this.requestedSession = '';
+          this.select(cachedRequested);
+        }
+      }
+      if (!this.selected) this.animatePane(() => { this.showSessions = true; });
     } else this.loading = true;
     this.error = '';
     try {
@@ -201,20 +218,29 @@ export struct NativeWorkspace {
         nextWorkspaces.available ? nextWorkspaces : this.workspaces);
       this.preloadMetadata();
       this.updateWidget();
-      const requested = this.requestedSession || this.client.selectedId;
+      const requested = this.requestedSession || await NativeTranscriptCache.loadRoute(this.context, this.client.cacheKey()) ||
+        NativeMetadataCache.readLastSession(this.context, this.client.cacheKey()) || this.client.selectedId;
       if (requested) {
         this.requestedSession = '';
-        if (requested === this.selected) {
+        const available = value.items.some((item: NativeSession): boolean =>
+          item.id === requested && item.blank !== true && item.origin !== 'subagent' &&
+          !nextWorkspaces.archivedSessionIds.includes(item.id));
+        if (!available) NativeMetadataCache.forgetSession(this.context, this.client.cacheKey());
+        if (available && requested === this.selected) {
           const session = this.sessions.find((item: NativeSession) => item.id === requested);
           if (session) this.title = session.title.trim() || '未命名会话';
-          this.follow();
-        } else this.select(requested);
-      }
+          if (this.connectionPhase !== 'opening' && this.connectionPhase !== 'syncing' &&
+            this.connectionPhase !== 'live') this.follow();
+        } else if (available) this.select(requested);
+        else this.animatePane(() => { this.showSessions = true; });
+      } else this.animatePane(() => { this.showSessions = true; });
     } catch (error) {
       if (!this.sessions.length) this.handleError(error as Error);
+      if (this.sessions.length && !this.selected) this.animatePane(() => { this.showSessions = true; });
       if (!(error instanceof NativeHttpError && error.status === 401)) {
         this.connectionPhase = 'retrying';
-        if (!this.sessions.length) this.scheduleReconnect('');
+        if (!this.selected) this.animatePane(() => { this.showSessions = true; });
+        this.scheduleReconnect('');
       }
     }
     finally { if (this.mounted && generation === this.generation) this.loading = false; }
@@ -223,15 +249,28 @@ export struct NativeWorkspace {
     clearTimeout(this.preloadTimer);
     const ids = this.sessions.filter((session: NativeSession): boolean => session.blank !== true)
       .slice(0, 3).map((session: NativeSession): string => session.id);
+    const generation = this.generation;
     this.preloadTimer = setTimeout((): void => {
       const next = (index: number): void => {
         if (!this.mounted || index >= ids.length) return;
-        this.client.modelDirectory.load(ids[index]).catch(() => {}).finally((): void => {
-          if (this.mounted) next(index + 1);
+        const id = ids[index];
+        this.client.modelDirectory.load(id).catch(() => {}).finally((): void => {
+          if (!this.mounted || generation !== this.generation) return;
+          if (this.client.models.has(id)) { next(index + 1); return; }
+          NativeTranscriptCache.loadSession(this.context, this.client.cacheKey(), id)
+            .then((cached): void => {
+              if (!this.mounted || generation !== this.generation || !cached ||
+                !cached.messages.length || this.client.models.has(id)) return;
+              const model = new NativeSessionModel();
+              model.restore(cached);
+              this.client.models.set(id, model);
+            }).catch((): void => {}).finally((): void => {
+              if (this.mounted && generation === this.generation) next(index + 1);
+            });
         });
       };
       next(0);
-    }, 80);
+    }, 160);
   }
   private handleError(error: Error): void {
     if (!this.mounted) return;
@@ -240,7 +279,9 @@ export struct NativeWorkspace {
   }
   private activityChanged(): void {
     clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    clearTimeout(this.widgetEventTimer);
     if (!this.active || this.fallbackActive) {
+      this.persistCache();
       this.interactions = []; this.client.pause(); this.connectionPhase = 'paused';
       if (this.backgroundMonitor && !this.supportsPush && !this.fallbackActive) this.pollBackground(true);
       else this.stopBackground();
@@ -254,6 +295,17 @@ export struct NativeWorkspace {
     if (NativeExperience.reducedMotion()) action();
     else this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseInOut }, action);
   }
+  private mobileDrawerWidth(): number {
+    return Math.max(240, Math.min(380, this.windowWidth * 0.86, this.windowWidth - 48));
+  }
+  private openDrawer(): void {
+    this.animatePane(() => { this.showSessions = true; });
+    this.navigationChanged();
+  }
+  private closeDrawer(): void {
+    this.animatePane(() => { this.showSessions = false; });
+    this.navigationChanged();
+  }
   private backToSessions(): void {
     if (this.menuId || this.utilityOpen) { this.menuId = ''; this.utilityOpen = false; return; }
     if (this.modelPickerOpen) { this.modelPickerOpen = false; return; }
@@ -265,7 +317,7 @@ export struct NativeWorkspace {
       else this.toolsOpen = false;
       return;
     }
-    this.animatePane(() => { this.toolsOpen = false; this.showSessions = true; });
+    if (this.showSessions) this.closeDrawer();
     this.sessionsChanged();
     this.navigationChanged();
   }
@@ -311,7 +363,11 @@ export struct NativeWorkspace {
       if (!this.mounted) return;
       if (action === 'archive') {
         this.archivedUndo = id;
-        if (this.selected === id) { this.client.pause(); this.selected = ''; this.client.selectedId = ''; this.showSessions = true; }
+        if (this.selected === id) {
+          this.client.pause(); this.selected = ''; this.client.selectedId = ''; this.showSessions = true;
+          NativeMetadataCache.forgetSession(this.context, this.client.cacheKey());
+          NativeTranscriptCache.forgetSession(this.context, this.client.cacheKey(), id).catch(() => {});
+        }
       }
       await this.refreshSessionList();
     } catch (error) { this.handleError(error as Error); }
@@ -498,14 +554,32 @@ export struct NativeWorkspace {
   private async updateWidget(): Promise<void> {
     clearTimeout(this.widgetTimer);
     if (!this.mounted || !this.active || this.fallbackActive) return;
+    let delay = 60000;
     try {
       const value = await this.client.request('/pocket/api/overview');
+      try {
+        const overview = JSON.parse(value) as Record<string, Object>;
+        const running = Number(overview.running || 0);
+        const waiting = Number(overview.waiting || 0);
+        if (running + waiting > 0) delay = 30000;
+      } catch (_) {}
       if (this.mounted && this.active && !this.fallbackActive) {
         this.rememberBackgroundStates(value);
         await this.onSnapshot(value);
       }
     } catch (_) {}
-    finally { if (this.mounted && this.active && !this.fallbackActive) this.widgetTimer = setTimeout(() => { this.updateWidget(); }, 60000); }
+    finally {
+      if (this.mounted && this.active && !this.fallbackActive) {
+        this.widgetTimer = setTimeout(() => { this.updateWidget(); }, delay);
+      }
+    }
+  }
+  private scheduleWidgetUpdate(): void {
+    clearTimeout(this.widgetEventTimer);
+    this.widgetEventTimer = setTimeout((): void => {
+      this.widgetEventTimer = -1;
+      this.updateWidget();
+    }, 1200);
   }
   private rememberBackgroundStates(raw: string): void {
     try {
@@ -577,10 +651,37 @@ export struct NativeWorkspace {
   }
   private openRequested(): void {
     if (!this.requestedSession) return;
-    const id = this.requestedSession; this.requestedSession = ''; this.select(id);
+    const id = this.requestedSession; this.requestedSession = '';
+    this.openRequestedSession(id);
+  }
+  private async openRequestedSession(id: string): Promise<void> {
+    const valid = (session: NativeSession): boolean =>
+      session.id === id && session.blank !== true && session.origin !== 'subagent' &&
+      !this.workspaces.archivedSessionIds.includes(id);
+    if (!this.sessions.some(valid)) {
+      try { await this.refreshSessionList(); } catch (_) {}
+    }
+    if (!this.mounted || !this.sessions.some(valid)) {
+      if (this.mounted) {
+        this.workspaceError = '会话不可用';
+        this.animatePane(() => { this.showSessions = true; });
+        this.navigationChanged();
+      }
+      return;
+    }
+    this.select(id);
   }
   private select(id: string): void {
-    if (this.selected) this.client.models.set(this.selected, this.model);
+    if (!id) return;
+    const selection = ++this.selectionGeneration;
+    this.paging = false;
+    this.prefetchQueue = 0;
+    if (this.selected) {
+      const previousId = this.selected;
+      this.client.models.set(previousId, this.model);
+      NativeTranscriptCache.saveSession(this.context, this.client.cacheKey(), previousId, this.model)
+        .catch((): void => {});
+    }
     this.client.drafts.set(this.selected, this.draft);
     this.continued = []; this.interactions = []; this.toolsOpen = false; this.modelPickerOpen = false; this.client.selectedId = id;
     const session = this.sessions.find((item: NativeSession) => item.id === id);
@@ -588,7 +689,10 @@ export struct NativeWorkspace {
     this.draft = this.client.drafts.get(id) || '';
     this.images = this.client.images.get(id) || [];
     this.uncertain = this.client.uncertain.has(id);
+    this.connectionNotified = false;
     this.animatePane(() => { this.selected = id; this.showSessions = false; }); this.followTail = true;
+    NativeMetadataCache.rememberSession(this.context, this.client.cacheKey(), id);
+    NativeTranscriptCache.saveRoute(this.context, this.client.cacheKey(), id).catch(() => {});
     this.navigationChanged();
     this.model = this.client.models.get(id) || new NativeSessionModel();
     this.client.models.set(id, this.model);
@@ -596,19 +700,27 @@ export struct NativeWorkspace {
     this.renderTranscript();
     this.streamText = ''; this.streamReasoning = '';
     this.running = false; this.waiting = false; this.retries = 0;
-    this.connectionPhase = 'opening'; this.userHasScrolled = false;
-    this.follow();
+    this.connectionPhase = 'syncing'; this.userHasScrolled = false;
+    if (this.model.messages.length) {
+      this.paint();
+      this.follow();
+    } else {
+      this.restoreAndFollow(id, selection);
+    }
     this.client.modelDirectory.load(id).catch(() => {});
   }
-  private async hydrateHistory(id: string): Promise<void> {
-    if (!this.mounted || this.model.messages.length > 0) return;
+  private async restoreAndFollow(id: string, selection: number): Promise<void> {
     try {
-      const page = await this.client.page(id, Number.MAX_SAFE_INTEGER);
-      if (!this.mounted || this.selected !== id || this.model.messages.length > 0) return;
-      this.model.prepend(page);
-      this.paint();
-    } catch (_) {
-      // Keep the last in-memory snapshot visible while the live channel retries.
+      const cached = await NativeTranscriptCache.loadSession(this.context, this.client.cacheKey(), id);
+      if (!this.mounted || selection !== this.selectionGeneration || this.selected !== id) return;
+      if (cached !== null && cached.messages.length) {
+        this.model.restore(cached);
+        this.followTail = true;
+        this.paint();
+      }
+    } catch (_) {}
+    if (this.mounted && selection === this.selectionGeneration && this.selected === id) {
+      this.follow();
     }
   }
   private follow(): void {
@@ -636,12 +748,22 @@ export struct NativeWorkspace {
         // Preserve the server's close/reconnect lifecycle instead of throwing
         // through the WebSocket parser and misreporting an invalid JSON frame.
         console.error('DSH Harmony live stream returned an error frame');
-        this.connectionPhase = 'retrying';
+        this.notifyConnectionFailure(id);
+        this.reconnect(id);
         return;
       }
+      const wasActive = this.running || this.waiting;
       this.model.apply(frame);
+      if (frame.type === 'state' && wasActive !== (this.model.running || this.model.waiting)) {
+        this.scheduleWidgetUpdate();
+      }
+      this.scheduleCache();
       if (frame.type === 'snapshot') {
         this.connectionPhase = 'live'; this.error = ''; this.retries = 0;
+        this.connectionNotified = false;
+        // The live snapshot starts at 24 records. Three 60-record pages bring
+        // the normal working set above the 180-record preload floor.
+        setTimeout((): void => { this.queuePrefetch(3); }, 80);
       }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
     }, (reason: string): void => {
@@ -651,6 +773,7 @@ export struct NativeWorkspace {
   }
   private async reconnect(id: string): Promise<void> {
     if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
+    this.notifyConnectionFailure(id);
     this.connectionPhase = 'syncing';
     try {
       const state = await this.client.state();
@@ -664,6 +787,7 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.active || this.fallbackActive || (id && this.selected !== id)) return;
     clearTimeout(this.reconnectTimer);
     this.interactions = [];
+    this.notifyConnectionFailure(id);
     const exposeFailure = this.connectionPhase === 'live' || this.retries > 0;
     if (exposeFailure) this.connectionPhase = 'retrying';
     else this.connectionPhase = 'syncing';
@@ -671,6 +795,13 @@ export struct NativeWorkspace {
     this.retries++;
     const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.retries, 5)));
     this.reconnectTimer = setTimeout(() => { if (id) this.follow(); else this.reload(); }, delay);
+  }
+  private notifyConnectionFailure(id: string): void {
+    if (!id || this.connectionPhase !== 'live' || this.connectionNotified) return;
+    this.connectionNotified = true;
+    const title = this.sessions.find((item: NativeSession): boolean => item.id === id)?.title ||
+      this.title || 'DSH Harmony';
+    this.onLocalNotification(id, title, 'connection').catch(() => {});
   }
   private paint(): void {
     if (!this.mounted) return;
@@ -683,7 +814,18 @@ export struct NativeWorkspace {
     const rows = nativeTranscript(this.model.messages, this.model.running, this.model.streamTools, this.model.streamReasoning, this.model.streamText);
     const visible = nativePresentTranscript(rows, this.client.hostSettings.chat(), this.model.turnDisclosure, this.model.collapseThrough);
     this.openTurns = new Set<string>(visible.filter((row: NativeMessage) => row.role === 'process').map((row: NativeMessage) => row.turnKey));
-    this.visibleRows = visible; this.source.set(visible);
+    this.visibleRows = visible;
+    this.source.set(visible, (row: NativeMessage): string => row.id);
+  }
+  private copyFooter(text: string, id: string): void {
+    if (!text) return;
+    pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text))
+      .then((): void => {
+        this.footerCopiedId = id;
+        setTimeout((): void => {
+          if (this.footerCopiedId === id) this.footerCopiedId = '';
+        }, 1000);
+      }).catch((): void => {});
   }
   private toggleTurn(key: string): void {
     const next = !this.openTurns.has(key);
@@ -756,26 +898,85 @@ export struct NativeWorkspace {
     } catch (error) { this.handleError(error as Error); }
     finally { this.attaching = false; }
   }
-  private async older(): Promise<void> {
-    if (this.paging || !this.hasMore || this.model.historyBefore < 0) return;
-    this.paging = true;
-    this.followTail = false;
+  private queuePrefetch(pages: number): void {
+    this.prefetchQueue = Math.min(4, Math.max(this.prefetchQueue, pages));
+    this.pumpPrefetch();
+  }
+  private scheduleCache(): void {
+    clearTimeout(this.cacheTimer);
+    this.cacheTimer = setTimeout((): void => {
+      this.cacheTimer = -1;
+      this.persistCache();
+    }, 500);
+  }
+  private persistCache(): void {
+    const id = this.selected;
+    if (!id || !this.model.messages.length) return;
+    const scope = this.client.cacheKey();
+    NativeTranscriptCache.saveSession(this.context, scope, id, this.model)
+      .then((): void => {
+        const protectedSessions: string[] = Array.from(this.client.drafts.keys())
+          .concat(Array.from(this.client.uncertain.values()));
+        NativeTranscriptCache.trimToQuota(this.context, scope, id, protectedSessions).catch(() => {});
+      }).catch(() => {});
+  }
+  private async pumpPrefetch(): Promise<void> {
+    if (this.prefetching || this.prefetchQueue <= 0 || !this.hasMore || this.connectionPhase !== 'live') return;
+    const id = this.selected;
+    const generation = this.selectionGeneration;
+    this.prefetching = true;
     try {
-      const id = this.selected;
-      const page = await this.client.page(id, this.model.historyBefore, this.model.historyCut);
-      if (this.selected !== id || !this.mounted) return;
+      while (this.mounted && this.selected === id && this.selectionGeneration === generation &&
+        this.prefetchQueue > 0 && this.hasMore && this.connectionPhase === 'live') {
+        this.prefetchQueue--;
+        await this.older(true);
+        if (this.selected !== id || this.selectionGeneration !== generation) break;
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 32); });
+      }
+    } finally {
+      this.prefetching = false;
+      if (this.mounted && this.prefetchQueue > 0 && this.hasMore && this.connectionPhase === 'live') {
+        setTimeout((): void => { this.pumpPrefetch(); }, 120);
+      }
+    }
+  }
+  private async older(prefetch: boolean = false): Promise<void> {
+    if (this.paging || !this.hasMore || this.model.historyBefore < 0) return;
+    const id = this.selected;
+    const generation = this.selectionGeneration;
+    const scope = this.client.cacheKey();
+    const historyBefore = this.model.historyBefore;
+    const historyCut = this.model.historyCut;
+    this.paging = true;
+    if (!prefetch) this.followTail = false;
+    try {
+      const page = await this.client.page(id, historyBefore, historyCut);
+      if (this.selected !== id || this.selectionGeneration !== generation || !this.mounted) return;
       const offset = this.hasMore ? 1 : 0;
       let anchorIndex = Math.max(0, this.firstVisible - offset);
       while (anchorIndex < this.visibleRows.length - 1 && this.visibleRows[anchorIndex].role === 'turn-control') anchorIndex++;
       const anchor = this.visibleRows[anchorIndex]?.id || '';
-      const top = this.scroller.getItemRect(anchorIndex + offset).y;
+      let top = 0;
+      try {
+        top = this.scroller.getItemRect(anchorIndex + offset).y;
+      } catch (_) {
+        // LazyForEach can leave the anchor unmeasured during a fast fling.
+        // Prepend the page without forcing a scroll correction in that case.
+      }
       this.model.prepend(page); this.paint();
+      NativeTranscriptCache.saveSession(this.context, scope, id, this.model).catch(() => {});
       const next = this.visibleRows.findIndex((row: NativeMessage) => row.id === anchor);
-      if (next >= 0) setTimeout(() => { if (!this.mounted || this.selected !== id) return;
-        this.scroller.scrollToIndex(next + (this.hasMore ? 1 : 0), false, ScrollAlign.START); this.scroller.scrollBy(0, -top);
+      if (next >= 0 && top !== 0) setTimeout(() => { if (!this.mounted || this.selected !== id) return;
+        try {
+          this.scroller.scrollToIndex(next + (this.hasMore ? 1 : 0), false, ScrollAlign.START);
+          this.scroller.scrollBy(0, -top);
+        } catch (_) {}
       }, 0);
-    } catch (error) { this.handleError(error as Error); }
-    finally { this.paging = false; }
+    } catch (error) {
+      if (this.selected === id && this.selectionGeneration === generation) this.handleError(error as Error);
+    } finally {
+      if (this.selectionGeneration === generation) this.paging = false;
+    }
   }
 
   @Builder
@@ -798,7 +999,7 @@ export struct NativeWorkspace {
             onStateChange: (event): void => { if (!event.isVisible && this.menuId === item.id) this.menuId = ''; } })
       }
     }.padding({ left: 10, right: 4, top: 5, bottom: 5 }).width('100%').constraintSize({ minHeight: 44 }).borderRadius(10)
-      .backgroundColor((!this.showSessions || this.wide) && this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
+      .backgroundColor(this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
       .border({ width: this.dropSessionId === item.id ? 1 : 0,
         color: this.dropSessionId === item.id ? this.dark ? '#8AB4FF' : '#3964FE' : Color.Transparent })
       .opacity(this.dragSessionId === item.id ? 0.7 : 1)
@@ -815,33 +1016,79 @@ export struct NativeWorkspace {
 
   @Builder
   private sessionList() {
-    Column({ space: 8 }) {
-      Row() {
+    Column({ space: 6 }) {
+      Row({ space: 4 }) {
+        Text('DSH Harmony').fontSize(21).fontWeight(FontWeight.Bold).layoutWeight(1)
+          .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
         Button({ type: ButtonType.Normal }) {
-          Row({ space: 6 }) {
-            DSHIcon({ glyph: 'browse-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 16 })
-            Text(this.workspaces.items.find((item: NativeWorkspaceItem) => item.workspaceId === this.workspaceId)?.title || '全部工作区')
-              .fontSize(15).fontWeight(FontWeight.Medium).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-              .layoutWeight(1).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-            DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 12 }).rotate({ angle: -90 })
-          }.width('100%')
-        }.height(36).layoutWeight(1).padding({ left: 0, right: 6 }).backgroundColor(Color.Transparent)
+          DSHIcon({ glyph: 'search-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
+        }.width(40).height(40).borderRadius(12).backgroundColor(Color.Transparent)
+          .accessibilityText(this.searchOpen ? '关闭搜索' : '搜索工作区和会话')
+          .onClick(() => {
+            if (this.searchOpen) this.query = '';
+            this.searchOpen = !this.searchOpen;
+          })
+        if (!this.wide) {
+          Button({ type: ButtonType.Normal }) {
+            DSHIcon({ glyph: 'close-outline', glyphSize: 16, color: this.dark ? '#CFD3D6' : '#61666B' })
+          }.width(40).height(40).borderRadius(12).backgroundColor(Color.Transparent)
+            .accessibilityText('关闭侧边栏').onClick(() => { this.closeDrawer(); })
+        }
+      }.width('100%').height(52)
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: 9 }) {
+          DSHIcon({ glyph: 'new-chat-outline', glyphSize: 17, color: this.dark ? '#F9FAFB' : '#0F1115' })
+          Text('新会话').fontSize(14).fontWeight(FontWeight.Medium)
+          Blank()
+        }.width('100%').padding({ left: 10, right: 10 })
+      }.width('100%').height(42).borderRadius(12).backgroundColor(this.dark ? '#353638' : '#EBEEF2')
+        .fontColor(this.dark ? '#F9FAFB' : '#0F1115').enabled(!this.loading)
+        .onClick(() => { this.openNewSession(); })
+      Column({ space: 1 }) {
+        Row({ space: 10 }) {
+          DSHIcon({ glyph: 'code-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
+          Text('插件').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
+        }.width('100%').height(40).padding({ left: 10, right: 10 })
+          .onClick(() => { this.closeDrawer(); this.onDestination('plugins'); })
+        Row({ space: 10 }) {
+          DSHIcon({ glyph: 'plan-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
+          Text('自动化任务').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
+        }.width('100%').height(40).padding({ left: 10, right: 10 })
+          .onClick(() => { this.closeDrawer(); this.onDestination('automation'); })
+        Row({ space: 10 }) {
+          DSHIcon({ glyph: 'ellipsis-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
+          Text('更多').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
+        }.width('100%').height(40).padding({ left: 10, right: 10 })
+          .onClick(() => { this.closeDrawer(); this.onDestination('more'); })
+      }.width('100%')
+      if (this.searchOpen) {
+        TextInput({ text: this.query, placeholder: '搜索工作区和会话' }).height(36).fontSize(13).borderRadius(10)
+          .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
+          .backgroundColor(this.dark ? '#232324' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .onChange((value: string) => { this.query = value; })
+      }
+      Row({ space: 6 }) {
+        Text('工作区').fontSize(12).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#B5B8BD' : '#61666B')
+        Blank()
+        Button({ type: ButtonType.Normal }) {
+          Row({ space: 5 }) {
+            DSHIcon({ glyph: 'browse-outline', glyphSize: 14, color: this.dark ? '#93969B' : '#8A8D91' })
+            Text(this.workspaces.items.find((item: NativeWorkspaceItem) => item.workspaceId === this.workspaceId)?.title || '全部')
+              .fontSize(11).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width(88)
+              .fontColor(this.dark ? '#93969B' : '#8A8D91')
+          }
+        }.height(30).padding({ left: 8, right: 8 }).borderRadius(8).backgroundColor(Color.Transparent)
           .onClick(() => { this.workspacePickerOpen = true; })
         Button({ type: ButtonType.Normal }) {
-          DSHIcon({ glyph: 'new-chat-outline', color: this.dark ? '#F9FAFB' : '#0F1115' })
-        }.width(36).height(36).borderRadius(18)
-          .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          .accessibilityText('新建会话').enabled(!this.loading).onClick(() => { this.openNewSession(); })
-        Button({ type: ButtonType.Normal }) {
-          DSHIcon({ glyph: 'settings-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
-        }.width(36).height(36).borderRadius(18)
-          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-          .accessibilityText('应用设置').onClick(() => { this.onSettings(); })
-      }.width('100%')
-      TextInput({ text: this.query, placeholder: '搜索会话' }).height(34).fontSize(13).borderRadius(9)
-        .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
-        .backgroundColor(this.dark ? '#232324' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-        .onChange((value: string) => { this.query = value; })
+          DSHIcon({ glyph: 'plus-outline', glyphSize: 14, color: this.dark ? '#CFD3D6' : '#61666B' })
+        }.width(30).height(30).borderRadius(8).backgroundColor(Color.Transparent)
+          .accessibilityText('新建会话或管理工作区')
+          .onClick(() => {
+            if (this.workspaceId) this.createQuickSession(this.workspaceId);
+            else if (this.workspaces.items.length) this.createQuickSession(this.workspaces.items[0].workspaceId);
+            else this.openNewSession();
+          })
+      }.width('100%').padding({ left: 4, top: 4 })
       List({ space: 2 }) {
         LazyForEach(this.sessionSource, (entry: NativeWorkspaceRow) => {
           ListItem() {
@@ -853,13 +1100,12 @@ export struct NativeWorkspace {
                 Text(String(entry.count)).fontSize(11).fontColor(this.dark ? '#93969B' : '#8A8D91')
                 if (entry.workspaceId !== 'other') {
                   Button({ type: ButtonType.Normal }) {
-                    DSHIcon({ glyph: 'plus-outline', glyphSize: 13,
-                      color: this.dark ? '#CFD3D6' : '#61666B' })
+                    DSHIcon({ glyph: 'plus-outline', glyphSize: 13, color: this.dark ? '#CFD3D6' : '#61666B' })
                   }.width(30).height(28).borderRadius(8).backgroundColor(Color.Transparent)
                     .accessibilityText('在工作区新建会话')
                     .onClick(() => { this.createQuickSession(entry.workspaceId); })
                 }
-              }.width('100%').padding({ left: 6, right: 10, top: 10, bottom: 6 })
+              }.width('100%').padding({ left: 6, right: 10, top: 9, bottom: 5 })
             } else { this.sessionRow(entry.session) }
           }.onClick(() => {
             if (!entry.group) this.select(entry.session.id);
@@ -869,7 +1115,7 @@ export struct NativeWorkspace {
             }
           }).accessibilityText(entry.group ? entry.title : entry.session.title + (entry.session.running ? '，运行中' : ''))
         }, (entry: NativeWorkspaceRow) => entry.key)
-      }.layoutWeight(1).width('100%')
+      }.layoutWeight(1).width('100%').cachedCount(8)
       if (this.workspaceError) {
         Row() {
           Text(this.workspaceError).fontSize(12).layoutWeight(1).fontColor(this.dark ? '#FF9393' : '#C53737')
@@ -877,13 +1123,24 @@ export struct NativeWorkspace {
         }.width('100%')
       }
       if (this.connectionPhase === 'retrying' && !this.selected) {
-          Text('连接中断，正在尝试重连').fontSize(11).padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        Text('连接中断，正在尝试重连').fontSize(11).padding({ left: 10, right: 10, top: 6, bottom: 6 })
           .width('100%').borderRadius(9).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
       }
       if (this.loading) { Text('正在连接…').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
       if (!this.loading && !this.visibleSessionCount) { Text('新建会话，开始你的任务').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
-    }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).height('100%').width(this.wide ? 240 : '100%')
+      Divider().strokeWidth(0.5).color(this.dark ? '#353638' : '#E8E9EC')
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: 10 }) {
+          DSHIcon({ glyph: 'settings-outline', glyphSize: 17, color: this.dark ? '#CFD3D6' : '#61666B' })
+          Text('设置').fontSize(14).layoutWeight(1).fontColor(this.dark ? '#F1F1F2' : '#25262A')
+        }.width('100%').padding({ left: 10, right: 10 })
+      }.width('100%').height(44).borderRadius(10).backgroundColor(Color.Transparent)
+        .accessibilityText('应用设置').onClick(() => {
+          this.closeDrawer();
+          this.onSettings();
+        })
+    }.padding({ left: 12, right: 12, top: this.safeTop + 8, bottom: this.safeBottom + 8 }).height('100%').width('100%')
       .backgroundColor(this.dark ? '#151517' : '#FFFFFF')
       .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.992, y: 0.992 })))
   }
@@ -897,8 +1154,8 @@ export struct NativeWorkspace {
             DSHIcon({ glyph: 'panel-left-outline', color: this.dark ? '#F9FAFB' : '#0F1115' })
           }.width(36).height(36).borderRadius(10)
             .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-            .accessibilityText('会话列表')
-            .onClick(() => { this.backToSessions(); })
+            .accessibilityText('打开侧边栏')
+            .onClick(() => { this.openDrawer(); })
         }
         Text(this.title).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
           .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
@@ -953,8 +1210,22 @@ export struct NativeWorkspace {
                 }
               }.height(30).padding(0).backgroundColor(Color.Transparent).enabled(message.foldable).onClick(() => { this.toggleTurn(message.turnKey); })
             } else if (message.role === 'turn-footer') {
-              Text(message.label + (message.text ? ' · ' + message.text : '')).fontSize(11)
-                .fontColor(message.outcome === 'error' ? '#D55E5E' : this.dark ? '#93969B' : '#8A8D91')
+              Row({ space: 8 }) {
+                Text(message.label + (message.text ? ' · ' + message.text : '')).fontSize(11).layoutWeight(1)
+                  .fontColor(message.footerOutcome === 'failed' ? '#D55E5E' : this.dark ? '#93969B' : '#8A8D91')
+                if (message.footerCopyText) {
+                  Button({ type: ButtonType.Normal }) {
+                    DSHIcon({ glyph: this.footerCopiedId === message.footerCopyMessageId ?
+                      'check-outline' : 'copy-outline', glyphSize: 13,
+                      color: this.dark ? '#93969B' : '#8A8D91' })
+                  }.width(28).height(28).borderRadius(9).backgroundColor(Color.Transparent)
+                    .accessibilityText(this.footerCopiedId === message.footerCopyMessageId ?
+                      '答复已复制' : '复制最终答复')
+                    .onClick((): void => {
+                      this.copyFooter(message.footerCopyText, message.footerCopyMessageId);
+                    })
+                }
+              }.width('100%').constraintSize({ minHeight: 28 })
             } else { Row() {
               if (message.role === 'user') { Blank().layoutWeight(1) }
               NativeMessageView({ client: this.client, sessionId: this.selected, message: message, onCompatibility: this.onCompatibility })
@@ -964,7 +1235,10 @@ export struct NativeWorkspace {
       }.layoutWeight(1).width('100%').cachedCount(6)
         .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
         .onReachStart(() => { if (this.userHasScrolled && this.hasMore && this.connectionPhase === 'live') this.older(); })
-        .onScrollIndex((first: number) => { this.firstVisible = first; })
+        .onScrollIndex((first: number) => {
+          this.firstVisible = first;
+          if (this.userHasScrolled && first <= 20 && this.hasMore && this.connectionPhase === 'live') this.queuePrefetch(1);
+        })
         .onScrollFrameBegin((offset: number, state: ScrollState) => { if (state === ScrollState.Scroll) this.userHasScrolled = true; return { offsetRemain: offset }; })
         .onScroll(() => { this.followTail = this.scroller.isAtEnd(); })
       ForEach(this.interactions.concat(this.continued), (frame: NativeFrame) => {
@@ -1056,58 +1330,139 @@ export struct NativeWorkspace {
       }.padding(8).width('100%').borderRadius(16)
         .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
         .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
-    }.padding({ left: 12, right: 12, top: 4, bottom: 8 }).height('100%').layoutWeight(1)
+    }.padding({ left: 12, right: 12, top: this.safeTop + 4, bottom: this.safeBottom + 8 })
+      .height('100%').layoutWeight(1)
       .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.992, y: 0.992 })))
   }
 
-  build() {
-    Stack() {
+  @Builder
+  private mainSurface() {
     Column() {
-      Row() {
-        if (this.workspacePickerOpen) {
-          NativeWorkspacePicker({ client: this.client, snapshot: this.workspaces, sessions: this.sessions, selectedId: this.workspaceId,
-            onClose: (): void => { this.workspacePickerOpen = false; },
-            onSelect: (id: string): void => { this.workspaceId = id; this.workspacePickerOpen = false; this.showSessions = true; },
-            onChanged: (value: NativeWorkspaceSnapshot): void => { this.workspaces = value; } })
-        } else if (this.newSessionOpen) { this.newSessionForm() }
-        else {
-        if (this.wide || this.showSessions) { this.sessionList() }
-        if (!this.showSessions || this.wide) {
-          if (this.selected) {
-            this.conversation()
+      if (this.selected) {
+        this.conversation()
+      } else {
+        Column({ space: 14 }) {
+          Text(this.loading ? '正在恢复会话…' : '开始你的任务').fontSize(22).fontWeight(FontWeight.Medium)
+            .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          if (!this.loading) {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 8 }) {
+                DSHIcon({ glyph: 'new-chat-outline', glyphSize: 17, color: this.dark ? '#151517' : '#FFFFFF' })
+                Text('新建会话').fontSize(14)
+              }
+            }.height(42).padding({ left: 16, right: 16 }).borderRadius(12)
+              .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115')
+              .fontColor(this.dark ? '#151517' : '#FFFFFF').onClick(() => { this.openNewSession(); })
+          } else {
+            LoadingProgress().width(22).height(22).color(this.dark ? '#F9FAFB' : '#0F1115')
           }
-          else {
-            Column({ space: 16 }) {
-              Text('开始你的任务').fontSize(24).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-              Text('选择一个会话，或新建会话连接 Harness。').fontSize(14).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              Button('新建会话', { type: ButtonType.Normal }).height(44).borderRadius(12).fontSize(14)
-                .backgroundColor(this.dark ? '#F9FAFB' : '#0F1115').fontColor(this.dark ? '#151517' : '#FFFFFF')
-                .enabled(!this.loading).onClick(() => { this.openNewSession(); })
-            }.layoutWeight(1).height('100%').justifyContent(FlexAlign.Center).padding(24)
-          }
-        }
-        }
-      }.width('100%').layoutWeight(1)
+        }.width('100%').height('100%').justifyContent(FlexAlign.Center).padding(24)
+      }
       if (this.archivedUndo) {
         Row() {
           Text('已归档会话').fontSize(12).layoutWeight(1)
           Button('撤销', { type: ButtonType.Normal }).height(36).fontSize(12).backgroundColor(Color.Transparent)
-            .onClick(() => { const id = this.archivedUndo; this.archivedUndo = ''; this.client.operation(JSON.stringify({ operation: 'unarchive', sessionId: id })).then(() => { this.refreshSessionList(); }).catch((error: Error) => this.handleError(error)); })
-          Button({ type: ButtonType.Normal }) { DSHIcon({ glyph: 'close-outline', glyphSize: 12, color: this.dark ? '#93969B' : '#8A8D91' }) }
-            .height(36).width(32).backgroundColor(Color.Transparent).onClick(() => { this.archivedUndo = ''; })
+            .onClick(() => {
+              const id = this.archivedUndo; this.archivedUndo = '';
+              this.client.operation(JSON.stringify({ operation: 'unarchive', sessionId: id }))
+                .then(() => { this.refreshSessionList(); }).catch((error: Error) => this.handleError(error));
+            })
+          Button({ type: ButtonType.Normal }) {
+            DSHIcon({ glyph: 'close-outline', glyphSize: 12, color: this.dark ? '#93969B' : '#8A8D91' })
+          }.height(36).width(32).backgroundColor(Color.Transparent).onClick(() => { this.archivedUndo = ''; })
         }.padding({ left: 12, right: 8 }).width('100%').backgroundColor(this.dark ? '#232324' : '#F5F6F7')
       }
-      if (this.error) { Text(this.error).fontSize(12).padding(12).fontColor(this.dark ? '#FF9393' : '#C53030') }
+      if (this.error) {
+        Text(this.error).fontSize(12).padding(12).width('100%').fontColor(this.dark ? '#FF9393' : '#C53030')
+      }
     }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
-      .visibility(this.toolsOpen ? Visibility.Hidden : Visibility.Visible)
-      .onAreaChange((_old: Area, area: Area) => { this.wide = Number(area.width) >= 760; this.groupHeight = Math.min(400, Number(area.height) / 2); this.navigationChanged(); })
-    if (this.toolsOpen) {
-      NativeSessionTools({ client: this.client, sessionId: this.toolsId,
-        sessionTitle: this.sessions.find((item: NativeSession) => item.id === this.toolsId)?.title || this.title,
-        onClose: (): void => { this.toolsOpen = false; },
-        onRename: (title: string): void => { if (this.toolsId === this.selected) this.title = title; this.toolsOpen = false; this.refreshSessionList(); } })
-    }
+  }
+
+  @Builder
+  private mobileShell() {
+    Stack() {
+      Column() { this.mainSurface() }.width('100%').height('100%')
+      if (this.showSessions) {
+        Row() {
+          Column() { this.sessionList() }.width(this.mobileDrawerWidth()).height('100%')
+            .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
+              .onActionEnd((event: GestureEvent): void => {
+                if (event.offsetX < -48) this.closeDrawer();
+              }))
+            .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
+              TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: -28 })))
+          Column().layoutWeight(1).height('100%')
+            .backgroundColor(this.dark ? '#66000000' : '#42000000')
+            .onClick(() => { this.closeDrawer(); })
+            .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY : TransitionEffect.OPACITY)
+        }.width('100%').height('100%')
+      } else {
+        Row().position({ x: 0, y: 0 }).width(18).height('100%').backgroundColor(Color.Transparent)
+          .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 8 })
+            .onActionEnd((event: GestureEvent): void => {
+              if (event.offsetX > 44) this.openDrawer();
+            }))
+      }
     }.width('100%').height('100%')
+  }
+
+  build() {
+    Stack() {
+      if (this.wide) {
+        SideBarContainer(SideBarContainerType.Embed) {
+          Column() { this.sessionList() }.width('100%').height('100%')
+          Column() { this.mainSurface() }.width('100%').height('100%')
+        }
+        .showSideBar(true)
+        .showControlButton(false)
+        .autoHide(false)
+        .sideBarPosition(SideBarPosition.Start)
+        .sideBarWidth(248)
+        .minSideBarWidth(248)
+        .maxSideBarWidth(248)
+        .divider(null)
+        .width('100%').height('100%')
+        .onAreaChange((_old: Area, area: Area) => {
+          this.windowWidth = Number(area.width);
+          this.wide = this.windowWidth >= 760;
+          this.groupHeight = Math.min(400, Number(area.height) / 2);
+          this.navigationChanged();
+        })
+      } else {
+        Column() { this.mobileShell() }.width('100%').height('100%')
+          .onAreaChange((_old: Area, area: Area) => {
+            this.windowWidth = Number(area.width);
+            this.wide = this.windowWidth >= 760;
+            this.groupHeight = Math.min(400, Number(area.height) / 2);
+            this.navigationChanged();
+          })
+      }
+
+      if (this.workspacePickerOpen) {
+        Column() {
+          NativeWorkspacePicker({ client: this.client, snapshot: this.workspaces, sessions: this.sessions,
+            selectedId: this.workspaceId,
+            onClose: (): void => { this.workspacePickerOpen = false; },
+            onSelect: (id: string): void => {
+              this.workspaceId = id; this.workspacePickerOpen = false; this.showSessions = true;
+            },
+            onChanged: (value: NativeWorkspaceSnapshot): void => { this.workspaces = value; } })
+        }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+      }
+      if (this.newSessionOpen) {
+        Column() { this.newSessionForm() }.width('100%').height('100%')
+          .backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+      }
+      if (this.toolsOpen) {
+        NativeSessionTools({ client: this.client, sessionId: this.toolsId,
+          sessionTitle: this.sessions.find((item: NativeSession) => item.id === this.toolsId)?.title || this.title,
+          onClose: (): void => { this.toolsOpen = false; },
+          onRename: (title: string): void => {
+            if (this.toolsId === this.selected) this.title = title;
+            this.toolsOpen = false; this.refreshSessionList();
+          } })
+      }
+    }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
   }
   @Builder
   private newSessionForm() {

@@ -43,12 +43,12 @@ export class WindowAppearance {
 
   static applyBars(dark: boolean): void {
     if (WindowAppearance.mainWindow === null) return;
-    const surface = dark ? '#151517' : '#FFFFFF';
     WindowAppearance.mainWindow.setWindowSystemBarProperties({
-      // Keep both system bars visible, but paint their inset areas with the
-      // page surface so the gesture handle doesn't sit in a contrasting strip.
-      statusBarColor: surface,
-      navigationBarColor: surface,
+      // The layout owns the pixels behind both bars. A transparent bar lets the
+      // active native page or ArkWeb surface carry its own light/dark material
+      // through the gesture area instead of introducing a fixed color strip.
+      statusBarColor: '#00000000',
+      navigationBarColor: '#00000000',
       statusBarContentColor: dark ? '#FFFFFF' : '#000000',
       navigationBarContentColor: dark ? '#FFFFFF' : '#000000'
     }).catch(() => {});

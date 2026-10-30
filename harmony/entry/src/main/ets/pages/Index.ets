@@ -14,6 +14,8 @@ import { NativeSettings } from '../components/NativeSettings';
 import { NativeExperience } from '../services/NativeExperience';
 import { PushKitAdapter } from 'entry/PushKitAdapter';
 import { NativeMetadataCache } from '../services/NativeMetadataCache';
+import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
+import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 
 @Entry
 @Component
@@ -30,6 +32,7 @@ struct Index {
   @StorageLink('nativeAuthRevision') @Watch('authenticated') private authRevision: number = 0;
   @State private authSurface: boolean = false;
   @State private compatibilitySurface: boolean = false;
+  @State private compatibilityDestination: string = '';
   @State @Watch('settingsChanged') private nativeSettings: boolean = false;
   @State private settingsCached: boolean = false;
   @State private connectionManager: boolean = false;
@@ -206,9 +209,20 @@ struct Index {
     return await this.bridge.performNative(command, value);
   }
   private async resetConnectionState(): Promise<void> {
-    if (this.origin) NativeMetadataCache.clear(this.context, this.nativeClient.cacheKey());
+    if (this.origin) {
+      const scope = this.nativeClient.cacheKey();
+      NativeMetadataCache.clear(this.context, scope);
+      try { await NativeTranscriptCache.clearScope(this.context, scope); } catch (_) {}
+      try { await NativeAttachmentCache.clearScope(this.context, scope); } catch (_) {}
+    }
     WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.images.clear(); this.nativeClient.uncertain.clear();
+    AppStorage.setOrCreate<boolean>('nativeBackgroundMonitor', false);
+    try {
+      const notices = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
+      notices.clearSync();
+      await notices.flush();
+    } catch (_) {}
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);
     this.nativeSettings = false; this.settingsCached = false; this.connectionManager = false; this.compatibilitySurface = false;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
@@ -232,18 +246,21 @@ struct Index {
       await this.resetConnectionState();
     } finally { this.busy = false; }
   }
-  private compatibility(): void {
+  private compatibility(destination: string = ''): void {
+    this.compatibilityDestination = destination;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', true);
     this.compatibilitySurface = true;
   }
   private closeCompatibility(): void {
     this.compatibilitySurface = false;
+    this.compatibilityDestination = '';
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
     this.applyNativeTheme();
   }
   @Builder
   private compatibilitySheet() {
     NativeCompatibilitySurface({ origin: this.origin, sessionId: this.nativeClient.selectedId,
+      destination: this.compatibilityDestination, presentation: this.presentation,
       onClose: (): void => { this.closeCompatibility(); } })
   }
   @Builder
@@ -259,6 +276,11 @@ struct Index {
   private settingsChanged(): void {
     if (!this.nativeSettings) AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
     this.applyNativeTheme();
+  }
+  private changeSettingsPage(page: string): void {
+    const update = (): void => { AppStorage.setOrCreate<string>('nativeSettingsPage', page); };
+    if (NativeExperience.reducedMotion()) update();
+    else this.getUIContext().animateTo({ duration: 210, curve: Curve.EaseOut }, update);
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
@@ -280,16 +302,15 @@ struct Index {
         .width('100%').height(48).borderRadius(12).fontSize(14)
         .backgroundColor(this.nativeDark ? '#353638' : '#F5F6F7').fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
         .onClick(() => { this.selectMode('native').catch(() => { this.error = '切换失败，请重试'; }); })
-      Text('切换前请保存未发送的内容。')
-        .fontSize(12).lineHeight(20).fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
     }.padding(24).width('100%').alignItems(HorizontalAlign.Start)
   }
 
   onBackPress(): boolean {
     if (!this.ready) return false;
+    if (this.modePicker) { this.modePicker = false; return true; }
     if (this.nativeSettings) {
       if ((AppStorage.get<string>('nativeSettingsPage') || 'root') !== 'root') {
-        AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
+        this.changeSettingsPage('root');
       } else this.nativeSettings = false;
       return true;
     }
@@ -341,7 +362,8 @@ struct Index {
             onLocalNotification: async (sessionId: string, title: string, state: string): Promise<void> => {
               await this.invokeNative('publishLocalNotification', JSON.stringify({ sessionId, title, state }));
             },
-            onCompatibility: (): void => { this.compatibility(); } })
+            onCompatibility: (): void => { this.compatibility(); },
+            onDestination: (destination: string): void => { this.compatibility(destination); } })
         } else {
           if (this.progress < 100) { Progress({ value: this.progress, total: 100 }).width('100%').color(this.nativeDark ? '#5686FE' : '#4176E6').height(2) }
           Web({ src: this.origin + '/pocket/?mode=' + this.mode, controller: this.controller })

@@ -1,14 +1,16 @@
 /** Navigation and menu order are kept outside ArkUI so Back and layout share one source. */
 export class NativeNavigationState {
   wide: boolean = false;
-  sessions: boolean = true;
+  drawerOpen: boolean = false;
+  drawerPage: string = 'primary';
   picker: boolean = false;
   create: boolean = false;
   tools: boolean = false;
   menu: boolean = false;
 }
 export function nativeCanGoBack(state: NativeNavigationState): boolean {
-  return state.picker || state.create || state.tools || state.menu || (!state.wide && !state.sessions);
+  return state.drawerOpen === true || state.picker === true || state.create === true ||
+    state.tools === true || state.menu === true;
 }
 export class NativeMenuItem {
   id: string = '';

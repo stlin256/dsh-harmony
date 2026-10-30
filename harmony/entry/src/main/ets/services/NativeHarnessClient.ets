@@ -65,6 +65,7 @@ export class NativeHarnessClient {
   private stateRead: Promise<GatewayState> | null = null;
   private sessionRead: Promise<NativeSessionList> | null = null;
   private workspaceRead: Promise<NativeWorkspaceSnapshot> | null = null;
+  private pageReads: Map<string, Promise<NativeFrame>> = new Map<string, Promise<NativeFrame>>();
   private sessionCwds: Map<string, string> = new Map<string, string>();
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
@@ -187,8 +188,15 @@ export class NativeHarnessClient {
     return result.id;
   }
   async page(id: string, before: number, throughSeq: number = -1): Promise<NativeFrame> {
-    return JSON.parse(await this.request('/pocket/api/native/page', http.RequestMethod.POST,
-      JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))) as NativeFrame;
+    const key = id + ':' + before + ':' + throughSeq;
+    const existing = this.pageReads.get(key);
+    if (existing) return existing;
+    const pending = this.request('/pocket/api/native/page', http.RequestMethod.POST,
+      JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))
+      .then((value: string): NativeFrame => JSON.parse(value) as NativeFrame)
+      .finally((): void => { this.pageReads.delete(key); });
+    this.pageReads.set(key, pending);
+    return pending;
   }
   async file(id: string, path: string, offset: number = 1, limit: number = 240): Promise<NativeFilePage> {
     return JSON.parse(await this.request('/pocket/api/native/file', http.RequestMethod.POST,
@@ -300,7 +308,7 @@ export class NativeHarnessClient {
   clearLocalState(): void {
     this.modelDirectory.clear();
     this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear();
-    this.sessionCwds.clear(); this.selectedId = '';
+    this.pageReads.clear(); this.sessionCwds.clear(); this.selectedId = '';
   }
   async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');

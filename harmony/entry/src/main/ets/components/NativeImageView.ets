@@ -1,7 +1,9 @@
 import { image } from '@kit.ImageKit';
+import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeImageAttachment } from '../services/NativeSessionModel';
+import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 import { DSHIcon } from './DSHIcon';
 import { NativeExperience } from '../services/NativeExperience';
 
@@ -24,6 +26,7 @@ export struct NativeImageView {
   @State private previewScale: number = 1;
   private mounted: boolean = false;
   private source: image.ImageSource | null = null;
+  private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
   aboutToAppear(): void { this.mounted = true; this.load(); }
   aboutToDisappear(): void {
     this.mounted = false; this.fullBitmap?.release(); this.bitmap?.release(); this.source?.release();
@@ -33,10 +36,17 @@ export struct NativeImageView {
     if (this.loading) return;
     this.loading = true; this.error = '';
     try {
-      const response = JSON.parse(await this.client.operation(JSON.stringify({ operation: 'attachment',
-        sessionId: this.sessionId, attachment: this.attachment }))) as AttachmentResult;
+      let bytes = await NativeAttachmentCache.load(this.context, this.client.cacheKey(),
+        this.sessionId, this.attachment);
+      if (!bytes) {
+        const response = JSON.parse(await this.client.operation(JSON.stringify({ operation: 'attachment',
+          sessionId: this.sessionId, attachment: this.attachment }))) as AttachmentResult;
+        if (!this.mounted) return;
+        bytes = new util.Base64Helper().decodeSync(response.data);
+        await NativeAttachmentCache.save(this.context, this.client.cacheKey(),
+          this.sessionId, this.attachment, bytes).catch(() => {});
+      }
       if (!this.mounted) return;
-      const bytes = new util.Base64Helper().decodeSync(response.data);
       const source = image.createImageSource(bytes.buffer as ArrayBuffer);
       const options: image.DecodingOptions = { desiredSize: { width: Math.min(960, this.attachment.width || 960),
         height: Math.min(960, this.attachment.height || 960) } };

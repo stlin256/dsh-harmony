@@ -29,6 +29,9 @@ export class NativeMessage {
   reasoning: string = '';
   blocks: NativeTextBlock[] = [];
   detail: string = '';
+  footerCopyText: string = '';
+  footerCopyMessageId: string = '';
+  footerOutcome: string = '';
 }
 export class NativeToolUpdate {
   callId: string = ''; name: string = ''; argsDelta: string = ''; arguments: string = ''; replace: boolean = false;
@@ -179,8 +182,34 @@ export class NativeFrame {
   waiting: boolean = false;
 }
 export class NativeJournalEntry { seq: number = 0; raw: string = ''; }
+export class NativeCacheFlag {
+  key: string = '';
+  value: boolean = false;
+}
 
-/** One in-memory session projection. No transcripts or drafts are written to disk. */
+export class NativeSessionCacheRecord {
+  version: number = 1;
+  journal: NativeJournalEntry[] = [];
+  expandedTurns: string[] = [];
+  disclosures: NativeCacheFlag[] = [];
+  turnDisclosure: NativeCacheFlag[] = [];
+  streamTools: NativeMessage[] = [];
+  messages: NativeMessage[] = [];
+  replacements: NativeReplacement[] = [];
+  historyCut: number = -1;
+  historyBefore: number = -1;
+  hasMore: boolean = false;
+  running: boolean = false;
+  waiting: boolean = false;
+  streamText: string = '';
+  streamReasoning: string = '';
+  attemptId: string = '';
+  nextIndex: number = 0;
+  cursor: number = -1;
+  collapseThrough: number = -1;
+}
+
+/** One session projection. The workspace persists its record in encrypted RDB. */
 export class NativeSessionModel {
   readonly journal: Map<number, string> = new Map<number, string>();
   readonly disclosures: Map<string, boolean> = new Map<string, boolean>();
@@ -201,6 +230,82 @@ export class NativeSessionModel {
   private nextIndex: number = 0;
   private cursor: number = -1;
   private replacements: NativeReplacement[] = [];
+
+  capture(): NativeSessionCacheRecord {
+    const value = new NativeSessionCacheRecord();
+    this.journal.forEach((raw: string, seq: number): void => {
+      const entry = new NativeJournalEntry();
+      entry.seq = seq;
+      entry.raw = raw;
+      value.journal.push(entry);
+    });
+    value.expandedTurns = Array.from(this.expandedTurns);
+    this.disclosures.forEach((open: boolean, key: string): void => {
+      const flag = new NativeCacheFlag();
+      flag.key = key;
+      flag.value = open;
+      value.disclosures.push(flag);
+    });
+    this.turnDisclosure.forEach((open: boolean, key: string): void => {
+      const flag = new NativeCacheFlag();
+      flag.key = key;
+      flag.value = open;
+      value.turnDisclosure.push(flag);
+    });
+    value.streamTools = this.streamTools;
+    value.messages = this.messages;
+    value.replacements = this.replacements;
+    value.historyCut = this.historyCut;
+    value.historyBefore = this.historyBefore;
+    value.hasMore = this.hasMore;
+    value.running = this.running;
+    value.waiting = this.waiting;
+    value.streamText = this.streamText;
+    value.streamReasoning = this.streamReasoning;
+    value.attemptId = this.attemptId;
+    value.nextIndex = this.nextIndex;
+    value.cursor = this.cursor;
+    value.collapseThrough = this.collapseThrough;
+    return value;
+  }
+
+  restore(value: NativeSessionCacheRecord): void {
+    if (value.version !== 1 || !Array.isArray(value.messages)) {
+      throw new Error('Unsupported transcript cache');
+    }
+    this.journal.clear();
+    (value.journal || []).forEach((entry: NativeJournalEntry): void => {
+      if (Number.isSafeInteger(entry.seq) && typeof entry.raw === 'string') {
+        this.journal.set(entry.seq, entry.raw);
+      }
+    });
+    this.expandedTurns.clear();
+    (value.expandedTurns || []).forEach((turn: string): void => {
+      if (turn) this.expandedTurns.add(turn);
+    });
+    this.disclosures.clear();
+    (value.disclosures || []).forEach((flag: NativeCacheFlag): void => {
+      if (flag && typeof flag.key === 'string' && flag.key) this.disclosures.set(flag.key, flag.value === true);
+    });
+    this.turnDisclosure.clear();
+    (value.turnDisclosure || []).forEach((flag: NativeCacheFlag): void => {
+      if (flag && typeof flag.key === 'string' && flag.key) this.turnDisclosure.set(flag.key, flag.value === true);
+    });
+    this.streamTools = Array.isArray(value.streamTools) ? value.streamTools : [];
+    this.messages = value.messages;
+    this.replacements = Array.isArray(value.replacements) ? value.replacements : [];
+    this.historyCut = Number.isFinite(value.historyCut) ? value.historyCut : -1;
+    this.historyBefore = Number.isFinite(value.historyBefore) ? value.historyBefore : -1;
+    this.hasMore = value.hasMore === true;
+    this.running = value.running === true;
+    this.waiting = value.waiting === true;
+    this.streamText = typeof value.streamText === 'string' ? value.streamText : '';
+    this.streamReasoning = typeof value.streamReasoning === 'string' ? value.streamReasoning : '';
+    this.attemptId = typeof value.attemptId === 'string' ? value.attemptId : '';
+    this.nextIndex = Number.isSafeInteger(value.nextIndex) ? value.nextIndex : 0;
+    this.cursor = Number.isSafeInteger(value.cursor) ? value.cursor : -1;
+    this.collapseThrough = Number.isSafeInteger(value.collapseThrough) ? value.collapseThrough : -1;
+  }
 
   private remember(ranges: NativeReplacement[]): void {
     ranges.forEach((range: NativeReplacement) => {
@@ -290,4 +395,5 @@ export class NativeSessionModel {
     this.hasMore = page.hasMore;
     this.historyBefore = page.beforeSeq;
   }
+
 }

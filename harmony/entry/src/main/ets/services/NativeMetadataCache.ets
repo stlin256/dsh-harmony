@@ -22,6 +22,9 @@ export class NativeMetadataCache {
     }
     return 'metadata:' + (hash >>> 0).toString(16);
   }
+  private static routeKey(origin: string): string {
+    return NativeMetadataCache.key(origin) + ':last-session';
+  }
   private static store(context: common.UIAbilityContext): preferences.Preferences {
     return preferences.getPreferencesSync(context, { name: 'dsh-native-navigation-cache' });
   }
@@ -65,12 +68,35 @@ export class NativeMetadataCache {
       store.flush().catch(() => {});
     } catch (_) {}
   }
+  static readLastSession(context: common.UIAbilityContext, origin: string): string {
+    try {
+      const value = NativeMetadataCache.store(context).getSync(NativeMetadataCache.routeKey(origin), '') as string;
+      return /^[A-Za-z0-9_-]{1,160}$/.test(value) ? value : '';
+    } catch (_) { return ''; }
+  }
+  static rememberSession(context: common.UIAbilityContext, origin: string, sessionId: string): void {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(sessionId)) return;
+    try {
+      const store = NativeMetadataCache.store(context);
+      store.putSync(NativeMetadataCache.routeKey(origin), sessionId);
+      store.flush().catch(() => {});
+    } catch (_) {}
+  }
+  static forgetSession(context: common.UIAbilityContext, origin: string): void {
+    try {
+      const store = NativeMetadataCache.store(context);
+      store.deleteSync(NativeMetadataCache.routeKey(origin));
+      store.flush().catch(() => {});
+    } catch (_) {}
+  }
   static clear(context: common.UIAbilityContext, origin: string): void {
     const id = NativeMetadataCache.key(origin);
+    const route = NativeMetadataCache.routeKey(origin);
     NativeMetadataCache.memory.delete(id);
     try {
       const store = NativeMetadataCache.store(context);
       store.deleteSync(id);
+      store.deleteSync(route);
       store.flush().catch(() => {});
     } catch (_) {}
   }

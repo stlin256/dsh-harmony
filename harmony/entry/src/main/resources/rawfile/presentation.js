@@ -44,6 +44,33 @@
     });
     originalRow.after(row);
   };
+  const openRequestedRoute = () => {
+    const url = new URL(location.href);
+    const route = url.searchParams.get('dshHarmonyRoute');
+    if (!['plugins', 'automation', 'more'].includes(route)) return;
+    url.searchParams.delete('dshHarmonyRoute');
+    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    if (route === 'more') {
+      window.__dshHarmonyRouteReady = true;
+      return;
+    }
+    const labels = route === 'plugins' ? ['插件', 'Plugins'] : ['自动化任务', 'Automation tasks'];
+    let attempts = 0;
+    const select = () => {
+      const navigation = document.querySelector('nav[aria-label="全局面板"], nav[aria-label="Global panels"]');
+      const buttons = navigation ? [...navigation.querySelectorAll('button')] : [];
+      const target = buttons.find(button => labels.includes((button.textContent || '').trim()));
+      if (target) {
+        target.click();
+        window.__dshHarmonyRouteReady = true;
+        return;
+      }
+      attempts++;
+      if (attempts < 40) setTimeout(select, 150);
+      else window.__dshHarmonyRouteUnavailable = route;
+    };
+    setTimeout(select, 0);
+  };
   const syncTheme = () => {
     const settings = location.pathname.startsWith('/pocket/');
     const dark = settings ? document.documentElement.dataset.theme === 'dark' : document.body.hasAttribute('data-ds-dark-theme');
@@ -95,6 +122,7 @@
   new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   new MutationObserver(installSettingsButton).observe(document.body, { childList: true, subtree: true });
   installSettingsButton();
+  openRequestedRoute();
   syncTheme();
   void window.__pocketSyncOverview();
 })();

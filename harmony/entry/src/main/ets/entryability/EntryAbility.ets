@@ -40,7 +40,7 @@ export default class EntryAbility extends UIAbility {
     WindowAppearance.mainWindow = mainWindow;
     // ArkWeb reports safe-area env() values to the original viewport-fit=cover page.
     // Paint the window underneath both bars instead of reserving white native bands.
-    WindowAppearance.fullscreen(false).then(() => {
+    WindowAppearance.fullscreen(true).then(() => {
       WindowAppearance.refreshSafeArea();
       WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
       stage.loadContent('pages/Index');

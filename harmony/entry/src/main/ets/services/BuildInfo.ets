@@ -1,6 +1,6 @@
 export class BuildInfo {
   static readonly appName: string = 'DSH Harmony';
-  static readonly version: string = '0.2.5';
+  static readonly version: string = '0.3.0';
   static readonly bundleName: string = 'io.github.stlin256.dshharmony';
   static readonly author: string = 'stlin256';
   static readonly repository: string = 'https://github.com/stlin256/dsh-harmony';

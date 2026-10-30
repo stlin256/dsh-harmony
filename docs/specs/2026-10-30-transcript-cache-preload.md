@@ -43,6 +43,10 @@ route_state(scope_id, selected_session_id, last_opened_at)
 process groups and syntax tokens are rebuilt from source/revision and are not
 six duplicate copies of the same text.
 
+Resolved image attachments use a separate app-private raster cache keyed by the
+same one-way scope, session and attachment identity. Image files have a per-scope
+quota, and logout removes their scope before the login screen is shown.
+
 Scope identity uses the existing one-way gateway/login cache key. Raw URLs,
 cookies and secrets do not enter the database. Rows of another scope are never
 returned after an identity switch.
