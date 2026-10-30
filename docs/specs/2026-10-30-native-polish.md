@@ -42,7 +42,7 @@
 | CONNECT-03 | 对照Mux原始stream错误/close及App原因码定位；可选stream故障不杀history | 原生与Passkey链路持续连接；实际故障注入与恢复，不只截图 |
 | CONNECT-04 | 身份隔离缓存、generation、锚点；退出清理；预览与设置保留聊天实例 | 切会话/设置/预览/前后台后内容和草稿不丢；换身份不串数据 |
 | CONNECT-05 | 请求ID存本次提交状态，以回显/queue对账；断线不发新ID重试 | 模拟提交后丢响应，无第二次prompt |
-| CONNECT-06 | 先读取同一client最后成功Host镜像，再异步刷新 | 第二次开通用设置无需等网络，断网仍有旧内容与短状态 |
+| CONNECT-06 | 先读取同一client最后成功Host镜像，再异步刷新；每身份最多1个read在途+1个rerun | 热开P95≤100ms、已有缓存0空白帧，断网仍有旧内容与短状态 |
 | CONNECT-07 | 单个横幅与短状态，不把传输错误插入聊天正文 | 同时最多一条重连提示；恢复消失 |
 
 ## 3. 工作区与会话列表
@@ -71,13 +71,17 @@ Host的Workspace是实体，不以cwd字符串猜归属。`workspace/follow` bas
 
 ArkUI根作用域的系统主题与DSH显式语义色必须同步；单改背景不算完成。`WithTheme`覆盖设置、菜单、Select、Toggle、输入占位、弹层与预览；所有显式背景/文字/描边使用同一明暗语义，不把SVG stroke当fill染色。
 
+以上是实施目标，SDK只保证组件作用域。独立builder/ComponentContent/新窗口需传同一Theme snapshot；已打开Popup/PromptAction重绘须真机验证。Select按钮、option、selectedOption与menu颜色分别覆盖。每项本地设置独立pending；flush失败把Preferences内存与UI均回滚至lastCommitted，同一缓存getSync不是落盘成功证明。
+
 主题所有权决定：本地“应用外观”控制所有原生surface，包括兼容模式唤出的原生设置、登录和预览；General的Host字段显示为“网页外观”，保留其跨客户端意义。网页仍由官方ui-theme服务决定，Web观察值不得覆盖显式App偏好。系统栏在纯网页surface可随观测网页色，进入原生设置/预览立即采用App色；退出恢复网页色。没有两个同名开关争写`nativeDark`，也不在用户改本地外观时暗自修改其他客户端的Host偏好。
 
 设置根保持“通用 / 应用 / 关于”同一header与TAB栏。About是第三TAB内容；二级详情在原设置容器内，Back为详情→父级→关设置。兼容模式在DSH左侧侧栏注入本地平面齿轮；优先通过App打包的可信client模块注册官方`sidebar.footer.action` slot（参数wide），点击调用同一原生设置。不要依赖旧Lucide选择器、CSS module哈希、avatar launcher或任意parentElement层数；页面未完成模块初始化时可重试注册，模块卸载清理自身slot。
 
 通用设置先呈现缓存镜像，刷新不清空已知选项；首次没有镜像显示明确加载状态。Host写入每ns串行、最新revision；冲突刷新后由用户重试，不能覆盖外部修改。所有本地项也经过`控件→Bridge→持久化→回读`核对；未知Bridge命令视为错误，不能先涂成功。
 
-通知级别以一次合法`notificationLevels`调用写完整对象。Push授权、系统token、本地开关和远端设备注册分别建状态；仅本设备更新/撤销，不用`allForSession`误撤其他手机。失败显示未同步/可重试，回读实际状态；不能回滚视觉后遗留服务器已变更而永久失配。关闭后本地不展示通知；远端注销失败保留待对账任务，下一次认证连接处理，不重新打开开关。
+通知级别以一次合法`notificationLevels`调用写完整对象。Push授权、系统token、本地开关和远端设备注册分别建状态；仅本设备更新/撤销，不用`allForSession`误撤其他手机。新增项目自有`GET /pocket/api/device?id=<id>`，仅返回该owner的`{id,registered,notifications,revision}`，绝不返回token；POST/DELETE返回同一receipt。配置请求的答案不明时GET对账。
+
+关闭后停止App主动发布本地通知；发送前复查等级/注册状态并取消未发的对应jobs。已交华为的系统notification不能由本地业务开关拦截。远端注销失败显示“关闭待同步”，保留持久待对账意图，下次认证处理，不能承诺完全停发或重新打开用户已关的开关。
 
 | ID | 实现决定 | 验收 |
 | --- | --- | --- |
@@ -98,11 +102,13 @@ ArkUI根作用域的系统主题与DSH显式语义色必须同步；单改背景
 
 ## 5. 内容、文件和执行呈现
 
-图片附件`session/attachment`仍是JSON base64，不能当multipart解析。immutable附件只保证Host存下来的图像，`originalDimensions`不是未保留的原始照片字节。Markdown图片与普通链接分别解析；图片自动加载缩略图、稳定占位、失败重试，按身份/会话/attachment缓存并限制内存，离屏释放PixelMap。
+图片附件`session/attachment`仍是JSON base64，不能当multipart解析。immutable附件只保证Host存下来的图像，`originalDimensions`不是未保留的原始照片字节。Markdown图片与普通链接分别解析；图片自动加载缩略图、稳定占位、失败重试，按身份/会话/attachment缓存并限制内存。离屏只释放该组件自己的thumbnail lease，overlay仍持有的full/source不得release。
 
-文件使用官方`workspaceFiles`命名参数：`workspaceFileScopeId,path`；text read另有`range`，bytes read另有`options.range/baseFile`，不能包`request`。二进制RPC遵循官方multipart codec；先stat获得版本，分块读绑定baseFile，版本变化不拼接。相对路径依据该Markdown的baseFile解析；行号片段保留；不把Host已授权的工作区外可读生成文件一概禁掉。
+文件使用官方`workspaceFiles`命名参数：`workspaceFileScopeId,path`；text read另有`range`，bytes read另有`options.range/baseFile`，不能包`request`。二进制RPC遵循官方multipart codec；分块读校验相同version，版本变化不拼接。文档内相对目标才传该文档baseFile；绝对target不得同时传baseFile，Chat普通相对文件按点击时workingDirectory。行号片段保留；不把Host已授权的工作区外可读生成文件一概禁掉。
 
 二进制边界选择研究推荐方案1：Gateway按Content-Type使用严格上游等价decoder（完整metadata/rpcId/attachment/path校验），再通过固定受认证native endpoint把窗口元数据与原bytes下发。App用requestInStream直接写cache文件，不把binary转UTF-8/base64。文件窗metadata带absolutePath/version/offset/eof，特殊值不进入响应header原文；错误body绝不能保存为成功文件。generic FileAttachmentRef没有已核实的历史下载合同，保持明确未完成，禁止猜存储路径；本轮远端workspace文件预览不据此宣称generic附件已完成。
+
+具体framing：`POST /pocket/api/native/file`只读，body为`{sessionId,path,baseFile?,offset?,length?}`，默认256KiB、最大2MiB窗口；成功`application/octet-stream`原bytes，`X-DSH-File-Window`为base64url编码的JSON `{protocol:1,absolutePath,version,offset,eof,length,bytes?}`，header不承载raw路径字符串。App校验协议/请求offset/实际length/版本与EOF后才提交窗口；metadata超界、2xx HTML、截断/超长body均失败，不保存成功标志。
 
 Index层统一前景预览导航，聊天保持挂载。图像、文本/代码/Markdown原生预览；PDF/Office等在下载到版本化临时文件后用可转授权URI调用PreviewKit系统预览，并真机验证URI权限。`canPreview`不等于已获权限。未知类型提供保存/分享/用其他应用打开和复制链接；预览失败留在可重试状态，不静默退化为复制链接。缓存仅App私有目录，退出清理；名称和MIME由内容/Host事实确定，不信任远端任意跳转。
 
@@ -117,13 +123,15 @@ GFM表格在块解析层识别，不能由inline regex冒充。分隔行、对�
 | RENDER-05 | 上游块顺序和图标，本地素材；专用工具card保留原始字段 | 混合文字/思考/工具/图片顺序与官方fixture对照 |
 | RENDER-06 | Chat投影过滤system source；raw journal完整 | 上下文隐藏，真人/steer/有效唤醒和回答不误删 |
 | RENDER-07 | 按总spec逐工具card、分组与过程生命周期 | call/result/PTC/preparing/失败/停止/四档对照；通用JSON不算专用完成 |
-| RENDER-08 | 思考header整行宽度，标题固定，首行预览layoutWeight | 长/短/多行思考在收起时右侧有首行，无空白挤占 |
+| RENDER-08 | 思考header整行宽度，标题固定，首行预览layoutWeight | 完成首行；运行中最近完整段落首行，未完整不刷新；compact隐藏完成预览；可用空间不被挤占 |
 | RENDER-09 | 去重复padding/gap，成员内容间距2vp，保留触控区 | 思考紧接工具无多余空行；折叠按钮可触达 |
 | RENDER-10 | 业务ID锚点、补页/图片/折叠高度协调、长文本虚拟化 | 手动读旧消息不拉尾；加载旧页无跳动/丢失 |
 | INPUT-01 | 上游公开发送/停止/queue/steer/模型/附件/交互合同 | 原生实际发送和回复可用；不以兼容页代替原生完成 |
 | INPUT-02 | requestId回显对账、Queue Dock、claim/continued/settled | 无重复prompt/审批；断线恢复活动状态正确 |
 | INPUT-03 | 页面/菜单/折叠协调动画，减少动态效果生效 | Back/中断/快切无残影或失触；逐token不播入场 |
 | INPUT-04 | 默认显示任务名，隐私选项真实影响通知/卡片 | 默认有名称；开隐私后遮蔽，关闭恢复；快照有过期清理 |
+
+通用文件上传硬合同：先`POST application/octet-stream /api/session/uploadFileBinary?sessionId&name[&mediaType]`得到receiptId，再prompt引用`{type:'file',receiptId}`。pending/error附件阻止发送；混合附件queue禁止文本edit。历史通用附件下载与此上传receipt是不同能力，不能混为一谈。
 
 ## 6. 登录、维护和发布约束
 
