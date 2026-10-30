@@ -28,7 +28,8 @@ function storage() {
       const file = disk.get(name);
       return { getSync: (key, fallback) => structuredClone(file.has(key) ? file.get(key) : fallback),
         putSync: (key, value) => file.set(key, structuredClone(value)),
-        hasSync: key => file.has(key), deleteSync: key => file.delete(key), flushSync() {} };
+        hasSync: key => file.has(key), deleteSync: key => file.delete(key),
+        flushSync() {}, flush() { return Promise.resolve(); } };
     }
   };
   return { disk, preferences };
@@ -133,6 +134,88 @@ test('system material guards old runtimes and respects opacity, motion and power
   assert.equal(NativeExperience.materialsEnabled(), false);
 });
 
+test('semantic motion tokens resolve directly when motion is disabled', () => {
+  const state = new Map();
+  const calls = [];
+  const ui = { animateTo(param, action) { calls.push(param); action(); } };
+  const AppStorage = {
+    get: key => state.get(key),
+    setOrCreate: (key, value) => state.set(key, value)
+  };
+  const curves = { springMotion: (...args) => ({ kind: 'spring', args }) };
+  const transition = (type, value) => ({
+    type, value, animationParam: null,
+    combine(other) { return transition('combine', { first: this, second: other }); },
+    animation(param) { this.animationParam = param; return this; }
+  });
+  const TransitionEffect = {
+    IDENTITY: transition('identity'),
+    OPACITY: transition('opacity'),
+    translate: value => transition('translate', value),
+    scale: value => transition('scale', value),
+    asymmetric: (enter, leave) => transition('asymmetric', { enter, leave })
+  };
+  const kits = {
+    '@kit.ArkUI': { curves, uiMaterial: {} },
+    '@kit.AbilityKit': {},
+    '@kit.ArkData': { preferences: storage().preferences },
+    '@kit.BasicServicesKit': {
+      deviceInfo: { sdkApiVersion: 23 },
+      power: { getPowerMode: () => 600,
+        DevicePowerMode: { MODE_NORMAL: 600, MODE_PERFORMANCE: 602 } }
+    },
+    '@kit.AccessibilityKit': {
+      accessibility: { isAnimationReduceEnabledSync: () => false }
+    }
+  };
+  const { NativeMotion } = load('NativeMotion', kits, {
+    AppStorage,
+    Curve: { FastOutSlowIn: 9 },
+    TransitionEffect
+  });
+  state.set('nativeUserReduceMotion', false);
+  state.set('nativeSystemReduceMotion', false);
+  state.set('nativePowerSaving', false);
+  state.set('nativeAppActive', true);
+  assert.equal(NativeMotion.duration('press'), 90);
+  assert.equal(NativeMotion.duration('overlay'), 190);
+  let actions = 0;
+  NativeMotion.animate(ui, 'navigation', () => { actions++; });
+  assert.equal(calls[0].duration, 220);
+  NativeMotion.spring(ui, () => { actions++; });
+  assert.equal(calls[1].curve.kind, 'spring');
+  assert.equal(actions, 2);
+  const rowTransition = NativeMotion.rowTransition();
+  const backwardNavigation = NativeMotion.navigationTransition(-1);
+  assert.equal(rowTransition.animationParam.duration, 140);
+  assert.equal(backwardNavigation.value.enter.animationParam.duration, 220);
+  assert.equal(backwardNavigation.value.leave.animationParam.duration, 180);
+  assert.equal(backwardNavigation.value.enter.value.second.value.x, -10);
+  state.set('nativeUserReduceMotion', true);
+  NativeMotion.animate(ui, 'surface', () => { actions++; });
+  NativeMotion.spring(ui, () => { actions++; });
+  assert.equal(calls.length, 2);
+  assert.equal(actions, 4);
+});
+
+test('workspace interaction recency is account scoped and cleared on logout', () => {
+  const { preferences } = storage();
+  const { NativeMetadataCache } = load('NativeMetadataCache', {
+    '@kit.AbilityKit': {},
+    '@kit.ArkData': { preferences }
+  });
+  const first = NativeMetadataCache.rememberInteraction(
+    context, 'https://one.example.invalid', 'session-a');
+  assert.equal(first.has('session-a'), true);
+  assert.equal(NativeMetadataCache.interactions(context,
+    'https://one.example.invalid').get('session-a'), first.get('session-a'));
+  assert.equal(NativeMetadataCache.interactions(context,
+    'https://two.example.invalid').has('session-a'), false);
+  NativeMetadataCache.clear(context, 'https://one.example.invalid');
+  assert.equal(NativeMetadataCache.interactions(context,
+    'https://one.example.invalid').size, 0);
+});
+
 test('form metadata resolves actual static card pages and resources', () => {
   const base = new URL('../../harmony/entry/src/main/', import.meta.url);
   const manifest = JSON.parse(readFileSync(new URL('module.json5', base), 'utf8'));
@@ -192,29 +275,66 @@ test('empty session filtering uses the explicit DSH flag and preserves untitled 
   assert.equal(nativeSessionVisible({title:'新会话',blank:true},cached),true);
 });
 
-test('Workspace lists honor archive, pin, manual order and search without mutating source rows',()=>{
-  const {nativeWorkspaceSessions,nativeToolsParent,nativeSessionDragOrder}=load('NativeSessionModel',{});
+test('Workspace projection isolates pins, sorts by interaction and keeps drag contracts stable',()=>{
+  const {nativeWorkspaceSessions,nativeWorkspaceRows,nativeToolsParent,nativeWorkspaceDragOrder,
+    nativeBackToBottomAvailable,nativeBackToBottomHasNewContent}=load('NativeSessionModel',{});
   const rows=[
     {id:'a',title:'Alpha',blank:false,updatedAt:5,cwd:'/workspace/project'},
     {id:'b',title:'Beta',blank:false,updatedAt:6},
+    {id:'c',title:'Gamma',blank:false,updatedAt:8},
+    {id:'d',title:'Delta',blank:false,updatedAt:7},
     {id:'empty',title:'New',blank:true,updatedAt:9},
     {id:'archived',title:'Archived',blank:false,updatedAt:10}
   ];
-  const snapshot={items:[{workspaceId:'project',sessionIds:['b','a','empty']}],archivedSessionIds:['archived'],pinnedSessionIds:['a']};
-  assert.equal(nativeWorkspaceSessions(rows,snapshot,'project','',new Map()).map(x=>x.id).join(','),'a,b');
-  assert.equal(nativeWorkspaceSessions(rows,snapshot,'project','alpha',new Map()).map(x=>x.id).join(','),'a');
-  assert.equal(rows.map(x=>x.id).join(','),'a,b,empty,archived');
+  const snapshot={items:[
+    {workspaceId:'project',title:'Project',sessionIds:['b','a','empty']},
+    {workspaceId:'lab',title:'Lab',sessionIds:['d','c']}
+  ],archivedSessionIds:['archived'],pinnedSessionIds:['a']};
+  assert.equal(nativeWorkspaceSessions(rows,snapshot,'project','',new Map()).map(x=>x.id).join(','),'b');
+  assert.equal(nativeWorkspaceSessions(rows,snapshot,'project','alpha',new Map()).length,0);
+  const recent=new Map([['b',20]]);
+  assert.equal(nativeWorkspaceSessions(rows,snapshot,'project','',new Map(),'',recent).map(x=>x.id).join(','),'b');
+  const projected=nativeWorkspaceRows(rows,snapshot,'','',new Map(),'',[],new Map());
+  assert.equal(projected[0].section,'pinnedHeader');
+  assert.equal(projected[1].session.id,'a');
+  assert.equal(projected[1].workspaceTitle,'Project');
+  const workspaceSessionIds=projected.filter(x=>!x.group).map(x=>x.session.id);
+  assert.equal(workspaceSessionIds.filter(id=>id==='a').length,1);
+  assert.equal(workspaceSessionIds.join(','),'a,b,c,d');
+  const unpinned={...snapshot,pinnedSessionIds:[]};
+  assert.equal(nativeWorkspaceSessions(rows,unpinned,'project','',new Map()).map(x=>x.id).join(','),'b,a');
+  const unpinnedRows=nativeWorkspaceRows(rows,unpinned,'','',new Map(),'',[],new Map());
+  assert.equal(unpinnedRows.some(x=>x.section==='pinnedHeader'),false);
+  assert.equal(unpinnedRows.filter(x=>x.session.id==='a').length,1);
+  assert.equal(unpinnedRows.find(x=>x.session.id==='a').workspaceId,'project');
+  const blankPinned={...snapshot,pinnedSessionIds:['empty']};
+  const blankPinnedRows=nativeWorkspaceRows(rows,blankPinned,'','',new Map(),'empty',[],new Map());
+  assert.equal(blankPinnedRows.some(x=>x.section==='pinnedHeader'),false);
+  assert.equal(blankPinnedRows.find(x=>x.session.id==='empty').section,'workspaceSession');
+  assert.equal(nativeBackToBottomAvailable(true,true,false),false);
+  assert.equal(nativeBackToBottomAvailable(false,false,false),false);
+  assert.equal(nativeBackToBottomAvailable(false,true,true),false);
+  assert.equal(nativeBackToBottomAvailable(false,true,false),true);
+  assert.equal(nativeBackToBottomHasNewContent(true,'delta'),false);
+  assert.equal(nativeBackToBottomHasNewContent(false,'state'),false);
+  assert.equal(nativeBackToBottomHasNewContent(false,'delta'),true);
+  const localRecent=new Map([['a',30]]);
+  assert.equal(nativeWorkspaceSessions(rows,unpinned,'project','',new Map(),'',localRecent).map(x=>x.id).join(','),'a,b');
+  const tied=[
+    {id:'z',title:'Z',blank:false,updatedAt:4},
+    {id:'y',title:'Y',blank:false,updatedAt:4}
+  ];
+  const tiedSnapshot={...unpinned,items:[{workspaceId:'project',title:'Project',sessionIds:['z','y']}]};
+  assert.equal(nativeWorkspaceSessions(tied,tiedSnapshot,'project','',new Map()).map(x=>x.id).join(','),'y,z');
+  assert.equal(rows.map(x=>x.id).join(','),'a,b,c,d,empty,archived');
   assert.equal(nativeToolsParent('queueEdit'),'queue');assert.equal(nativeToolsParent('efforts'),'modelsRoot');
   assert.equal(nativeToolsParent('models'),'modelsRoot');assert.equal(nativeToolsParent('modelsRoot'),'');
   assert.equal(nativeToolsParent('rename'),'');
-  const complete = ['pinned','a','hidden','b','c'];
-  assert.deepEqual(Array.from(nativeSessionDragOrder(complete,'a','c',false,false,false)),
-    ['pinned','hidden','b','a','c']);
-  assert.deepEqual(Array.from(nativeSessionDragOrder(complete,'a','b',true,false,false)),
-    ['pinned','hidden','b','a','c']);
-  assert.equal(nativeSessionDragOrder(complete,'a','pinned',false,false,true),null);
-  assert.equal(nativeSessionDragOrder(complete,'missing','b',false,false,false),null);
-  assert.deepEqual(Array.from(complete),['pinned','a','hidden','b','c']);
+  const complete = ['a','b','c'];
+  assert.deepEqual(Array.from(nativeWorkspaceDragOrder(complete,'a','c',false)),['b','a','c']);
+  assert.deepEqual(Array.from(nativeWorkspaceDragOrder(complete,'a','c',true)),['b','c','a']);
+  assert.equal(nativeWorkspaceDragOrder(complete,'missing','c',false),null);
+  assert.deepEqual(Array.from(complete),['a','b','c']);
 });
 
 test('native inline markdown preserves literal code and malformed text while styling nested runs', () => {

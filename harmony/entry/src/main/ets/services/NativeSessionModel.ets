@@ -55,7 +55,8 @@ export class NativeWorkspaceSnapshot {
 }
 export class NativeWorkspaceRow {
   key: string = ''; group: boolean = false; title: string = ''; count: number = 0;
-  workspaceId: string = ''; session: NativeSession = new NativeSession();
+  workspaceId: string = ''; workspaceTitle: string = ''; section: string = '';
+  pinned: boolean = false; session: NativeSession = new NativeSession();
 }
 export function nativeToolsParent(page: string): string {
   if (page === 'models' || page === 'efforts') return 'modelsRoot';
@@ -72,7 +73,8 @@ export function nativeSessionVisible(session: NativeSession, model: NativeSessio
   return title.length > 0 && title !== '新会话';
 }
 export function nativeWorkspaceSessions(sessions: NativeSession[], snapshot: NativeWorkspaceSnapshot, workspaceId: string,
-  query: string, models: Map<string, NativeSessionModel>, selectedId: string = '', manual: boolean = false): NativeSession[] {
+  query: string, models: Map<string, NativeSessionModel>, selectedId: string = '',
+  recentInteractions: Map<string, number> = new Map<string, number>()): NativeSession[] {
   const workspace = snapshot.items.find((item: NativeWorkspaceItem) => item.workspaceId === workspaceId);
   const archived: Set<string> = new Set<string>(snapshot.archivedSessionIds);
   const members: Set<string> = new Set<string>(workspace?.sessionIds || []);
@@ -80,21 +82,23 @@ export function nativeWorkspaceSessions(sessions: NativeSession[], snapshot: Nat
   const names: Map<string, string> = new Map<string, string>();
   snapshot.items.forEach((item: NativeWorkspaceItem): void => { item.sessionIds.forEach((id: string): void => { names.set(id, item.title); }); });
   const search = query.trim().toLowerCase();
-  const rows = sessions.filter((row: NativeSession) => row.origin !== 'subagent' && !archived.has(row.id) && (row.id === selectedId || nativeSessionVisible(row, models.get(row.id))) &&
+  const rows = sessions.filter((row: NativeSession): boolean => row.origin !== 'subagent' &&
+    !archived.has(row.id) && !pinned.has(row.id) &&
+    (row.id === selectedId || nativeSessionVisible(row, models.get(row.id))) &&
     (!workspace || members.has(row.id)) && (!search || !row.blank && (row.title + ' ' + row.id + ' ' + (names.get(row.id) || '') + ' ' + (row.cwd || '')).toLowerCase().includes(search)));
   return rows.sort((a: NativeSession, b: NativeSession): number => {
     if (a.blank === true && a.id === selectedId) return -1;
     if (b.blank === true && b.id === selectedId) return 1;
-    if (pinned.has(a.id) !== pinned.has(b.id)) return pinned.has(a.id) ? -1 : 1;
-    if (manual && workspace) return workspace.sessionIds.indexOf(a.id) - workspace.sessionIds.indexOf(b.id);
-    return b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+    const aTime = Math.max(a.updatedAt, recentInteractions.get(a.id) || 0);
+    const bTime = Math.max(b.updatedAt, recentInteractions.get(b.id) || 0);
+    return bTime - aTime || a.id.localeCompare(b.id);
   });
 }
 
-/** Reorder one complete Workspace membership without discarding hidden ids. */
-export function nativeSessionDragOrder(order: string[], sourceId: string, targetId: string,
-  after: boolean, sourcePinned: boolean, targetPinned: boolean): string[] | null {
-  if (!sourceId || !targetId || sourceId === targetId || sourcePinned !== targetPinned) return null;
+/** Reorder workspace ids without touching any workspace membership. */
+export function nativeWorkspaceDragOrder(order: string[], sourceId: string, targetId: string,
+  after: boolean): string[] | null {
+  if (!sourceId || !targetId || sourceId === targetId) return null;
   if (!order.includes(sourceId) || !order.includes(targetId)) return null;
   const next = order.filter((id: string): boolean => id !== sourceId);
   const targetIndex = next.indexOf(targetId);
@@ -102,10 +106,40 @@ export function nativeSessionDragOrder(order: string[], sourceId: string, target
   next.splice(targetIndex + (after ? 1 : 0), 0, sourceId);
   return next;
 }
+
+export function nativeBackToBottomAvailable(atEnd: boolean, userHasScrolled: boolean,
+  returningToBottom: boolean): boolean {
+  return !atEnd && userHasScrolled && !returningToBottom;
+}
+
+export function nativeBackToBottomHasNewContent(followTail: boolean, eventType: string): boolean {
+  return !followTail &&
+    (eventType === 'event' || eventType === 'delta' || eventType === 'snapshot');
+}
+
 export function nativeWorkspaceRows(sessions: NativeSession[], snapshot: NativeWorkspaceSnapshot, workspaceId: string,
   query: string, models: Map<string, NativeSessionModel>, activeId: string, collapsed: string[],
-  manual: boolean = false): NativeWorkspaceRow[] {
-  const visible = nativeWorkspaceSessions(sessions, snapshot, workspaceId, query, models, activeId, manual);
+  recentInteractions: Map<string, number> = new Map<string, number>()): NativeWorkspaceRow[] {
+  const workspaceBySession: Map<string, NativeWorkspaceItem> = new Map<string, NativeWorkspaceItem>();
+  snapshot.items.forEach((workspace: NativeWorkspaceItem): void => {
+    workspace.sessionIds.forEach((id: string): void => {
+      if (!workspaceBySession.has(id)) workspaceBySession.set(id, workspace);
+    });
+  });
+  const archived: Set<string> = new Set<string>(snapshot.archivedSessionIds);
+  const pinned: Set<string> = new Set<string>(snapshot.pinnedSessionIds);
+  const search = query.trim().toLowerCase();
+  const visible = sessions.filter((session: NativeSession): boolean =>
+    session.origin !== 'subagent' && !archived.has(session.id) &&
+    (session.id === activeId || nativeSessionVisible(session, models.get(session.id))) &&
+    (!search || !session.blank && (session.title + ' ' + session.id + ' ' +
+      (workspaceBySession.get(session.id)?.title || '') + ' ' +
+      (session.cwd || '')).toLowerCase().includes(search)));
+  const byRecency = (a: NativeSession, b: NativeSession): number => {
+    const aTime = Math.max(a.updatedAt, recentInteractions.get(a.id) || 0);
+    const bTime = Math.max(b.updatedAt, recentInteractions.get(b.id) || 0);
+    return bTime - aTime || a.id.localeCompare(b.id);
+  };
   const rows: NativeWorkspaceRow[] = [];
   const seen: Set<string> = new Set<string>();
   const append = (items: NativeSession[], groupId: string): void => {
@@ -114,22 +148,57 @@ export function nativeWorkspaceRows(sessions: NativeSession[], snapshot: NativeW
       if (!query && collapsed.includes(groupId)) return;
       const row = new NativeWorkspaceRow(); row.key = 'session:' + session.id; row.session = session;
       row.workspaceId = groupId;
+      row.section = groupId === 'pinned' ? 'pinnedSession' :
+        groupId === 'other' ? 'otherSession' : 'workspaceSession';
+      row.pinned = pinned.has(session.id);
+      row.workspaceTitle = workspaceBySession.get(session.id)?.title || '';
       rows.push(row);
     });
   };
-  if (workspaceId || !snapshot.items.length) { append(visible, ''); return rows; }
+  const scoped = visible.filter((session: NativeSession): boolean => {
+    if (!workspaceId) return true;
+    return workspaceBySession.get(session.id)?.workspaceId === workspaceId;
+  });
+  const pinnedItems = scoped.filter((session: NativeSession): boolean =>
+    session.blank !== true && pinned.has(session.id)).sort(byRecency);
+  if (pinnedItems.length) {
+    const header = new NativeWorkspaceRow();
+    header.key = 'section:pinned'; header.group = true; header.title = '置顶';
+    header.workspaceId = 'pinned'; header.section = 'pinnedHeader';
+    header.count = pinnedItems.length;
+    rows.push(header);
+    append(pinnedItems, 'pinned');
+  }
+  const ordinary = scoped.filter((session: NativeSession): boolean =>
+    session.blank === true || !pinned.has(session.id));
+  if (workspaceId || !snapshot.items.length) {
+    append(ordinary.sort((a: NativeSession, b: NativeSession): number => {
+      if (a.blank === true && a.id === activeId) return -1;
+      if (b.blank === true && b.id === activeId) return 1;
+      return byRecency(a, b);
+    }), workspaceId);
+    return rows;
+  }
   snapshot.items.forEach((workspace: NativeWorkspaceItem): void => {
     const members = new Set<string>(workspace.sessionIds);
-    const items = visible.filter((session: NativeSession) => members.has(session.id));
+    const items = ordinary.filter((session: NativeSession): boolean =>
+      members.has(session.id)).sort((a: NativeSession, b: NativeSession): number => {
+      if (a.blank === true && a.id === activeId) return -1;
+      if (b.blank === true && b.id === activeId) return 1;
+      return byRecency(a, b);
+    });
     if (query && !items.length) return;
     const header = new NativeWorkspaceRow(); header.key = 'workspace:' + workspace.workspaceId;
     header.group = true; header.title = workspace.title; header.workspaceId = workspace.workspaceId; header.count = items.length;
+    header.section = 'workspaceHeader'; header.workspaceTitle = workspace.title;
     rows.push(header); append(items, workspace.workspaceId);
   });
-  const remaining = visible.filter((session: NativeSession) => !seen.has(session.id));
+  const remaining = ordinary.filter((session: NativeSession): boolean =>
+    !seen.has(session.id)).sort(byRecency);
   if (remaining.length) {
     const header = new NativeWorkspaceRow(); header.key = 'workspace:other'; header.group = true;
     header.title = '其他会话'; header.workspaceId = 'other'; header.count = remaining.length;
+    header.section = 'otherHeader';
     rows.push(header); append(remaining, 'other');
   }
   return rows;
