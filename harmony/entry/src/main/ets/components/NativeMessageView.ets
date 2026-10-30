@@ -56,7 +56,7 @@ export struct NativeMessageView {
           .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen;
             this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.reasoningOpen); }); })
         if (this.reasoningOpen) {
-          NativeTextContent({ text: this.message.reasoning })
+          NativeTextContent({ text: this.message.reasoning, client: this.client, sessionId: this.sessionId })
         }
       }
       if (this.message.role === 'tool') {
@@ -71,12 +71,12 @@ export struct NativeMessageView {
           .onClick(() => { this.animate(() => { this.toolOpen = !this.toolOpen; }); })
       }
       if (this.message.role !== 'tool' || this.toolOpen) {
-        if (!this.message.blocks.length && this.message.text) { NativeTextContent({ text: this.message.text }) }
+        if (!this.message.blocks.length && this.message.text) { NativeTextContent({ text: this.message.text, client: this.client, sessionId: this.sessionId }) }
         ForEach(this.message.blocks, (block: NativeTextBlock) => {
           if (block.kind === 'code') {
             Column({ space: 8 }) {
               Text(block.language || '代码').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
-              NativeTextContent({ text: block.text, monospace: true })
+              NativeTextContent({ text: block.text, monospace: true, client: this.client, sessionId: this.sessionId })
             }.padding(10).width('100%').alignItems(HorizontalAlign.Start)
               .borderRadius(12).backgroundColor(this.dark ? '#353638' : '#F5F6F7')
           } else if (block.kind === 'heading') {
@@ -87,7 +87,7 @@ export struct NativeMessageView {
               .backgroundColor(this.dark ? '#353638' : '#F5F6F7')
               .copyOption(CopyOptions.InApp).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           } else {
-            NativeTextContent({ text: block.text })
+            NativeTextContent({ text: block.text, client: this.client, sessionId: this.sessionId })
           }
         }, (_block: NativeTextBlock, index: number) => index.toString())
       }

@@ -14,15 +14,16 @@
 | PREF01–03 / SET02a | Host describe/mutate镜像、revision串行写、冲突恢复；四档、收起时机、回复策略影响同一投影 | 策略组合与串行revision测试 | 待验；输入claim、焦点保护和协调滚动仍待齐 |
 | INPUT02 | 模型/推理独立输入区入口，共享每Session目录 | 公开模型RPC合同 | 待验；官方模糊搜索及完整access gating仍待齐 |
 | READ05 / VIS04 | 短重连横幅、保留历史、发送不自动重试、自定义端口Origin、系统手势区同色 | 连接/缓存/不重发测试 | 之前已确认会话能打开；本轮再验 |
-| VIS02/03/05 | 官方SVG本地生成脚本、状态与业务glyph分开、平整设置分类、减少动效保护 | release编译 | 待验 |
+| VIS02/03/05 | 官方SVG本地生成脚本、状态与业务glyph分开、语义色整图染色、平整设置分类、减少动效保护 | release编译 | 设置、列表、会话菜单和聊天输入区逐项切换亮/暗主题通过 |
+| PREVIEW01 | 图片缩略图自动加载+点击全尺寸预览；GFM表格横向滚动和对齐；文本文件链接使用官方`workspaceFiles/read` | 文件路由、表格解析、57项回归通过 | 图片、表格和文件分页仍待加载测试数据后真机验收 |
 
-当前自动化：`gateway/npm test` 54项通过。测试含Kit mock和纯服务模型，不冒充原生交互或实机性能验收。DevEco CLI release签名构建通过，首批已装到在线设备；SVG描边染色的后续补丁已构建，仍须安装复验。
+当前自动化：`gateway/npm test` 57项通过。测试含Kit mock和纯服务模型，不冒充原生交互或实机性能验收。DevEco CLI release签名构建通过并已覆盖安装到在线设备；主题SVG染色已完成真机复验。
 
 ## 仍须实施/补齐
 
 1. Workspace常驻follow、动态access、排序/筛选本地偏好、内容搜索、远端目录选择与完整CRUD。
 2. Inbox claim、有效唤醒通知、问题回答节点、停止partial、多块实时顺序与revision修复。
-3. 原子工具严格card models及文件预览；通用JSON后备不能记为专用UI完成。
+3. 原子工具严格card models及PDF/Office/二进制文件预览；当前文本预览不能被记为完整文件预览完成。
 4. Queue Dock、requestId回显对账、结构化草稿、有序通用附件与上传/失败/重试。
 5. 逐题问答、timer/focus/draft、continued/settled、plan-review全生命周期。
 6. 稳定业务锚点、组内外跟尾、折叠协调动效、运行时钟及holding尾槽。

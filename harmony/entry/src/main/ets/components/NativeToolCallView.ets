@@ -46,11 +46,11 @@ export struct NativeToolCallView {
       if (this.expanded) {
         Column({ space: 6 }) {
           if (this.message.args) {
-            NativeTextContent({ text: this.message.args, monospace: true })
+            NativeTextContent({ text: this.message.args, monospace: true, client: this.client, sessionId: this.sessionId })
           }
           if (this.message.output) {
             Divider().color(this.dark ? '#3B3B3E' : '#E4E5E8')
-            NativeTextContent({ text: this.message.output })
+            NativeTextContent({ text: this.message.output, client: this.client, sessionId: this.sessionId })
           }
           ForEach(this.message.images, (attachment: NativeImageAttachment) => {
             NativeImageView({ client: this.client, sessionId: this.sessionId, attachment })

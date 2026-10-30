@@ -1,26 +1,37 @@
 import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeTextSource } from '../services/NativeTextSource';
 import { NativeInlineText } from './NativeInlineText';
+import { NativeMarkdownTable, nativeMarkdownTable } from '../services/NativeMarkdownTable';
+import { NativeTable } from './NativeTable';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
 
 /** Full text is retained. Very long bodies open a virtualised native reader. */
 @Component
 export struct NativeTextContent {
   @Prop @Watch('changed') text: string = '';
   @Prop monospace: boolean = false;
+  client: NativeHarnessClient = new NativeHarnessClient('');
+  sessionId: string = '';
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private reading: boolean = false;
   @State private copied: boolean = false;
+  @State private table: NativeMarkdownTable | null = null;
   private source: NativeTextSource = new NativeTextSource();
   aboutToAppear(): void { this.changed(); }
-  private changed(): void { this.source.set(this.text); }
+  private changed(): void {
+    this.source.set(this.text);
+    this.table = this.monospace ? null : nativeMarkdownTable(this.text);
+  }
   @Builder
   private body(value: string) {
-    if (this.monospace) {
+    if (!this.monospace && this.table) {
+      NativeTable({ table: this.table })
+    } else if (this.monospace) {
       Text(value).width('100%').fontSize(12).lineHeight('22fp')
         .fontFamily('Noto Sans Mono, monospace').copyOption(CopyOptions.InApp)
         .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
     } else {
-      NativeInlineText({ text: value })
+      NativeInlineText({ text: value, client: this.client, sessionId: this.sessionId })
     }
   }
   @Builder

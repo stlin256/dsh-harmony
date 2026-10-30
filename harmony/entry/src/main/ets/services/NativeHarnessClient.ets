@@ -19,6 +19,10 @@ export class GatewayState {
 }
 export class NativeImageDraft { id: string = ''; name: string = ''; mediaType: string = ''; data: string = ''; }
 export class NativeCreatedSession { id: string = ''; }
+export class NativeFilePage {
+  absolutePath: string = ''; version: string = ''; text: string = '';
+  lines: number = 0; offset: number = 1; eof: boolean = false;
+}
 
 export class NativeHarnessClient {
   readonly modelDirectory: NativeModelDirectory = new NativeModelDirectory((value: string): Promise<string> => this.operation(value), (): void => {
@@ -50,7 +54,7 @@ export class NativeHarnessClient {
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|file|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -113,6 +117,10 @@ export class NativeHarnessClient {
   async page(id: string, before: number, throughSeq: number = -1): Promise<NativeFrame> {
     return JSON.parse(await this.request('/pocket/api/native/page', http.RequestMethod.POST,
       JSON.stringify({ sessionId: id, beforeSeq: before, throughSeq: throughSeq }))) as NativeFrame;
+  }
+  async file(id: string, path: string, offset: number = 1, limit: number = 240): Promise<NativeFilePage> {
+    return JSON.parse(await this.request('/pocket/api/native/file', http.RequestMethod.POST,
+      JSON.stringify({ sessionId: id, path: path, offset: offset, limit: limit }))) as NativeFilePage;
   }
   async prompt(id: string, text: string, mode: string = 'queue', images: NativeImageDraft[] = []): Promise<void> {
     this.uncertain.add(id);

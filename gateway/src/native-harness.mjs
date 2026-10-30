@@ -11,7 +11,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
   async function rpc(method, request, signal) {
     const rpcId = randomUUID();
-    const direct = method.startsWith('settings/') || method.startsWith('directoryPicker/');
+    const direct = method.startsWith('settings/') || method.startsWith('directoryPicker/') || method.startsWith('workspaceFiles/');
     const endpoint = direct || method === '$events/result' || method.startsWith('workspace/') ? method : method === 'answerQuestion' ? 'userQuestions/answer' : 'session/' + method;
     const response = await fetch(new URL('/api/' + endpoint, target), {
       method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
@@ -109,6 +109,20 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const value = await rpc('page', { address: { kind: 'session', sessionId: req.body.sessionId }, beforeSeq: req.body.beforeSeq, ...(Number.isSafeInteger(req.body.throughSeq) ? { throughSeq: req.body.throughSeq } : {}), maxMessages: 60 }, signal);
       const history = normalizedHistory(value.records);
       res.json({ ...history, hasMore: value.hasMore || history.trimmed, cursor: value.cursor, beforeSeq: value.records?.[0]?.event?.seq ?? req.body.beforeSeq, throughSeq: value.cursor });
+    }));
+    app.post('/pocket/api/native/file', guarded(async (req, res, signal) => {
+      const { sessionId, path, offset = 1, limit = 240 } = req.body || {};
+      if (!sessionIdValid(sessionId) || typeof path !== 'string' || !path.trim() || path.length > 4096 ||
+        !Number.isSafeInteger(offset) || offset < 1 || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) return res.sendStatus(400);
+      const value = await rpc('workspaceFiles/read', { workspaceFileScopeId: sessionId, path,
+        range: { offset, limit } }, signal);
+      if (typeof value?.absolutePath !== 'string' || typeof value?.text !== 'string' ||
+        typeof value?.version !== 'string' || !value.version ||
+        !Number.isSafeInteger(value?.lines) || !Number.isSafeInteger(value?.offset) || typeof value?.eof !== 'boolean') {
+        throw Error('Invalid workspace file response');
+      }
+      res.json({ absolutePath: value.absolutePath, version: value.version, text: value.text,
+        lines: value.lines, offset: value.offset, eof: value.eof });
     }));
     app.post('/pocket/api/native/prompt', guarded(async (req, res, signal) => {
       const { sessionId, requestId, text } = req.body || {};

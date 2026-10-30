@@ -104,7 +104,7 @@ ArkUI根作用域的系统主题与DSH显式语义色必须同步；单改背景
 
 图片附件`session/attachment`仍是JSON base64，不能当multipart解析。immutable附件只保证Host存下来的图像，`originalDimensions`不是未保留的原始照片字节。Markdown图片与普通链接分别解析；图片自动加载缩略图、稳定占位、失败重试，按身份/会话/attachment缓存并限制内存。离屏只释放该组件自己的thumbnail lease，overlay仍持有的full/source不得release。
 
-文件使用官方`workspaceFiles`命名参数：`workspaceFileScopeId,path`；text read另有`range`，bytes read另有`options.range/baseFile`，不能包`request`。二进制RPC遵循官方multipart codec；分块读校验相同version，版本变化不拼接。文档内相对目标才传该文档baseFile；绝对target不得同时传baseFile，Chat普通相对文件按点击时workingDirectory。行号片段保留；不把Host已授权的工作区外可读生成文件一概禁掉。
+文件使用官方`workspaceFiles`命名参数：`workspaceFileScopeId,path`；text read另有`range`，bytes read另有`options.range/baseFile`，不能包`request`。`version`是opaque字符串，不解析成数字。二进制RPC遵循官方multipart codec；分块读校验相同version，版本变化不拼接。文档内相对目标才传该文档baseFile；绝对target不得同时传baseFile，Chat普通相对文件按点击时workingDirectory。行号片段保留；不把Host已授权的工作区外可读生成文件一概禁掉。
 
 二进制边界选择研究推荐方案1：Gateway按Content-Type使用严格上游等价decoder（完整metadata/rpcId/attachment/path校验），再通过固定受认证native endpoint把窗口元数据与原bytes下发。App用requestInStream直接写cache文件，不把binary转UTF-8/base64。文件窗metadata带absolutePath/version/offset/eof，特殊值不进入响应header原文；错误body绝不能保存为成功文件。generic FileAttachmentRef没有已核实的历史下载合同，保持明确未完成，禁止猜存储路径；本轮远端workspace文件预览不据此宣称generic附件已完成。
 

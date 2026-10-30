@@ -26,7 +26,9 @@ async function setup(t, options = {}) {
     const value = JSON.parse(Buffer.concat(chunks).toString());
     calls.push({ headers: req.headers, value });
     let result;
-    if (value.method === 'session/list') {
+    if (value.method === 'workspaceFiles/read') {
+      result = { absolutePath: '/workspace/project/README.md', version: 'v7', text: '# Fixture\n\npreview', lines: 3, offset: 1, eof: true };
+    } else if (value.method === 'session/list') {
       assert.deepEqual(value.payload.args, { _request: {} }, 'source _request parameter must keep its exact wire name');
       result = { items: [{ sessionId:'session', blank:false, running:true, updatedAt:42, projections:{values:{title:'Native session'}} }] };
     } else if (value.method === 'session/create') result = {sessionId:value.payload.args.request.sessionId};
@@ -139,6 +141,22 @@ test('header utilities export complete Host content and profile writes use named
     {ns:'provider',field:'apiKey',value:'never'}, {ns:'ui-chat',field:'transcriptView',value:'invented'},
     {ns:'ui-theme',field:'fontSize',value:23}, {ns:'ui-chat',field:'collapseTiming',value:'completion',revision:-1}
   ]) assert.equal((await call('/pocket/api/native/operation',{operation:'settingsSet',revision:4,...body})).status,400);
+});
+
+test('native file preview uses the official workspaceFiles scope and bounded ranges', async t => {
+  const { call, calls } = await setup(t);
+  const response = await call('/pocket/api/native/file', { sessionId: 'session', path: 'README.md', offset: 1, limit: 80 });
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.text), {
+    absolutePath: '/workspace/project/README.md', version: 'v7', text: '# Fixture\n\npreview',
+    lines: 3, offset: 1, eof: true
+  });
+  assert.equal(calls.at(-1).value.method, 'workspaceFiles/read');
+  assert.deepEqual(calls.at(-1).value.payload.args, {
+    workspaceFileScopeId: 'session', path: 'README.md', range: { offset: 1, limit: 80 }
+  });
+  assert.equal((await call('/pocket/api/native/file', { sessionId: 'session', path: 'README.md', offset: 0 })).status, 400);
+  assert.equal((await call('/pocket/api/native/file', { sessionId: 'session', path: 'README.md', limit: 501 })).status, 400);
 });
 
 test('older Host exports are negotiated and an HTML login response never becomes a transcript or archive',async t=>{

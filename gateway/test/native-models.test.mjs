@@ -207,6 +207,17 @@ test('native inline markdown preserves literal code and malformed text while sty
   assert.equal(nativeInlineMarkdown('`**literal**`').map(x => x.text).join(''),'**literal**');
 });
 
+test('native GFM tables preserve escaped pipes, alignment and uneven rows', () => {
+  const { nativeMarkdownTable } = load('NativeMarkdownTable', {});
+  const table = nativeMarkdownTable('| Name | Result | Notes |\n| :--- | ---: | :---: |\n| `a|b` | 12\\|34 | **ok** |\n| short |');
+  assert.equal(table.headers.join('|'),'Name|Result|Notes');
+  assert.equal(table.aligns.join(','),'left,right,center');
+  assert.deepEqual(Array.from(table.rows[0]),['`a|b`','12|34','**ok**']);
+  assert.deepEqual(Array.from(table.rows[1]),['short','','']);
+  assert.equal(nativeMarkdownTable('plain | not a table'),null);
+  assert.equal(nativeMarkdownTable('a | b\n-- | x'),null);
+});
+
 test('foreground navigation wins over width changes and the session menu keeps the official action order', () => {
   const {nativeCanGoBack,nativeSessionMenu,nativeForkTitle}=load('NativeNavigation',{});
   assert.equal(nativeCanGoBack({wide:true,sessions:true,picker:true}),true);

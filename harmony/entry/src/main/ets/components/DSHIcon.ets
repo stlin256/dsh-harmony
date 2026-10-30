@@ -11,6 +11,7 @@ export struct DSHIcon {
   @Prop glyph: string = 'plus-outline';
   @Prop color: ResourceColor = '#F9FAFB';
   @Prop glyphSize: number = 16;
+  @StorageLink('nativeDark') private dark: boolean = false;
 
   private pathForGlyph(): string {
     switch (this.glyph) {
@@ -40,28 +41,56 @@ export struct DSHIcon {
   private filledGlyph(): boolean {
     return this.glyph === 'ellipsis-outline' || this.glyph === 'send-arrow' || this.glyph === 'stop-fill';
   }
-  private tint(): ColorFilter {
-    const value = ColorMetrics.resourceColor(this.color);
-    return new ColorFilter([0,0,0,0,value.red, 0,0,0,0,value.green, 0,0,0,0,value.blue, 0,0,0,value.alpha / 255,0]);
+  /**
+   * Parent @Prop values can be retained across a storage-linked theme change on
+   * ArkUI custom components. Resolve the known semantic tokens here as well so
+   * the glyph itself is guaranteed to repaint with the active surface.
+   */
+  private resolvedColor(color: ResourceColor, dark: boolean): ResourceColor {
+    if (typeof color !== 'string') return color;
+    const value = color.toUpperCase();
+    if (['#F9FAFB', '#0F1115', '#17181B', '#202124', '#25262A', '#33353A', '#E7E7E9', '#F4F4F5'].includes(value)) {
+      return dark ? '#F9FAFB' : '#17181B';
+    }
+    if (['#CFD3D6', '#93969B', '#8A8D91', '#777A80', '#A1A1AA', '#B5B8BD', '#61666B'].includes(value)) {
+      return dark ? '#CFD3D6' : '#61666B';
+    }
+    if (['#8AB4FF', '#3964FE'].includes(value)) return dark ? '#8AB4FF' : '#3964FE';
+    return color;
   }
-
+  private tint(color: ResourceColor, dark: boolean): ColorFilter {
+    const value = ColorMetrics.resourceColor(this.resolvedColor(color, dark));
+    return new ColorFilter([
+      0, 0, 0, value.red / 255, 0,
+      0, 0, 0, value.green / 255, 0,
+      0, 0, 0, value.blue / 255, 0,
+      0, 0, 0, 1, 0
+    ]);
+  }
   build() {
     if (['think-outline', 'browse-outline', 'search-outline', 'edit-outline', 'api-outline', 'code-outline', 'globe-outline', 'agent-preset-outline', 'plan-outline', 'question-outline', 'sparkle', 'pin-outline', 'pin-fill', 'branch-outline', 'archive-outline', 'download-outline', 'close-outline', 'light-outline', 'dark-outline', 'followsystem-outline', 'personalization-outline'].includes(this.glyph)) {
-      Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
-        .objectFit(ImageFit.Contain).supportSvg2(true).colorFilter(this.tint())
+      Stack() {
+        if (this.dark) {
+          Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
+            .objectFit(ImageFit.Contain).colorFilter(this.tint(this.color, this.dark))
+        } else {
+          Image($rawfile('dsh-icons/' + this.glyph + '.svg')).width(this.glyphSize).height(this.glyphSize)
+            .objectFit(ImageFit.Contain).colorFilter(this.tint(this.color, this.dark))
+        }
+      }.width(this.glyphSize).height(this.glyphSize)
     } else if (this.glyph === 'copy-outline') {
       Stack() {
         Path({ commands: this.scaleCommands(this.pathForGlyph()), width: 16, height: 16 })
-          .fill(Color.Transparent).stroke(this.color).strokeWidth(1)
+          .fill(Color.Transparent).stroke(this.resolvedColor(this.color, this.dark)).strokeWidth(1)
           .width(this.glyphSize).height(this.glyphSize)
         Path({ commands: this.scaleCommands('M11.9792 1.53296C13.36 1.53296 14.4792 2.65225 14.4792 4.03296V9.42847C14.4792 10.3756 13.9521 11.1987 13.1755 11.6228V10.3298C13.3652 10.0787 13.4792 9.7674 13.4792 9.42847V4.03296C13.4792 3.20453 12.8077 2.53296 11.9792 2.53296H6.58374C6.27966 2.53301 5.99684 2.6235 5.7605 2.77905H4.42358C4.85652 2.03463 5.66056 1.53304 6.58374 1.53296H11.9792Z'), width: 16, height: 16 })
-          .fill(this.color).stroke(this.color).strokeWidth(0)
+          .fill(this.resolvedColor(this.color, this.dark)).stroke(this.resolvedColor(this.color, this.dark)).strokeWidth(0)
           .width(this.glyphSize).height(this.glyphSize)
       }.width(this.glyphSize).height(this.glyphSize)
     } else {
       Path({ commands: this.scaleCommands(this.pathForGlyph()), width: 16, height: 16 })
-        .fill(this.filledGlyph() ? this.color : Color.Transparent)
-        .stroke(this.color).strokeWidth(this.filledGlyph() ? 0 : this.glyph === 'plus-outline' ? 1.3 : 1)
+        .fill(this.filledGlyph() ? this.resolvedColor(this.color, this.dark) : Color.Transparent)
+        .stroke(this.resolvedColor(this.color, this.dark)).strokeWidth(this.filledGlyph() ? 0 : this.glyph === 'plus-outline' ? 1.3 : 1)
         .strokeLineCap(LineCapStyle.Round).strokeLineJoin(LineJoinStyle.Round)
         .width(this.glyphSize).height(this.glyphSize)
     }
