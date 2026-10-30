@@ -134,6 +134,42 @@ test('device binding, event deduplication, outbox retry and logout revocation', 
   assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0);
 });
 
+test('tiered notification matrix validates, filters and carries only routing metadata', async t => {
+  const { db, call } = await fixture(t, { mode: 'none', allowNoAuth: true, pushConfigured: true });
+  const cookie = cookies(await call('/pocket/api/auth/none', {}));
+  const device = {
+    id: 'device_tiered_123456',
+    token: 'opaque-tiered-token-123456',
+    notifications: {
+      version: 1,
+      approval: 'standard',
+      failed: 'standard',
+      completed: 'quiet',
+      connection: 'off'
+    }
+  };
+  assert.equal((await call('/pocket/api/device', device, { headers: { cookie } })).status, 200);
+  const headers = { authorization: 'Bearer ' + secret };
+  const event = { id: 'tiered:1:run.completed', sessionId: 'session-tiered', code: 'run.completed', title: '短标题' };
+  assert.equal((await call('/pocket/api/events', event, { headers })).status, 200);
+  const payload = JSON.parse(db.prepare('SELECT payload FROM jobs').get().payload);
+  assert.equal(payload.version, 1);
+  assert.equal(payload.eventId, event.id);
+  assert.equal(payload.category, 'completed');
+  assert.equal(payload.level, 'quiet');
+  assert.equal(payload.sessionId, event.sessionId);
+  assert.equal(payload.title, event.title);
+  assert.equal(payload.body, undefined);
+
+  device.notifications.completed = 'off';
+  assert.equal((await call('/pocket/api/device', device, { headers: { cookie } })).status, 200);
+  assert.equal((await call('/pocket/api/events', { ...event, id: 'tiered:2:run.completed' }, { headers })).status, 200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 1);
+
+  device.notifications.completed = 'loud';
+  assert.equal((await call('/pocket/api/device', device, { headers: { cookie } })).status, 400);
+});
+
 test('plugin routes real Harness events without message content; dispose aborts network', () => {
   const session = { id: 'session' };
   assert.deepEqual(routingEvent(session, { type: 'turn/end', seq: 4, data: { reason: { kind: 'completed' }, private: 'secret' } }), { id: 'session:4:run.completed', sessionId: 'session', code: 'run.completed', seq: 4 });
@@ -287,4 +323,40 @@ test('native and compatibility registrations share tokens without crossing login
   assert.equal(db.prepare('SELECT count(*) AS n FROM devices').get().n,1);
   await call('/pocket/api/device',{allForSession:true},{method:'DELETE',headers:{cookie:owner}});
   assert.equal(db.prepare('SELECT count(*) AS n FROM devices').get().n,0);
+});
+
+test('notification tiers migrate legacy booleans and filter completion, failure and approval independently', async t => {
+  const { db, call } = await fixture(t, { mode: 'none', allowNoAuth: true, pushConfigured: true });
+  const cookie = cookies(await call('/pocket/api/auth/none', {}));
+  const id = 'tier-device-123456';
+  const token = 'tier-token-123456789';
+  assert.equal((await call('/pocket/api/device', {
+    id, token, notifications: { completed: false, failed: true, approval: true }
+  }, { headers: { cookie } })).status, 200);
+  assert.deepEqual(
+    JSON.parse(db.prepare('SELECT notifications FROM device_preferences WHERE device=?').get(id).notifications),
+    { completed: 'off', failed: 'standard', approval: 'standard', connection: 'off' });
+
+  const publish = async (eventId, seq, code, approvalId) => {
+    const response = await call('/pocket/api/events', {
+      id: eventId, sessionId: 'tier-session', seq, code, ...(approvalId ? { approvalId } : {})
+    }, { headers: { authorization: 'Bearer ' + secret } });
+    assert.equal(response.status, 200);
+  };
+  await publish('tier:completed', 1, 'run.completed');
+  assert.equal(db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0,
+    'an off category must not enqueue work');
+  await publish('tier:failed', 2, 'run.failed');
+  await publish('tier:approval', 3, 'permission.required', 'tier-approval');
+  const jobs = db.prepare('SELECT payload FROM jobs ORDER BY id').all().map(row => JSON.parse(row.payload));
+  assert.equal(jobs.length, 2);
+  assert.deepEqual(jobs.map(job => [job.category, job.level]), [
+    ['failed', 'standard'],
+    ['approval', 'standard']
+  ]);
+  assert.ok(jobs.every(job => job.version === 1 && job.eventId && !('message' in job)));
+
+  assert.equal((await call('/pocket/api/device', {
+    id, token, notifications: { completed: 'quiet', failed: 'prominent', approval: 'invalid', connection: 'off' }
+  }, { headers: { cookie } })).status, 400);
 });

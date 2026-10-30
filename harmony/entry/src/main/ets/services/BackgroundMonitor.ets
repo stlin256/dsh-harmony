@@ -26,10 +26,35 @@ export class BackgroundMonitor {
     try { await backgroundTaskManager.stopBackgroundRunning(context); } catch (_) {}
   }
 
-  static async notify(sessionId: string, title: string, text: string, id: number): Promise<void> {
+  private static async slot(level: string): Promise<notificationManager.SlotType> {
+    const desired = level === 'quiet' ?
+      notificationManager.SlotType.CONTENT_INFORMATION :
+      level === 'prominent' ? notificationManager.SlotType.SOCIAL_COMMUNICATION :
+        notificationManager.SlotType.SERVICE_INFORMATION;
+    const choices: notificationManager.SlotType[] = desired === notificationManager.SlotType.CONTENT_INFORMATION ?
+      [desired] : [desired, notificationManager.SlotType.SERVICE_INFORMATION,
+        notificationManager.SlotType.CONTENT_INFORMATION];
+    for (const choice of choices) {
+      try {
+        await notificationManager.getSlot(choice);
+        return choice;
+      } catch (_) {
+        try {
+          await notificationManager.addSlot(choice);
+          return choice;
+        } catch (_) {}
+      }
+    }
+    return notificationManager.SlotType.CONTENT_INFORMATION;
+  }
+
+  static async notify(sessionId: string, title: string, text: string, id: number,
+    level: string = 'standard'): Promise<void> {
     const action = await BackgroundMonitor.action(sessionId);
+    const slotType = await BackgroundMonitor.slot(level);
     const request: notificationManager.NotificationRequest = {
       id,
+      notificationSlotType: slotType,
       content: {
         notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
         normal: { title: title.slice(0, 80), text: text.slice(0, 160) }

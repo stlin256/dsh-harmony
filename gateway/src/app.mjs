@@ -16,6 +16,13 @@ const equal = (a, b) => {
   const left = Buffer.from(a); const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 };
+const notificationLevels = ['off', 'quiet', 'standard', 'prominent'];
+const defaultNotificationLevels = { completed: 'quiet', failed: 'standard', approval: 'standard', connection: 'off' };
+const normalizedNotificationLevels = value => Object.fromEntries(Object.entries(defaultNotificationLevels).map(([key, fallback]) => {
+  const current = value?.[key];
+  return [key, notificationLevels.includes(current) ? current : current === true ? 'standard' :
+    current === false ? 'off' : fallback];
+}));
 const cookie = req => /(?:^|;\s*)pocket=([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie || '')?.[1];
 const SESSION_TTL = 30 * 86400000;
 
@@ -179,10 +186,11 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     const { id, token, notifications } = req.body || {};
     if (!/^[A-Za-z0-9_-]{16,80}$/.test(id) || typeof token !== 'string' || token.length < 16 || token.length > 4096) return res.sendStatus(400);
     if (notifications !== undefined && (!notifications || typeof notifications !== 'object' || Array.isArray(notifications) ||
-      Object.keys(notifications).some(key => !['completed', 'failed', 'approval'].includes(key)) ||
-      Object.values(notifications).some(value => typeof value !== 'boolean'))) return res.sendStatus(400);
-    const levels = { completed: notifications?.completed !== false, failed: notifications?.failed !== false,
-      approval: notifications?.approval !== false };
+      Object.keys(notifications).some(key => !['version', 'completed', 'failed', 'approval', 'connection'].includes(key)) ||
+      (notifications.version !== undefined && notifications.version !== 1) ||
+      ['completed', 'failed', 'approval', 'connection'].some(key => notifications[key] !== undefined &&
+        typeof notifications[key] !== 'boolean' && !notificationLevels.includes(notifications[key])))) return res.sendStatus(400);
+    const levels = normalizedNotificationLevels({ ...defaultNotificationLevels, ...(notifications || {}) });
     const existing = db.prepare('SELECT id,owner FROM devices WHERE id = ? OR token = ?').all(id, token);
     if (existing.some(row => row.owner !== owner)) return res.status(409).json({ error: '设备已绑定其他登录会话，请先在原会话关闭通知' });
     db.exec('BEGIN IMMEDIATE');
@@ -232,12 +240,14 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
     try {
       const inserted = db.prepare('INSERT OR IGNORE INTO events VALUES (?, ?)').run(id, now);
       if (inserted.changes && projectEvent(db, { sessionId, code, seq, approvalId, title }, now) && notificationCodes.includes(code)) {
-        const payload = JSON.stringify({ sessionId, code, title });
         const category = code === 'run.completed' ? 'completed' : code === 'run.failed' ? 'failed' : 'approval';
         for (const device of db.prepare(`SELECT d.id,p.notifications FROM devices d LEFT JOIN device_preferences p ON p.device=d.id`).all()) {
-          let levels = { completed: true, failed: true, approval: true };
-          try { if (device.notifications) levels = { ...levels, ...JSON.parse(device.notifications) }; } catch {}
-          if (levels[category] === false) continue;
+          let saved = {};
+          try { if (device.notifications) saved = JSON.parse(device.notifications); } catch {}
+          const levels = normalizedNotificationLevels({ ...defaultNotificationLevels, ...saved });
+          const level = levels[category];
+          if (level === 'off') continue;
+          const payload = JSON.stringify({ version: 1, eventId: id, category, level, sessionId, code, title, occurredAt: now });
           db.prepare('INSERT INTO jobs(device,payload,due,expires) VALUES (?,?,?,?)').run(device.id, payload, now, now + 3600000);
         }
       }

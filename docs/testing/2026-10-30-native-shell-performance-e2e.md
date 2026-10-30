@@ -80,6 +80,8 @@ Passkey state and app data remain available.
   window renders, scrolling remains responsive and message bodies stay complete.
 - [ ] Verify code, reasoning, tools, images, tables and diff blocks survive cache
   restore.
+- [ ] Open a cached transcript with the network disabled and verify previously
+  resolved image bytes still render without a server request.
 - [ ] Logout, sign in with another identity and confirm no prior transcript,
   route or card data appears.
 

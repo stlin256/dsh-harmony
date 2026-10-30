@@ -1,4 +1,5 @@
 import { WidgetTask } from '../../services/WidgetStore';
+import { WidgetLinkParams } from '../WidgetLinkParams';
 
 @Entry
 @Component
@@ -23,7 +24,13 @@ struct OverviewCard {
   }
 
   private taskRows(): WidgetTask[] {
-    try { return (JSON.parse(this.tasks) as WidgetTask[]).slice(0, 4); }
+    try {
+      const priority: string[] = ['waiting', 'running', 'failed', 'completed', 'unknown'];
+      return (JSON.parse(this.tasks) as WidgetTask[]).sort((left: WidgetTask, right: WidgetTask): number => {
+        const order = priority.indexOf(left.state) - priority.indexOf(right.state);
+        return order || right.updatedAt - left.updatedAt;
+      }).slice(0, 4);
+    }
     catch (_) { return []; }
   }
 
@@ -42,10 +49,21 @@ struct OverviewCard {
         Blank()
         Text(this.stamp).fontSize(10).fontColor($r('app.color.widget_secondary')).maxLines(1)
       }.width('100%')
+      if (this.showCounts) {
+        Row({ space: 12 }) {
+          this.metric(this.waiting, '待确认')
+          this.metric(this.running, '运行中')
+          if (!this.showTasks) {
+            this.metric(this.completed, '近期完成')
+            this.metric(this.failed, '近期失败')
+          }
+        }.width('100%')
+      }
       if (this.showTasks && this.taskRows().length) {
         Column({ space: 2 }) {
           ForEach(this.taskRows(), (task: WidgetTask) => {
-            FormLink({ action: 'router', abilityName: 'EntryAbility', params: { sessionId: task.sessionId } }) {
+            FormLink({ action: 'router', abilityName: 'EntryAbility',
+              params: new WidgetLinkParams(task.sessionId, '') }) {
               Row({ space: 8 }) {
                 Text(task.title).fontSize(12).layoutWeight(1).maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.widget_primary'))
@@ -54,7 +72,7 @@ struct OverviewCard {
             }.width('100%').accessibilityText(task.title + '，' + this.stateLabel(task.state))
           }, (task: WidgetTask) => task.sessionId)
         }.layoutWeight(1).width('100%')
-      } else if (this.showCounts) {
+      } else if (this.showCounts && !this.showTasks) {
         Row() {
           this.metric(this.running, '运行中')
           this.metric(this.waiting, '待审批')
@@ -68,12 +86,14 @@ struct OverviewCard {
       Text(this.detail).fontSize(10).fontColor($r('app.color.widget_secondary')).maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
       Row({ space: 8 }) {
-        FormLink({ action: 'router', abilityName: 'EntryAbility', params: { pocketRoute: 'workspace' } }) {
+        FormLink({ action: 'router', abilityName: 'EntryAbility',
+          params: new WidgetLinkParams('', 'workspace') }) {
           Text('打开工作空间').fontSize(12).fontColor($r('app.color.widget_primary'))
             .width('100%').height(44).textAlign(TextAlign.Center)
             .backgroundColor($r('app.color.widget_action')).borderRadius(12)
         }.layoutWeight(1).accessibilityText('打开 Harness 工作空间')
-        FormLink({ action: 'router', abilityName: 'EntryAbility', params: { pocketRoute: 'overview' } }) {
+        FormLink({ action: 'router', abilityName: 'EntryAbility',
+          params: new WidgetLinkParams('', 'overview') }) {
           Text('同步状态').fontSize(12).fontColor($r('app.color.widget_primary'))
             .width('100%').height(44).textAlign(TextAlign.Center)
             .backgroundColor($r('app.color.widget_action')).borderRadius(12)

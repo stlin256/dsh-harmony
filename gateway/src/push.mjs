@@ -12,11 +12,17 @@ export function createPushSender(filename, category = 'MARKETING', testMessage =
     const input = `${encode({ alg: 'PS256', typ: 'JWT', kid: account.key_id })}.${encode({ iss: account.sub_account,
       aud: 'https://oauth-login.cloud.huawei.com/oauth2/v3/token', iat: now, exp: now + 3600 })}`;
     const jwt = input + '.' + sign('sha256', Buffer.from(input), { key, padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }).toString('base64url');
+    const bodyCategory = routing.category ||
+      (routing.code === 'run.failed' ? 'failed' :
+        routing.code === 'permission.required' ? 'approval' : 'completed');
+    const body = bodyCategory === 'failed' ? '任务执行失败' :
+      bodyCategory === 'approval' ? '有任务需要确认' :
+      bodyCategory === 'connection' ? '服务连接已变化' : '任务已完成';
     const response = await fetch(`https://push-api.cloud.huawei.com/v3/${account.project_id}/messages:send`, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json', 'push-type': '0' },
       body: JSON.stringify({ payload: { notification: { category, title: routing.title || 'DSH Harmony',
-        body: routing.code === 'run.failed' ? '任务执行失败' : routing.code === 'permission.required' ? '有任务需要确认' : '任务已完成',
+        body,
         clickAction: { actionType: 0, data: routing } } }, target: { token: [token] }, pushOptions: { testMessage, ttl } })
     });
     const result = await response.json();

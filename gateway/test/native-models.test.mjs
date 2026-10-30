@@ -49,15 +49,24 @@ test('widget task-name defaults, opt-out, cross-process restoration, expiry and 
   const { WidgetStore, OverviewSnapshot } = load('WidgetStore', kits, { Date: Clock });
   WidgetStore.register(context, '123');
   WidgetStore.register(context, '123');
-  const snapshot = Object.assign(new OverviewSnapshot(), { running: 2, waiting: 1, completed: 3, failed: 0, observedAt: now, generatedAt: now });
+  const snapshot = Object.assign(new OverviewSnapshot(), { running: 2, waiting: 1, completed: 3, failed: 0, observedAt: now, generatedAt: now,
+    tasks: [
+      { sessionId: 'completed-session', title: '完成', state: 'completed', updatedAt: now + 3 },
+      { sessionId: 'running-session', title: '运行', state: 'running', updatedAt: now + 2 },
+      { sessionId: 'waiting-session', title: '确认', state: 'waiting', updatedAt: now + 1 }
+    ] });
   await WidgetStore.update(context, snapshot);
   assert.equal(WidgetStore.data(context).showCounts, true);
+  assert.equal(WidgetStore.data(context).primarySessionId, 'waiting-session');
+  assert.deepEqual(JSON.parse(WidgetStore.data(context).tasks).map(task => task.state), ['waiting', 'running', 'completed']);
   assert.notEqual(disk.get('pocket-widget-snapshot').get('snapshot'), '');
   assert.equal(deliveries.length, 1, 'duplicate form instance IDs must not duplicate delivery');
   await WidgetStore.setDetails(context, false);
   await WidgetStore.update(context, snapshot);
-  assert.equal(WidgetStore.data(context).showCounts, false);
-  assert.equal(disk.get('pocket-widget-snapshot').get('snapshot'), '');
+  assert.equal(WidgetStore.data(context).showCounts, true, 'privacy mode keeps anonymous counts');
+  assert.equal(WidgetStore.data(context).redacted, true);
+  assert.equal(WidgetStore.data(context).showTasks, false);
+  assert.equal(JSON.parse(disk.get('pocket-widget-snapshot').get('snapshot')).tasks.length, 0);
   await WidgetStore.setDetails(context, true);
   await WidgetStore.update(context, snapshot);
   assert.equal(WidgetStore.data(context).showCounts, true);
@@ -65,7 +74,10 @@ test('widget task-name defaults, opt-out, cross-process restoration, expiry and 
   const restarted = load('WidgetStore', kits, { Date: Clock });
   assert.equal(restarted.WidgetStore.data(context).waiting, '1');
   now += 16 * 60000;
-  assert.equal(WidgetStore.data(context).showCounts, false);
+  assert.equal(WidgetStore.data(context).showCounts, true,
+    'a stale last-good snapshot keeps anonymous counts');
+  assert.equal(WidgetStore.data(context).stale, true);
+  assert.equal(WidgetStore.data(context).showTasks, false);
   assert.match(WidgetStore.data(context).detail, /过期/);
   let release;
   block = new Promise(resolve => { release = resolve; });
@@ -328,13 +340,40 @@ test('native GFM tables preserve escaped pipes, alignment and uneven rows', () =
   assert.equal(nativeMarkdownTable('a | b\n-- | x'),null);
 });
 
+test('native syntax highlighting preserves source and completed turns own one footer copy action', () => {
+  const { nativeHighlightCode } = load('NativeCodeHighlight', {});
+  const source = 'export const value = "a\\n";\r\nfunction run() { return 42; }';
+  const tokens = nativeHighlightCode(source, 'typescript');
+  assert.equal(tokens.map(token => token.text).join(''), source);
+  assert.ok(tokens.some(token => token.kind === 'keyword'));
+  assert.ok(tokens.some(token => token.kind === 'string'));
+  assert.equal(nativeHighlightCode(source, 'unknown').map(token => token.text).join(''), source);
+
+  const model = load('NativeSessionModel', {});
+  const transcript = load('NativeTranscript', {});
+  const start = Object.assign(new model.NativeMessage(), {
+    id: 'start', role: 'turn', eventType: 'turn/start', turn: 1, turnKey: 'turn:1'
+  });
+  const final = Object.assign(new model.NativeMessage(), {
+    id: 'answer', role: 'assistant', text: '最终答复', turn: 1, turnKey: 'turn:1'
+  });
+  const end = Object.assign(new model.NativeMessage(), {
+    id: 'end', role: 'turn', eventType: 'turn/end', outcome: 'completed',
+    label: '已完成', turn: 1, turnKey: 'turn:1'
+  });
+  const rows = transcript.nativeTranscript([start, final, end], false);
+  const footer = rows.find(row => row.role === 'turn-footer');
+  assert.equal(footer.footerCopyText, '最终答复');
+  assert.equal(footer.footerCopyMessageId, 'answer');
+});
+
 test('foreground navigation wins over width changes and the session menu keeps the official action order', () => {
   const {nativeCanGoBack,nativeSessionMenu,nativeForkTitle}=load('NativeNavigation',{});
-  assert.equal(nativeCanGoBack({wide:true,sessions:true,picker:true}),true);
-  assert.equal(nativeCanGoBack({wide:true,sessions:true,tools:true}),true);
-  assert.equal(nativeCanGoBack({wide:false,sessions:true,menu:true}),true);
-  assert.equal(nativeCanGoBack({wide:false,sessions:false}),true);
-  assert.equal(nativeCanGoBack({wide:true,sessions:false}),false);
+  assert.equal(nativeCanGoBack({wide:true,drawerOpen:false,picker:true}),true);
+  assert.equal(nativeCanGoBack({wide:true,drawerOpen:false,tools:true}),true);
+  assert.equal(nativeCanGoBack({wide:false,drawerOpen:true,menu:true}),true);
+  assert.equal(nativeCanGoBack({wide:false,drawerOpen:true}),true);
+  assert.equal(nativeCanGoBack({wide:true,drawerOpen:false}),false);
   assert.equal(nativeSessionMenu(false).map(x=>x.id).join(','),'pin,rename,fork,archive,copyId');
   assert.equal(nativeSessionMenu(true,true).map(x=>x.id).join(','),'rename,fork,unarchive,copyId');
   assert.equal(nativeForkTitle('task (99999999999999999999)'),'task (100000000000000000000)');
@@ -515,6 +554,11 @@ test('native transport shares only gateway cookies, disables redirects and never
   assert.equal(calls[0].options.maxRedirects,0);
   assert.equal(calls[0].options.extraData,undefined);
   assert.equal(configured.length,0,'ordinary responses must not overwrite the shared login cookie');
+  streamBody = JSON.stringify({ type: 'page', messages: [], hasMore: false });
+  const beforePages = calls.length;
+  await Promise.all([client.page('session-a', 42, 84), client.page('session-a', 42, 84)]);
+  assert.equal(calls.length, beforePages + 1, 'identical in-flight history pages must be coalesced');
+  streamBody = '{}';
   await client.request('/pocket/api/auth/none','POST','{}');
   assert.equal(configured[0][2],false);assert.equal(configured[0][3],true);
   streamBody = JSON.stringify({text:'完整😀'.repeat(400000)});
@@ -566,6 +610,48 @@ test('UI mode preference persists and JavaScript cannot switch it from another o
   await bridge.performNative('themeMode','dark');assert.equal(state.get('nativeThemeMode'),'dark');
 });
 
+test('local notification tiers migrate legacy booleans and preserve off/quiet/standard filtering', async () => {
+  const {preferences,disk}=storage();
+  const state=new Map();
+  const AppStorage={get:key=>state.get(key),setOrCreate:(key,value)=>state.set(key,value)};
+  const original=preferences.getPreferencesSync;
+  preferences.getPreferencesSync=(...args)=>({...original(...args),flush:async()=>{}});
+  const delivered=[];
+  const notificationManager={requestEnableNotification:async()=>{},
+    isNotificationEnabled:async()=>true,ContentType:{NOTIFICATION_CONTENT_BASIC_TEXT:0}};
+  const {PocketBridge}=load('PocketBridge',{
+    '@kit.AbilityKit':{},'@kit.ArkWeb':{},'@kit.NotificationKit':{notificationManager},
+    '@kit.ArkData':{preferences},'@kit.ArkTS':{util:{generateRandomUUID:()=> 'device-id'}},
+    './WindowAppearance':{WindowAppearance:{}},'./NativeExperience':{NativeExperience:{state:()=> '{}'}},
+    './WidgetStore':{WidgetStore:{detailsEnabled:()=>true}},
+    'entry/PushKitAdapter':{PushKitAdapter:{supported:false}},
+    './BackgroundMonitor':{BackgroundMonitor:{
+      notificationId:(session,kind)=>session.length + kind.length,
+      notify:async(session,title,body,id,level)=>delivered.push({session,title,body,id,level})
+    }}
+  },{AppStorage});
+  const bridge=new PocketBridge(context,{},'https://dsh.example.com',async()=>{});
+  disk.set('dsh-notifications',new Map([['levels',JSON.stringify({completed:false,failed:true,approval:false})]]));
+  const saved=JSON.parse(await bridge.performNative('nativeState',''));
+  assert.equal(saved.notifyCompleted,'off');
+  assert.equal(saved.notifyFailed,'standard');
+  assert.equal(saved.notifyApproval,'off');
+  await bridge.performNative('backgroundMonitor','true');
+  await assert.rejects(()=>bridge.performNative('notificationLevels',
+    JSON.stringify({completed:'loud',failed:'standard',approval:'standard',connection:'off'})));
+  assert.equal(delivered.length,0);
+  await bridge.performNative('notificationLevels',
+    JSON.stringify({version:1,completed:'quiet',failed:'standard',approval:'off',connection:'standard'}));
+  await bridge.performNative('publishLocalNotification',
+    JSON.stringify({sessionId:'session-a',title:'Task',state:'completed'}));
+  await bridge.performNative('publishLocalNotification',
+    JSON.stringify({sessionId:'session-a',title:'Task',state:'waiting'}));
+  await bridge.performNative('publishLocalNotification',
+    JSON.stringify({sessionId:'session-a',title:'Task',state:'connection'}));
+  assert.deepEqual(delivered.map(item=>item.level),['quiet','standard']);
+  assert.deepEqual(delivered.map(item=>item.body),['任务已完成','服务连接中断']);
+});
+
 test('native history grows past former limits and retains older pages on reconnect', () => {
   const { NativeSessionModel } = load('NativeSessionModel', {});
   const model = new NativeSessionModel();
@@ -599,4 +685,56 @@ test('older pages cannot resurrect history removed by a newer replacement', () =
   model.apply({type:'snapshot',cursor:100,beforeSeq:90,messages:[{seq:100,id:'event-100',text:'replacement'}],hasMore:true,replacements:[{start:1,end:50}]});
   model.prepend({messages:[{seq:1,id:'event-1',text:'removed'},{seq:51,id:'event-51',text:'kept'}],beforeSeq:1,hasMore:false});
   assert.deepEqual(Array.from(model.messages,row=>row.seq),[51,100]);
+});
+
+test('encrypted transcript snapshots restore messages, replacement state and stream checkpoints', () => {
+  const { NativeSessionModel } = load('NativeSessionModel', {});
+  const model = new NativeSessionModel();
+  model.apply({
+    type: 'snapshot', cursor: 10, historyCut: 10, beforeSeq: 5, hasMore: true,
+    messages: [{ seq: 6, id: 'six', role: 'assistant', text: 'cached' }],
+    replacements: [{ start: 1, end: 2 }],
+    attemptId: 'attempt', nextIndex: 2, text: 'partial', reasoning: 'plan'
+  });
+  model.expandedTurns.add('turn:1');
+  model.turnDisclosure.set('turn:1', true);
+  model.disclosures.set('turn:1|call:1', true);
+  model.collapseThrough = 9;
+  const restored = new NativeSessionModel();
+  restored.restore(JSON.parse(JSON.stringify(model.capture())));
+  assert.deepEqual(Array.from(restored.messages, row => row.id), ['six']);
+  assert.equal(restored.historyBefore, 5);
+  assert.equal(restored.historyCut, 10);
+  assert.equal(restored.hasMore, true);
+  assert.equal(restored.streamText, 'partial');
+  assert.equal(restored.streamReasoning, 'plan');
+  assert.equal(restored.expandedTurns.has('turn:1'), true);
+  assert.equal(restored.turnDisclosure.get('turn:1'), true);
+  assert.equal(restored.disclosures.get('turn:1|call:1'), true);
+  assert.equal(restored.collapseThrough, 9);
+  assert.throws(() => restored.restore({ version: 99, messages: [] }));
+});
+
+test('stable transcript sources publish bounded tail updates instead of reloading long histories', () => {
+  const { NativeListSource } = load('NativeListSource', {});
+  const source = new NativeListSource();
+  const events = [];
+  source.registerDataChangeListener({
+    onDataReloaded: () => events.push('reload'),
+    onDataAdded: index => events.push('add:' + index),
+    onDataChange: index => events.push('change:' + index),
+    onDataDeleted: index => events.push('delete:' + index),
+    onDataMoved: (from, to) => events.push('move:' + from + ':' + to)
+  });
+  const initial = Array.from({ length: 2000 },
+    (_, index) => ({ id: 'row-' + index, text: 'stable' }));
+  source.set(initial, row => row.id);
+  events.length = 0;
+  const changed = initial.map(row => ({ ...row }));
+  changed[changed.length - 1].text = 'streamed';
+  source.set(changed, row => row.id);
+  assert.deepEqual(events, ['change:1999']);
+  changed.push({ id: 'row-new', text: 'appended' });
+  source.set(changed, row => row.id);
+  assert.deepEqual(events, ['change:1999', 'add:2000']);
 });
