@@ -179,7 +179,7 @@ test('empty session filtering uses the explicit DSH flag and preserves untitled 
 });
 
 test('Workspace lists honor archive, pin, manual order and search without mutating source rows',()=>{
-  const {nativeWorkspaceSessions,nativeToolsParent}=load('NativeSessionModel',{});
+  const {nativeWorkspaceSessions,nativeToolsParent,nativeSessionDragOrder}=load('NativeSessionModel',{});
   const rows=[
     {id:'a',title:'Alpha',blank:false,updatedAt:5,cwd:'/workspace/project'},
     {id:'b',title:'Beta',blank:false,updatedAt:6},
@@ -193,6 +193,14 @@ test('Workspace lists honor archive, pin, manual order and search without mutati
   assert.equal(nativeToolsParent('queueEdit'),'queue');assert.equal(nativeToolsParent('efforts'),'modelsRoot');
   assert.equal(nativeToolsParent('models'),'modelsRoot');assert.equal(nativeToolsParent('modelsRoot'),'');
   assert.equal(nativeToolsParent('rename'),'');
+  const complete = ['pinned','a','hidden','b','c'];
+  assert.deepEqual(Array.from(nativeSessionDragOrder(complete,'a','c',false,false,false)),
+    ['pinned','hidden','b','a','c']);
+  assert.deepEqual(Array.from(nativeSessionDragOrder(complete,'a','b',true,false,false)),
+    ['pinned','hidden','b','a','c']);
+  assert.equal(nativeSessionDragOrder(complete,'a','pinned',false,false,true),null);
+  assert.equal(nativeSessionDragOrder(complete,'missing','b',false,false,false),null);
+  assert.deepEqual(Array.from(complete),['pinned','a','hidden','b','c']);
 });
 
 test('native inline markdown preserves literal code and malformed text while styling nested runs', () => {
@@ -205,6 +213,46 @@ test('native inline markdown preserves literal code and malformed text while sty
   assert.equal(runs.find(x => x.text === 'web').href,'https://example.com/a_(b)');
   assert.equal(nativeInlineMarkdown('**unfinished').map(x => x.text).join(''),'**unfinished');
   assert.equal(nativeInlineMarkdown('`**literal**`').map(x => x.text).join(''),'**literal**');
+  const image = nativeInlineMarkdown('![preview](</workspace/docs/image.png>)').at(0);
+  assert.equal(image.text, 'preview');
+  assert.equal(image.href, '/workspace/docs/image.png');
+  assert.equal(image.isImage, true);
+  assert.equal(image.alt, 'preview');
+});
+
+test('native diff renders only explicit or applied edits and honors null old text', () => {
+  const { nativeDiff, nativeDiffText } = load('NativeDiff', {});
+  const message = fields => Object.assign({
+    args: '', metaRaw: '', output: '', error: '', failed: false, status: '', outcome: ''
+  }, fields);
+
+  const created = nativeDiff(message({
+    args: JSON.stringify({ path: 'src/new.ts', oldText: null, newText: 'one\ntwo\n' })
+  }));
+  assert.equal(created.matched, true);
+  assert.equal(created.rows.filter(row => row.kind === 'add').length, 2);
+  assert.equal(created.rows.filter(row => row.kind === 'del').length, 0);
+  assert.equal(nativeDiffText(created.rows), 'src/new.ts\n+ one\n+ two');
+
+  const multiple = nativeDiff(message({
+    args: JSON.stringify({ diffs: [
+      { path: 'a.ts', oldText: 'old', newText: 'new' },
+      { path: 'b.ts', oldText: null, newText: 'created' }
+    ] })
+  }));
+  assert.equal(multiple.matched, true);
+  assert.equal(multiple.path, 'a.ts');
+  assert.deepEqual(Array.from(multiple.rows.filter(row => row.kind === 'path')
+    .map(row => row.text)), ['a.ts', 'b.ts']);
+
+  const patch = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch';
+  assert.deepEqual(Array.from(nativeDiff(message({ output: patch })).rows
+    .map(row => row.kind)), ['path', 'del', 'add']);
+  assert.equal(nativeDiff(message({ output: patch, failed: true })).matched, false);
+  assert.equal(nativeDiff(message({ output: patch, status: 'interrupted' })).matched, false);
+  assert.equal(nativeDiff(message({ output: patch, output: 'AUTO_REVIEW_DENIED\n' + patch })).matched,
+    false);
+  assert.equal(nativeDiff(message({ output: 'old\n+new' })).matched, false);
 });
 
 test('model directory paints per-session cache before refresh and updates the shared caption', async () => {

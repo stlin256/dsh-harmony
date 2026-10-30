@@ -17,6 +17,7 @@ export class NativeModelDirectoryState {
 /** One directory per Session is shared by the composer caption and its selection panel. */
 export class NativeModelDirectory {
   private entries: Map<string, NativeModelDirectoryState> = new Map<string, NativeModelDirectoryState>();
+  private pending: Map<string, Promise<NativeModelDirectoryState>> = new Map<string, Promise<NativeModelDirectoryState>>();
   private call: (body: string) => Promise<string>;
   private changed: () => void;
   constructor(call: (body: string) => Promise<string>, changed: () => void = (): void => {}) { this.call = call; this.changed = changed; }
@@ -34,6 +35,15 @@ export class NativeModelDirectory {
     return (model?.name || state.selected.model || '模型') + (name ? ' · ' + name : '');
   }
   async load(id: string): Promise<NativeModelDirectoryState> {
+    const active = this.pending.get(id);
+    if (active) return active;
+    const task = this.read(id).finally((): void => {
+      if (this.pending.get(id) === task) this.pending.delete(id);
+    });
+    this.pending.set(id, task);
+    return task;
+  }
+  private async read(id: string): Promise<NativeModelDirectoryState> {
     const state = this.state(id); const version = ++state.generation;
     const results = await Promise.all([this.call(JSON.stringify({ operation: 'modelCatalog' })), this.call(JSON.stringify({ operation: 'projections', sessionId: id }))]);
     const catalog = JSON.parse(results[0]) as NativeModelCatalog;
@@ -50,5 +60,5 @@ export class NativeModelDirectory {
     if (state.generation === version) { state.selected = result.selected; this.changed(); }
   }
   reset(): void { this.entries.forEach((state: NativeModelDirectoryState): void => { state.generation++; }); }
-  clear(): void { this.entries.clear(); }
+  clear(): void { this.entries.clear(); this.pending.clear(); }
 }

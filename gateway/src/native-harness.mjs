@@ -30,6 +30,67 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     }
     return envelope.result.value;
   }
+  async function rpcWithBytes(method, request, signal) {
+    const rpcId = randomUUID();
+    const endpoint = method;
+    const response = await fetch(new URL('/api/' + endpoint, target), {
+      method: 'POST', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
+      headers: { 'Content-Type': 'application/json', Origin: target.origin, Cookie: await credential() },
+      body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args: request } })
+    });
+    if (!response.ok) throw Error('Harness native API unavailable');
+    const type = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+    let envelope;
+    let attachments = [];
+    if (type === 'multipart/form-data') {
+      const form = await response.formData();
+      const metadata = form.get('metadata');
+      if (typeof metadata !== 'string') throw Error('Invalid binary response metadata');
+      envelope = JSON.parse(metadata);
+      form.delete('metadata');
+      attachments = Array.isArray(envelope?.attachments) ? envelope.attachments : [];
+      if (!attachments.length) throw Error('Invalid binary response attachments');
+      if (!form || typeof form.entries !== 'function') throw Error('Invalid binary response form');
+      const seen = new Set();
+      const valueRoot = { value: envelope?.result?.value };
+      for (const attachment of attachments) {
+        if (!attachment || attachment.codec !== 'bytes' || typeof attachment.part !== 'string' ||
+            !attachment.part || !Array.isArray(attachment.path) || !attachment.path.length) {
+          throw Error('Invalid binary response attachment');
+        }
+        if (seen.has(attachment.part)) throw Error('Duplicate binary response attachment');
+        seen.add(attachment.part);
+        const data = form.get(attachment.part);
+        form.delete(attachment.part);
+        if (!data || typeof data.arrayBuffer !== 'function') throw Error('Missing binary response attachment');
+        let parent = valueRoot;
+        let key = 'value';
+        for (const segment of attachment.path) {
+          const value = parent[key];
+          if (value === null || typeof value !== 'object') throw Error('Invalid binary response path');
+          if (Array.isArray(value) &&
+              (!Number.isSafeInteger(segment) || segment < 0 || segment >= value.length)) {
+            throw Error('Invalid binary response path');
+          }
+          if (!Array.isArray(value) && typeof segment !== 'string') throw Error('Invalid binary response path');
+          if (!Object.prototype.hasOwnProperty.call(value, segment)) throw Error('Invalid binary response path');
+          parent = value;
+          key = segment;
+        }
+        if (parent[key] !== null) throw Error('Invalid binary response placeholder');
+        parent[key] = new Uint8Array(await data.arrayBuffer());
+      }
+      if ([...form.keys()].length) throw Error('Unexpected binary response attachment');
+    } else {
+      envelope = await response.json();
+    }
+    if (envelope?.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true) {
+      const error = new Error('Harness rejected this operation');
+      if (typeof envelope?.result?.error?.code === 'string') error.code = envelope.result.error.code;
+      throw error;
+    }
+    return envelope.result.value;
+  }
   async function workspaceBaseline(signal) {
     const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
     const cookie = await credential();
@@ -124,6 +185,72 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       res.json({ absolutePath: value.absolutePath, version: value.version, text: value.text,
         lines: value.lines, offset: value.offset, eof: value.eof });
     }));
+    app.post('/pocket/api/native/file/stat', guarded(async (req, res, signal) => {
+      const { sessionId, path } = req.body || {};
+      if (!sessionIdValid(sessionId) || typeof path !== 'string' || !path.trim() || path.length > 4096) {
+        return res.sendStatus(400);
+      }
+      const value = await rpc('workspaceFiles/stat', { workspaceFileScopeId: sessionId, path }, signal);
+      if (typeof value?.absolutePath !== 'string' || typeof value?.version !== 'string' || !value.version ||
+          (value.bytes !== undefined && (!Number.isSafeInteger(value.bytes) || value.bytes < 0))) {
+        throw Error('Invalid workspace file stat');
+      }
+      res.json({
+        absolutePath: value.absolutePath,
+        version: value.version,
+        ...(value.bytes === undefined ? {} : { bytes: value.bytes })
+      });
+    }));
+    app.post('/pocket/api/native/file/list', guarded(async (req, res, signal) => {
+      const { sessionId, path } = req.body || {};
+      if (!sessionIdValid(sessionId) || typeof path !== 'string' || path.length > 4096) return res.sendStatus(400);
+      const value = await rpc('workspaceFiles/list', { workspaceFileScopeId: sessionId, path }, signal);
+      if (typeof value?.path !== 'string' || !Array.isArray(value.entries) || typeof value.truncated !== 'boolean') {
+        throw Error('Invalid workspace directory listing');
+      }
+      const entries = value.entries.map(entry => {
+        if (!entry || typeof entry.name !== 'string' || !entry.name || entry.name.length > 255 ||
+            !['file', 'directory', 'other'].includes(entry.type) ||
+            (entry.size !== undefined && (!Number.isSafeInteger(entry.size) || entry.size < 0))) {
+          throw Error('Invalid workspace directory entry');
+        }
+        return { name: entry.name, type: entry.type, ...(entry.size === undefined ? {} : { size: entry.size }) };
+      });
+      res.json({ path: value.path, entries, truncated: value.truncated });
+    }));
+    app.post('/pocket/api/native/file/bytes', guarded(async (req, res, signal) => {
+      const { sessionId, path, baseFile, offset = 0, length = 262144 } = req.body || {};
+      if (!sessionIdValid(sessionId) || typeof path !== 'string' || !path.trim() || path.length > 4096 ||
+          (baseFile !== undefined && (typeof baseFile !== 'string' || !baseFile || baseFile.length > 4096)) ||
+          !Number.isSafeInteger(offset) || offset < 0 ||
+          !Number.isSafeInteger(length) || length < 1 || length > 2 * 1024 * 1024 ||
+          offset + length > Number.MAX_SAFE_INTEGER) return res.sendStatus(400);
+      const args = {
+        workspaceFileScopeId: sessionId,
+        path,
+        options: { range: { offset, length }, ...(baseFile === undefined ? {} : { baseFile }) }
+      };
+      const value = await rpcWithBytes('workspaceFiles/readBytes', args, signal);
+      if (typeof value?.absolutePath !== 'string' || typeof value?.version !== 'string' || !value.version ||
+          value.offset !== offset || !(value.data instanceof Uint8Array) ||
+          value.data.length > length || typeof value.eof !== 'boolean' ||
+          (value.bytes !== undefined && (!Number.isSafeInteger(value.bytes) || value.bytes < 0))) {
+        throw Error('Invalid workspace file bytes');
+      }
+      const metadata = Buffer.from(JSON.stringify({
+        protocol: 1,
+        absolutePath: value.absolutePath,
+        version: value.version,
+        ...(value.bytes === undefined ? {} : { bytes: value.bytes }),
+        offset: value.offset,
+        eof: value.eof,
+        length: value.data.length
+      })).toString('base64url');
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-DSH-File-Window', metadata);
+      res.end(Buffer.from(value.data));
+    }));
     app.post('/pocket/api/native/prompt', guarded(async (req, res, signal) => {
       const { sessionId, requestId, text } = req.body || {};
       if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' || (!text.trim() && !req.body.images?.length)) return res.sendStatus(400);
@@ -170,7 +297,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     }));
     app.post('/pocket/api/native/operation', guarded(async (req, res, signal) => {
       const { operation, sessionId } = req.body || {};
-      if (!['modelCatalog', 'workspaceCreate', 'workspaceRename', 'workspaceDelete', 'workspaceOrder', 'settingsDescribe', 'settingsSet', 'directoryList', 'directoryCreate'].includes(operation) && !sessionIdValid(sessionId)) return res.sendStatus(400);
+      if (!['modelCatalog', 'workspaceCreate', 'workspaceRename', 'workspaceDelete', 'workspaceOrder', 'sessionInsertBefore', 'settingsDescribe', 'settingsSet', 'directoryList', 'directoryCreate'].includes(operation) && !sessionIdValid(sessionId)) return res.sendStatus(400);
       let request;
       switch (operation) {
         case 'capabilities': {
@@ -217,6 +344,16 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         case 'workspaceOrder':
           if (!sessionIdValid(req.body.workspaceId) || (req.body.beforeWorkspaceId !== undefined && !sessionIdValid(req.body.beforeWorkspaceId))) return res.sendStatus(400);
           res.json(await rpc('workspace/insertBefore', { workspaceId: req.body.workspaceId, ...(req.body.beforeWorkspaceId ? { beforeWorkspaceId: req.body.beforeWorkspaceId } : {}) }, signal)); return;
+        case 'sessionInsertBefore':
+          if (!sessionIdValid(req.body.workspaceId) || !sessionIdValid(sessionId) ||
+              (req.body.beforeSessionId !== undefined && !sessionIdValid(req.body.beforeSessionId))) {
+            return res.sendStatus(400);
+          }
+          res.json(await rpc('workspace/insertSessionBefore', {
+            workspaceId: req.body.workspaceId,
+            sessionId,
+            ...(req.body.beforeSessionId ? { beforeSessionId: req.body.beforeSessionId } : {})
+          }, signal)); return;
         case 'archive': case 'unarchive': case 'pin': case 'unpin':
           if (req.body.stopActivity !== undefined && (operation !== 'archive' || typeof req.body.stopActivity !== 'boolean')) return res.sendStatus(400);
           res.json(await rpc('workspace/' + ({ archive: 'archiveSession', unarchive: 'unarchiveSession', pin: 'pinSession', unpin: 'unpinSession' }[operation]),

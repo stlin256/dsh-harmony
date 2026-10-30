@@ -28,6 +28,34 @@ async function setup(t, options = {}) {
     let result;
     if (value.method === 'workspaceFiles/read') {
       result = { absolutePath: '/workspace/project/README.md', version: 'v7', text: '# Fixture\n\npreview', lines: 3, offset: 1, eof: true };
+    } else if (value.method === 'workspaceFiles/stat') {
+      result = { absolutePath: '/workspace/project/file.txt', version: 'v8', bytes: 7 };
+    } else if (value.method === 'workspaceFiles/list') {
+      result = { path: 'src', entries: [
+        { name: 'nested', type: 'directory' },
+        { name: 'file.txt', type: 'file', size: 7 },
+        { name: 'socket', type: 'other' }
+      ], truncated: false };
+    } else if (value.method === 'workspaceFiles/readBytes') {
+      const bytes = options.emptyReadBytes ? [] : [0, 1, 2, 255, 65, 66, 67];
+      const form = new FormData();
+      form.set('metadata', JSON.stringify({
+        type: 'server-response',
+        rpcId: value.rpcId,
+        result: { ok: true, value: {
+          absolutePath: '/workspace/project/file.txt', version: 'v8', bytes: bytes.length,
+          offset: value.payload.args.options.range.offset, data: null, eof: true
+        } },
+        attachments: [{ codec: 'bytes', part: 'bytes-0', path: ['data'] }]
+      }));
+      form.set('bytes-0', new Blob([Buffer.from(bytes)]), 'bytes.bin');
+      if (options.unexpectedAttachment) {
+        form.set('bytes-extra', new Blob([Buffer.from([9])]), 'extra.bin');
+      }
+      const encoded = new Response(form);
+      res.writeHead(200, Object.fromEntries(encoded.headers));
+      res.end(Buffer.from(await encoded.arrayBuffer()));
+      return;
     } else if (value.method === 'session/list') {
       assert.deepEqual(value.payload.args, { _request: {} }, 'source _request parameter must keep its exact wire name');
       result = { items: [{ sessionId:'session', blank:false, running:true, updatedAt:42, projections:{values:{title:'Native session'}} }] };
@@ -97,7 +125,10 @@ async function setup(t, options = {}) {
   t.after(()=>{pocket.close();for(const ws of upstreamWS.clients)ws.terminate();upstreamWS.close();server.closeAllConnections();server.close();backend.closeAllConnections();backend.close();db.close();});
   const call=(path,body,authorized=true)=>new Promise((resolve,reject)=>{
     const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:body===undefined?'GET':'POST',headers:{host:'dsh.example.com',origin,'content-type':'application/json',...(authorized?{cookie:typeof authorized === 'string' ? authorized : cookie}:{})}},res=>{
-      const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>resolve({status:res.statusCode,text:Buffer.concat(chunks).toString()}));
+      const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>{
+        const buffer=Buffer.concat(chunks);
+        resolve({status:res.statusCode,headers:res.headers,buffer,text:buffer.toString()});
+      });
     });req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));
   });
   const connect=(headers={})=>new WebSocket(`ws://127.0.0.1:${server.address().port}/pocket/native/live?sessionId=session`,{headers:{Host:'dsh.example.com',Origin:origin,Cookie:cookie,...headers}});
@@ -159,6 +190,68 @@ test('native file preview uses the official workspaceFiles scope and bounded ran
   assert.equal((await call('/pocket/api/native/file', { sessionId: 'session', path: 'README.md', limit: 501 })).status, 400);
 });
 
+test('native file browser resolves file types, directories and authenticated binary windows', async t => {
+  const { call, calls } = await setup(t);
+  const stat = await call('/pocket/api/native/file/stat', { sessionId: 'session', path: 'file.txt' });
+  assert.equal(stat.status, 200);
+  assert.deepEqual(JSON.parse(stat.text), {
+    absolutePath: '/workspace/project/file.txt', version: 'v8', bytes: 7
+  });
+  assert.equal(calls.at(-1).value.method, 'workspaceFiles/stat');
+  assert.deepEqual(calls.at(-1).value.payload.args, {
+    workspaceFileScopeId: 'session', path: 'file.txt'
+  });
+
+  const list = await call('/pocket/api/native/file/list', { sessionId: 'session', path: 'src' });
+  assert.equal(list.status, 200);
+  assert.deepEqual(JSON.parse(list.text), {
+    path: 'src', entries: [
+      { name: 'nested', type: 'directory' },
+      { name: 'file.txt', type: 'file', size: 7 },
+      { name: 'socket', type: 'other' }
+    ], truncated: false
+  });
+  assert.equal(calls.at(-1).value.method, 'workspaceFiles/list');
+
+  const bytes = await call('/pocket/api/native/file/bytes', {
+    sessionId: 'session', path: 'file.txt', offset: 0, length: 8
+  });
+  assert.equal(bytes.status, 200);
+  assert.deepEqual([...bytes.buffer], [0, 1, 2, 255, 65, 66, 67]);
+  assert.match(bytes.headers['content-type'], /^application\/octet-stream/);
+  const metadata = JSON.parse(Buffer.from(bytes.headers['x-dsh-file-window'], 'base64url').toString());
+  assert.deepEqual(metadata, {
+    protocol: 1, absolutePath: '/workspace/project/file.txt', version: 'v8',
+    bytes: 7, offset: 0, eof: true, length: 7
+  });
+  assert.equal(calls.at(-1).value.method, 'workspaceFiles/readBytes');
+  assert.deepEqual(calls.at(-1).value.payload.args.options, { range: { offset: 0, length: 8 } });
+
+  assert.equal((await call('/pocket/api/native/file/stat', { sessionId: '../bad', path: 'x' })).status, 400);
+  assert.equal((await call('/pocket/api/native/file/list', { sessionId: 'session', path: 'x'.repeat(4097) })).status, 400);
+  assert.equal((await call('/pocket/api/native/file/bytes', {
+    sessionId: 'session', path: 'file.txt', length: 2 * 1024 * 1024 + 1
+  })).status, 400);
+});
+
+test('native binary windows accept empty files and reject unexpected multipart parts', async t => {
+  const empty = await setup(t, { emptyReadBytes: true });
+  const value = await empty.call('/pocket/api/native/file/bytes', {
+    sessionId: 'session', path: 'empty.txt', offset: 0, length: 16
+  });
+  assert.equal(value.status, 200);
+  assert.equal(value.buffer.length, 0);
+  const metadata = JSON.parse(Buffer.from(value.headers['x-dsh-file-window'], 'base64url').toString());
+  assert.equal(metadata.bytes, 0);
+  assert.equal(metadata.length, 0);
+
+  const invalid = await setup(t, { unexpectedAttachment: true });
+  const rejected = await invalid.call('/pocket/api/native/file/bytes', {
+    sessionId: 'session', path: 'file.txt', offset: 0, length: 16
+  });
+  assert.equal(rejected.status, 502);
+});
+
 test('older Host exports are negotiated and an HTML login response never becomes a transcript or archive',async t=>{
   const old=await setup(t,{unavailableExports:true});
   assert.deepEqual(JSON.parse((await old.call('/pocket/api/native/operation',{operation:'capabilities',sessionId:'session'})).text),{copyMarkdown:false,downloadLog:false});
@@ -206,6 +299,30 @@ test('Workspace baseline, named Session creation and archive/pin commands use th
     assert.deepEqual(calls.at(-1).value.payload.args,{request:expected});
   }
   assert.equal((await call('/pocket/api/native/operation',{operation:'workspaceRename',workspaceId:'../bad',title:'x'})).status,400);
+});
+
+test('session ordering maps only the public workspace membership RPC', async t => {
+  const { call, calls } = await setup(t);
+  const response = await call('/pocket/api/native/operation', {
+    operation: 'sessionInsertBefore',
+    workspaceId: 'workspace',
+    sessionId: 'session',
+    beforeSessionId: 'next-session'
+  });
+  assert.equal(response.status, 200);
+  assert.equal(calls.at(-1).value.method, 'workspace/insertSessionBefore');
+  assert.deepEqual(calls.at(-1).value.payload.args, {
+    request: {
+      workspaceId: 'workspace', sessionId: 'session', beforeSessionId: 'next-session'
+    }
+  });
+  assert.equal((await call('/pocket/api/native/operation', {
+    operation: 'sessionInsertBefore', workspaceId: '../bad', sessionId: 'session'
+  })).status, 400);
+  assert.equal((await call('/pocket/api/native/operation', {
+    operation: 'sessionInsertBefore', workspaceId: 'workspace', sessionId: 'session',
+    beforeSessionId: '../bad'
+  })).status, 400);
 });
 
 test('native live channel restores stream baseline and revokes both sockets on logout',async t=>{

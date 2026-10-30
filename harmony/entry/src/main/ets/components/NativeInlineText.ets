@@ -1,7 +1,11 @@
 import { common } from '@kit.AbilityKit';
-import { pasteboard } from '@kit.BasicServicesKit';
 import { nativeInlineMarkdown, NativeInlineRun } from '../services/NativeInlineMarkdown';
-import { NativeFilePage, NativeHarnessClient } from '../services/NativeHarnessClient';
+import { NativeHarnessClient } from '../services/NativeHarnessClient';
+import { NativeDirectoryListing, NativeFileStat } from '../services/NativeHarnessClient';
+import { NativeFilePreview } from './NativeFilePreview';
+import { NativeFileBrowser } from './NativeFileBrowser';
+import { DSHIcon } from './DSHIcon';
+import { NativeExperience } from '../services/NativeExperience';
 
 @Component
 export struct NativeInlineText {
@@ -12,13 +16,19 @@ export struct NativeInlineText {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   @StorageLink('nativeDark') private dark: boolean = false;
+  @StorageLink('nativeSafeTop') private safeTop: number = 0;
+  @StorageLink('nativeSafeBottom') private safeBottom: number = 0;
+  @StorageLink('nativeSafeLeft') private safeLeft: number = 0;
+  @StorageLink('nativeSafeRight') private safeRight: number = 0;
   @State private runs: NativeInlineRun[] = [];
-  @State private previewOpen: boolean = false;
-  @State private previewLoading: boolean = false;
-  @State private previewError: string = '';
-  @State private previewTitle: string = '';
-  @State private previewText: string = '';
-  @State private previewLines: string = '';
+  @State private filePreviewOpen: boolean = false;
+  @State private filePreviewPath: string = '';
+  @State private browserOpen: boolean = false;
+  @State private browserPath: string = '';
+  @State private remotePreview: boolean = false;
+  @State private remoteUrl: string = '';
+  @State private remoteTitle: string = '';
+  @State private remoteError: string = '';
 
   aboutToAppear(): void { this.changed(); }
   private changed(): void { this.runs = nativeInlineMarkdown(this.text); }
@@ -33,6 +43,11 @@ export struct NativeInlineText {
   private async open(run: NativeInlineRun): Promise<void> {
     if (!run.href) return;
     try {
+      if (/^https?:/i.test(run.href) && run.isImage) {
+        this.remoteUrl = run.href; this.remoteTitle = run.alt || '图片'; this.remoteError = '';
+        this.remotePreview = true;
+        return;
+      }
       if (/^(?:https?|mailto):/i.test(run.href)) {
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
         await context.startAbility({ action: 'ohos.want.action.viewData', uri: run.href });
@@ -54,43 +69,59 @@ export struct NativeInlineText {
   }
   private async openFile(href: string): Promise<void> {
     if (!this.sessionId) {
-      await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, href));
-      this.getUIContext().getPromptAction().showToast({ message: '链接已复制', duration: 1500 });
+      this.getUIContext().getPromptAction().showToast({ message: '请先在会话中打开此链接', duration: 1500 });
       return;
     }
     const path = this.fileTarget(href);
     if (!path) return;
-    this.previewTitle = path.split(/[\\/]/).pop() || '文件预览';
-    this.previewText = ''; this.previewError = ''; this.previewLines = '';
-    this.previewOpen = true; this.previewLoading = true;
     try {
-      const page: NativeFilePage = await this.client.file(this.sessionId, path, 1, 240);
-      this.previewText = page.text;
-      this.previewLines = '第 ' + page.offset + '–' + (page.offset + Math.max(0, page.lines - 1)) +
-        ' 行' + (page.eof ? '' : ' · 已截取此页');
-    } catch (_) { this.previewError = '无法预览此文件'; }
-    finally { this.previewLoading = false; }
+      const stat: NativeFileStat = await this.client.statFile(this.sessionId, path);
+      if (!stat.version) throw new Error('Invalid file');
+      this.filePreviewPath = path; this.filePreviewOpen = true;
+    } catch (_) {
+      try {
+        const listing: NativeDirectoryListing = await this.client.listFiles(this.sessionId, path);
+        this.browserPath = listing.path || path; this.browserOpen = true;
+      } catch (_) {
+        this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
+      }
+    }
   }
   @Builder
   private filePreview() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
-        Text(this.previewTitle).fontSize(17).fontWeight(FontWeight.Medium).layoutWeight(1)
+    NativeFilePreview({ client: this.client, sessionId: this.sessionId, path: this.filePreviewPath,
+      onClose: (): void => { this.filePreviewOpen = false; } })
+  }
+  @Builder
+  private fileBrowser() {
+    NativeFileBrowser({ client: this.client, sessionId: this.sessionId, path: this.browserPath,
+      onClose: (): void => { this.browserOpen = false; } })
+  }
+  @Builder
+  private remoteImagePreview() {
+    Column({ space: 8 }) {
+      Row({ space: 4 }) {
+        Text(this.remoteTitle || '图片').fontSize(14).fontWeight(FontWeight.Medium).layoutWeight(1)
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor(this.dark ? '#F9FAFB' : '#17181B')
-        Button('关闭').height(40).onClick(() => { this.previewOpen = false; })
-      }.width('100%')
-      if (this.previewLoading) { LoadingProgress().width(26).height(26).margin({ top: 32 }) }
-      else if (this.previewError) {
-        Text(this.previewError).fontSize(13).fontColor(this.dark ? '#FF9393' : '#C53737')
+        Button({ type: ButtonType.Normal }) {
+          DSHIcon({ glyph: 'close-outline', glyphSize: 15, color: this.dark ? '#F9FAFB' : '#17181B' })
+        }.width(32).height(32).borderRadius(9).backgroundColor(Color.Transparent)
+          .accessibilityText('关闭图片预览').onClick(() => { this.remotePreview = false; })
+      }.height(40).width('100%')
+      if (this.remoteError) {
+        Text(this.remoteError).fontSize(13).layoutWeight(1).textAlign(TextAlign.Center)
+          .fontColor(this.dark ? '#FFB1B1' : '#B3261E')
       } else {
         Scroll() {
-          Text(this.previewText).width('100%').fontSize(13).lineHeight('21fp')
-            .fontFamily('Noto Sans Mono, monospace').copyOption(CopyOptions.InApp)
-            .fontColor(this.dark ? '#F9FAFB' : '#17181B').wordBreak(WordBreak.BREAK_WORD)
-        }.layoutWeight(1).width('100%').align(Alignment.Top)
-        Text(this.previewLines).fontSize(11).fontColor(this.dark ? '#93969B' : '#8A8D91')
+          Image(this.remoteUrl).objectFit(ImageFit.Contain).width('100%')
+            .onError(() => { this.remoteError = '图片加载失败'; })
+        }.scrollable(ScrollDirection.Free).layoutWeight(1).width('100%').align(Alignment.Center)
       }
-    }.padding(16).width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+    }.padding({
+      left: 12 + this.safeLeft, right: 12 + this.safeRight,
+      top: 8 + this.safeTop, bottom: 10 + this.safeBottom
+    }).width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
   }
   build() {
     Text() {
@@ -106,7 +137,17 @@ export struct NativeInlineText {
     }.fontSize(this.textSize).lineHeight('22fp').copyOption(CopyOptions.InApp)
       .width('100%').wordBreak(WordBreak.BREAK_WORD)
       .textAlign(this.alignment === 'right' ? TextAlign.End : this.alignment === 'center' ? TextAlign.Center : TextAlign.Start)
-      .bindContentCover(this.previewOpen, this.filePreview, { modalTransition: ModalTransition.DEFAULT,
-        onDisappear: (): void => { this.previewOpen = false; } })
+      .bindContentCover(this.filePreviewOpen, this.filePreview, {
+        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
+        onDisappear: (): void => { this.filePreviewOpen = false; }
+      })
+      .bindContentCover(this.browserOpen, this.fileBrowser, {
+        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
+        onDisappear: (): void => { this.browserOpen = false; }
+      })
+      .bindContentCover(this.remotePreview, this.remoteImagePreview, {
+        modalTransition: NativeExperience.reducedMotion() ? ModalTransition.NONE : ModalTransition.DEFAULT,
+        onDisappear: (): void => { this.remotePreview = false; }
+      })
   }
 }

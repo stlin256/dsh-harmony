@@ -7,6 +7,7 @@ import {
   NativeModelSelection
 } from '../services/NativeModelDirectory';
 import { DSHIcon } from './DSHIcon';
+import { NativeExperience } from '../services/NativeExperience';
 
 /** Compact composer popover. It paints the per-session cache before refreshing. */
 @Component
@@ -166,5 +167,7 @@ export struct NativeModelPicker {
         }.width('100%')
       }
     }.width(320).padding(10).borderRadius(16).backgroundColor(this.dark ? '#242527' : '#FFFFFF')
+      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
+        TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.98, y: 0.98 })))
   }
 }

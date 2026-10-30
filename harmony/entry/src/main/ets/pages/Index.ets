@@ -13,6 +13,7 @@ import { NativeCompatibilitySurface } from '../components/NativeCompatibilitySur
 import { NativeSettings } from '../components/NativeSettings';
 import { NativeExperience } from '../services/NativeExperience';
 import { PushKitAdapter } from 'entry/PushKitAdapter';
+import { NativeMetadataCache } from '../services/NativeMetadataCache';
 
 @Entry
 @Component
@@ -205,6 +206,7 @@ struct Index {
     return await this.bridge.performNative(command, value);
   }
   private async resetConnectionState(): Promise<void> {
+    if (this.origin) NativeMetadataCache.clear(this.context, this.nativeClient.cacheKey());
     WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     this.nativeClient.pause(); this.nativeClient.drafts.clear(); this.nativeClient.images.clear(); this.nativeClient.uncertain.clear();
     this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);

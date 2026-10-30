@@ -6,17 +6,25 @@ import { DSHIcon } from './DSHIcon';
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeImageView } from './NativeImageView';
 import { NativeImageAttachment } from '../services/NativeSessionModel';
+import { NativeDiffBlock } from './NativeDiffBlock';
+import { NativeDiffDocument, nativeDiff } from '../services/NativeDiff';
 
 @Component
 export struct NativeToolCallView {
   client: NativeHarnessClient = new NativeHarnessClient('');
   sessionId: string = '';
   disclosures: Map<string, boolean> = new Map<string, boolean>();
-  @Prop message: NativeMessage = new NativeMessage();
+  @Prop @Watch('changed') message: NativeMessage = new NativeMessage();
   @Prop depth: number = 0;
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private expanded: boolean = false;
-  aboutToAppear(): void { this.expanded = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true; }
+  @State private diff: NativeDiffDocument = new NativeDiffDocument();
+  aboutToAppear(): void {
+    const saved = this.disclosures.get(this.message.turnKey + '|' + this.message.id);
+    this.expanded = saved === undefined ? true : saved;
+    this.changed();
+  }
+  private changed(): void { this.diff = nativeDiff(this.message); }
   private toggle(): void {
     if (this.message.phase === 'preparing') return;
     const update = (): void => { this.expanded = !this.expanded; this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.expanded); };
@@ -45,10 +53,12 @@ export struct NativeToolCallView {
         .onClick(() => { this.toggle(); })
       if (this.expanded) {
         Column({ space: 6 }) {
-          if (this.message.args) {
+          if (this.diff.matched) {
+            NativeDiffBlock({ document: this.diff })
+          } else if (this.message.args) {
             NativeTextContent({ text: this.message.args, monospace: true, client: this.client, sessionId: this.sessionId })
           }
-          if (this.message.output) {
+          if (!this.diff.matched && this.message.output) {
             Divider().color(this.dark ? '#3B3B3E' : '#E4E5E8')
             NativeTextContent({ text: this.message.output, client: this.client, sessionId: this.sessionId })
           }

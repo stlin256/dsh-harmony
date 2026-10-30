@@ -23,6 +23,33 @@ export class NativeFilePage {
   absolutePath: string = ''; version: string = ''; text: string = '';
   lines: number = 0; offset: number = 1; eof: boolean = false;
 }
+export class NativeFileStat {
+  absolutePath: string = ''; version: string = ''; bytes: number = -1;
+}
+export class NativeDirectoryEntry {
+  name: string = ''; type: string = 'other'; size: number = -1;
+}
+export class NativeDirectoryListing {
+  path: string = ''; entries: NativeDirectoryEntry[] = []; truncated: boolean = false;
+}
+export class NativeFileBytes {
+  protocol: number = 0;
+  absolutePath: string = ''; version: string = ''; bytes: number = -1;
+  offset: number = 0; eof: boolean = false; length: number = 0; data: Uint8Array = new Uint8Array();
+}
+class NativeFileBytesRequest {
+  sessionId: string;
+  path: string;
+  offset: number;
+  length: number;
+  baseFile?: string;
+  constructor(sessionId: string, path: string, offset: number, length: number) {
+    this.sessionId = sessionId;
+    this.path = path;
+    this.offset = offset;
+    this.length = length;
+  }
+}
 
 export class NativeHarnessClient {
   readonly modelDirectory: NativeModelDirectory = new NativeModelDirectory((value: string): Promise<string> => this.operation(value), (): void => {
@@ -32,8 +59,12 @@ export class NativeHarnessClient {
     AppStorage.setOrCreate<number>('nativeHostSettingsRevision', (AppStorage.get<number>('nativeHostSettingsRevision') || 0) + 1);
   });
   private origin: string;
+  private cacheIdentity: string = '';
   private socket: webSocket.WebSocket | null = null;
   private generation: number = 0;
+  private stateRead: Promise<GatewayState> | null = null;
+  private sessionRead: Promise<NativeSessionList> | null = null;
+  private workspaceRead: Promise<NativeWorkspaceSnapshot> | null = null;
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
@@ -42,6 +73,17 @@ export class NativeHarnessClient {
   selectedId: string = '';
 
   constructor(origin: string) { this.origin = origin; }
+  cacheKey(): string { return this.origin + '#' + (this.cacheIdentity || 'pending'); }
+  /** Isolate navigation snapshots by the persisted gateway session without exposing it. */
+  async prepareCacheKey(): Promise<void> {
+    const value = await this.cookie();
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index++) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    this.cacheIdentity = value ? (hash >>> 0).toString(16) : 'anonymous';
+  }
 
   private async cookie(): Promise<string> {
     try {
@@ -54,7 +96,7 @@ export class NativeHarnessClient {
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|file|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|file(?:\/(?:stat|list|bytes))?|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -102,12 +144,33 @@ export class NativeHarnessClient {
     } finally { task.destroy(); }
   }
 
-  async state(): Promise<GatewayState> { return JSON.parse(await this.request('/pocket/api/state')) as GatewayState; }
+  async state(): Promise<GatewayState> {
+    if (this.stateRead) return this.stateRead;
+    const pending = this.request('/pocket/api/state')
+      .then((value: string): GatewayState => JSON.parse(value) as GatewayState)
+      .finally((): void => { this.stateRead = null; });
+    this.stateRead = pending;
+    return pending;
+  }
   async loginNative(token: string): Promise<void> {
     await this.request('/pocket/api/auth/native', http.RequestMethod.POST, JSON.stringify({ token: token }));
   }
-  async sessions(): Promise<NativeSessionList> { return JSON.parse(await this.request('/pocket/api/native/sessions')) as NativeSessionList; }
-  async workspaces(): Promise<NativeWorkspaceSnapshot> { return JSON.parse(await this.request('/pocket/api/native/workspaces')) as NativeWorkspaceSnapshot; }
+  async sessions(): Promise<NativeSessionList> {
+    if (this.sessionRead) return this.sessionRead;
+    const pending = this.request('/pocket/api/native/sessions')
+      .then((value: string): NativeSessionList => JSON.parse(value) as NativeSessionList)
+      .finally((): void => { this.sessionRead = null; });
+    this.sessionRead = pending;
+    return pending;
+  }
+  async workspaces(): Promise<NativeWorkspaceSnapshot> {
+    if (this.workspaceRead) return this.workspaceRead;
+    const pending = this.request('/pocket/api/native/workspaces')
+      .then((value: string): NativeWorkspaceSnapshot => JSON.parse(value) as NativeWorkspaceSnapshot)
+      .finally((): void => { this.workspaceRead = null; });
+    this.workspaceRead = pending;
+    return pending;
+  }
   async create(cwd: string = '', agentPreset: string = '', workspaceId: string = '', reuseId: string = ''): Promise<string> {
     const result = JSON.parse(await this.request('/pocket/api/native/create', http.RequestMethod.POST,
       JSON.stringify({ requestId: reuseId || util.generateRandomUUID(), workspaceId: workspaceId || undefined,
@@ -121,6 +184,61 @@ export class NativeHarnessClient {
   async file(id: string, path: string, offset: number = 1, limit: number = 240): Promise<NativeFilePage> {
     return JSON.parse(await this.request('/pocket/api/native/file', http.RequestMethod.POST,
       JSON.stringify({ sessionId: id, path: path, offset: offset, limit: limit }))) as NativeFilePage;
+  }
+  async statFile(id: string, path: string): Promise<NativeFileStat> {
+    return JSON.parse(await this.request('/pocket/api/native/file/stat', http.RequestMethod.POST,
+      JSON.stringify({ sessionId: id, path: path }))) as NativeFileStat;
+  }
+  async listFiles(id: string, path: string): Promise<NativeDirectoryListing> {
+    return JSON.parse(await this.request('/pocket/api/native/file/list', http.RequestMethod.POST,
+      JSON.stringify({ sessionId: id, path: path }))) as NativeDirectoryListing;
+  }
+  async readFileBytes(id: string, path: string, baseFile: string = '',
+    offset: number = 0, length: number = 262144): Promise<NativeFileBytes> {
+    const task = http.createHttp();
+    try {
+      let header = '';
+      task.on('headersReceive', (headers: Object): void => {
+        const values = headers as Record<string, Object>;
+        Object.keys(values).forEach((key: string): void => {
+          if (key.toLowerCase() === 'x-dsh-file-window' && typeof values[key] === 'string') {
+            header = values[key] as string;
+          }
+        });
+      });
+      const chunks: Uint8Array[] = [];
+      let total: number = 0;
+      const ended = new Promise<void>((resolve: () => void): void => { task.on('dataEnd', resolve); });
+      task.on('dataReceive', (data: ArrayBuffer): void => {
+        const part = new Uint8Array(data); chunks.push(part); total += part.byteLength;
+      });
+      const body = new NativeFileBytesRequest(id, path, offset, length);
+      if (baseFile) body.baseFile = baseFile;
+      const status = await task.requestInStream(this.origin + '/pocket/api/native/file/bytes', {
+        method: http.RequestMethod.POST,
+        header: { 'Content-Type': 'application/json', Origin: this.origin, Cookie: await this.cookie() },
+        extraData: JSON.stringify(body),
+        usingCache: false, maxRedirects: 0, connectTimeout: 10000, readTimeout: 30000
+      });
+      await ended;
+      if (status < 200 || status >= 300) throw new NativeHttpError(status);
+      const encoded = header.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = encoded + '='.repeat((4 - encoded.length % 4) % 4);
+      const decoded = new util.Base64Helper().decodeSync(padded);
+      const metadata = JSON.parse(util.TextDecoder.create('utf-8').decodeToString(decoded)) as NativeFileBytes;
+      if (metadata.protocol !== 1 || typeof metadata.version !== 'string' ||
+          metadata.offset !== offset || typeof metadata.eof !== 'boolean') {
+        throw new Error('Invalid file window');
+      }
+      const bytes = new Uint8Array(total);
+      let cursor: number = 0;
+      chunks.forEach((part: Uint8Array): void => { bytes.set(part, cursor); cursor += part.byteLength; });
+      metadata.data = bytes;
+      if (typeof metadata.length !== 'number' || metadata.length !== bytes.length) {
+        throw new Error('Invalid file window length');
+      }
+      return metadata;
+    } finally { task.destroy(); }
   }
   async prompt(id: string, text: string, mode: string = 'queue', images: NativeImageDraft[] = []): Promise<void> {
     this.uncertain.add(id);
@@ -163,7 +281,6 @@ export class NativeHarnessClient {
     await this.request('/pocket/api/native/cancel', http.RequestMethod.POST, JSON.stringify({ sessionId: id }));
   }
   pause(): void {
-    this.modelDirectory.reset();
     this.generation++;
     const old = this.socket; this.socket = null;
     if (old) {

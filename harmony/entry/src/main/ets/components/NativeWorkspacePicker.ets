@@ -1,6 +1,7 @@
 import { NativeHarnessClient } from '../services/NativeHarnessClient';
 import { NativeSession, NativeWorkspaceItem, NativeWorkspaceSnapshot } from '../services/NativeSessionModel';
 import { DSHIcon } from './DSHIcon';
+import { NativeExperience } from '../services/NativeExperience';
 
 class WorkspaceCreated { workspace: NativeWorkspaceItem = new NativeWorkspaceItem(); }
 
@@ -104,5 +105,7 @@ export struct NativeWorkspacePicker {
       if (this.error) { Text(this.error).fontSize(12).fontColor('#D55E5E') }
     }.padding(12).width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
       .foregroundColor(this.dark ? '#F9FAFB' : '#17181B')
+      .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY :
+        TransitionEffect.OPACITY.combine(TransitionEffect.translate({ x: 8 })))
   }
 }

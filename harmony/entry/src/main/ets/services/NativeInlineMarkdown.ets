@@ -6,12 +6,15 @@ export class NativeInlineRun {
   code: boolean = false;
   strike: boolean = false;
   href: string = '';
+  isImage: boolean = false;
+  alt: string = '';
 }
 
 function run(text: string, style: NativeInlineRun): NativeInlineRun {
   const value = new NativeInlineRun();
   value.text = text; value.bold = style.bold; value.italic = style.italic;
   value.code = style.code; value.strike = style.strike; value.href = style.href;
+  value.isImage = style.isImage; value.alt = style.alt;
   return value;
 }
 
@@ -54,6 +57,8 @@ function scan(source: string, style: NativeInlineRun, depth: number): NativeInli
             if (plain) { rows.push(run(plain, style)); plain = ''; }
             const linked = run('', style);
             linked.href = target.startsWith('<') && target.endsWith('>') ? target.slice(1, -1) : target;
+            linked.isImage = ch === '!';
+            linked.alt = source.slice(labelStart, close) || '图片';
             rows.push(...scan(source.slice(labelStart, close) || '图片', linked, depth + 1));
             index = cursor + 1; continue;
           }

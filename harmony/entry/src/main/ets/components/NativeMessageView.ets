@@ -20,7 +20,10 @@ export struct NativeMessageView {
   @State private reasoningOpen: boolean = false;
   @State private toolOpen: boolean = false;
   @State private copied: boolean = false;
-  aboutToAppear(): void { this.reasoningOpen = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true; }
+  aboutToAppear(): void {
+    this.reasoningOpen = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true;
+    this.toolOpen = true;
+  }
 
   private copyMessage(): void {
     const text = this.message.text || this.message.blocks.map((block: NativeTextBlock) => block.text).join('\n');

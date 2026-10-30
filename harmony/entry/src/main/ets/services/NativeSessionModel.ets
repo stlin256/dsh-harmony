@@ -87,9 +87,22 @@ export function nativeWorkspaceSessions(sessions: NativeSession[], snapshot: Nat
     return b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
   });
 }
+
+/** Reorder one complete Workspace membership without discarding hidden ids. */
+export function nativeSessionDragOrder(order: string[], sourceId: string, targetId: string,
+  after: boolean, sourcePinned: boolean, targetPinned: boolean): string[] | null {
+  if (!sourceId || !targetId || sourceId === targetId || sourcePinned !== targetPinned) return null;
+  if (!order.includes(sourceId) || !order.includes(targetId)) return null;
+  const next = order.filter((id: string): boolean => id !== sourceId);
+  const targetIndex = next.indexOf(targetId);
+  if (targetIndex < 0) return null;
+  next.splice(targetIndex + (after ? 1 : 0), 0, sourceId);
+  return next;
+}
 export function nativeWorkspaceRows(sessions: NativeSession[], snapshot: NativeWorkspaceSnapshot, workspaceId: string,
-  query: string, models: Map<string, NativeSessionModel>, activeId: string, collapsed: string[]): NativeWorkspaceRow[] {
-  const visible = nativeWorkspaceSessions(sessions, snapshot, workspaceId, query, models, activeId);
+  query: string, models: Map<string, NativeSessionModel>, activeId: string, collapsed: string[],
+  manual: boolean = false): NativeWorkspaceRow[] {
+  const visible = nativeWorkspaceSessions(sessions, snapshot, workspaceId, query, models, activeId, manual);
   const rows: NativeWorkspaceRow[] = [];
   const seen: Set<string> = new Set<string>();
   const append = (items: NativeSession[], groupId: string): void => {
@@ -97,6 +110,7 @@ export function nativeWorkspaceRows(sessions: NativeSession[], snapshot: NativeW
       if (seen.has(session.id)) return; seen.add(session.id);
       if (!query && collapsed.includes(groupId)) return;
       const row = new NativeWorkspaceRow(); row.key = 'session:' + session.id; row.session = session;
+      row.workspaceId = groupId;
       rows.push(row);
     });
   };

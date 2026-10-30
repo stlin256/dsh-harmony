@@ -3,7 +3,7 @@ import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeHarnessClient, NativeHttpError, NativeImageDraft } from '../services/NativeHarnessClient';
-import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, nativeWorkspaceRows, nativeToolsParent } from '../services/NativeSessionModel';
+import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, nativeWorkspaceRows, nativeToolsParent, nativeSessionDragOrder } from '../services/NativeSessionModel';
 import { NativeListSource } from '../services/NativeListSource';
 import { NativeExperience } from '../services/NativeExperience';
 import { NativeTextContent } from './NativeTextContent';
@@ -19,8 +19,19 @@ import { BackgroundMonitor } from '../services/BackgroundMonitor';
 import { NativeActionMenu } from './NativeActionMenu';
 import { NativeNavigationState, nativeSessionMenu, nativeCanGoBack, nativeForkTitle } from '../services/NativeNavigation';
 import { NativeMenuItem } from '../services/NativeNavigation';
+import { NativeMetadataCache } from '../services/NativeMetadataCache';
 
 class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
+class NativeSessionInsertRequest {
+  operation: string = 'sessionInsertBefore';
+  workspaceId: string;
+  sessionId: string;
+  beforeSessionId?: string;
+  constructor(workspaceId: string, sessionId: string) {
+    this.workspaceId = workspaceId;
+    this.sessionId = sessionId;
+  }
+}
 
 class MessageSource implements IDataSource {
   private rows: NativeMessage[] = [];
@@ -103,6 +114,9 @@ export struct NativeWorkspace {
   @State private collapsedGroups: string[] = [];
   @State private workspaceLoading: boolean = false;
   @State private workspaceError: string = '';
+  @State private manualOrder: boolean = false;
+  @State private dragSessionId: string = '';
+  @State private dropSessionId: string = '';
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
   private sessionSource: NativeListSource<NativeWorkspaceRow> = new NativeListSource<NativeWorkspaceRow>();
@@ -118,6 +132,7 @@ export struct NativeWorkspace {
   private retries: number = 0;
   private widgetTimer: number = -1;
   private backgroundTimer: number = -1;
+  private preloadTimer: number = -1;
   private backgroundActive: boolean = false;
   private backgroundBusy: boolean = false;
   private backgroundStates: Map<string, string> = new Map<string, string>();
@@ -125,6 +140,7 @@ export struct NativeWorkspace {
   private visibleRows: NativeMessage[] = [];
   private firstVisible: number = 0;
   private userHasScrolled: boolean = false;
+  private sessionRowRects: Map<string, number[]> = new Map<string, number[]>();
 
   private preferencesChanged(): void { this.steer = this.client.hostSettings.chat().busyEnter === 'steer'; this.renderTranscript(); }
   private modelCaptionChanged(): void { this.modelCaption = this.client.modelDirectory.caption(this.selected); }
@@ -139,30 +155,51 @@ export struct NativeWorkspace {
 
   private sessionsChanged(): void {
     const visible = nativeWorkspaceRows(this.sessions, this.workspaces, this.workspaceId, this.query, this.client.models,
-      !this.showSessions || this.wide ? this.selected : '', this.collapsedGroups);
+      !this.showSessions || this.wide ? this.selected : '', this.collapsedGroups, this.manualOrder);
     this.visibleSessionCount = visible.filter((row: NativeWorkspaceRow) => !row.group).length;
     this.sessionSource.set(visible);
   }
   aboutToAppear(): void { this.mounted = true; this.reload(); }
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
-    clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer); clearTimeout(this.backgroundTimer);
+    clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    clearTimeout(this.backgroundTimer); clearTimeout(this.preloadTimer);
     this.stopBackground();
     AppStorage.setOrCreate<boolean>('nativeWorkspaceCanGoBack', false);
   }
   private async reload(): Promise<void> {
     const generation = ++this.generation;
-    this.loading = true; this.error = '';
+    await this.client.prepareCacheKey();
+    const cached = NativeMetadataCache.read(this.context, this.client.cacheKey());
+    if (cached.sessions.length) {
+      this.sessions = cached.sessions;
+      if (cached.workspaces) { this.workspaces = cached.workspaces; this.manualOrder = true; }
+      this.loading = false;
+      this.sessionsChanged();
+    } else this.loading = true;
+    this.error = '';
     try {
-      const state = await this.client.state();
+      const statePending = this.client.state();
+      const sessionsPending = this.client.sessions();
+      const workspacesPending = this.client.workspaces();
+      sessionsPending.catch(() => {});
+      workspacesPending.catch(() => {});
+      const state = await statePending;
       if (!this.mounted || generation !== this.generation) return;
       if (!state.authenticated) { this.onLogin(); return; }
-      const value = await this.client.sessions();
+      const value = await sessionsPending;
+      const nextWorkspaces = await workspacesPending;
       if (!this.mounted || generation !== this.generation) return;
       if (value.protocol !== 2) throw new Error('请升级网关或使用兼容模式');
       this.sessions = value.items;
-      this.refreshWorkspaces();
+      if (nextWorkspaces.available) {
+        this.workspaces = nextWorkspaces;
+        this.manualOrder = true;
+      }
       this.client.hostSettings.refresh().catch(() => {});
+      NativeMetadataCache.save(this.context, this.client.cacheKey(), this.sessions,
+        nextWorkspaces.available ? nextWorkspaces : this.workspaces);
+      this.preloadMetadata();
       this.updateWidget();
       const requested = this.requestedSession || this.client.selectedId;
       if (requested) {
@@ -174,10 +211,27 @@ export struct NativeWorkspace {
         } else this.select(requested);
       }
     } catch (error) {
-      this.handleError(error as Error);
-      if (!(error instanceof NativeHttpError && error.status === 401)) this.scheduleReconnect('');
+      if (!this.sessions.length) this.handleError(error as Error);
+      if (!(error instanceof NativeHttpError && error.status === 401)) {
+        this.connectionPhase = 'retrying';
+        if (!this.sessions.length) this.scheduleReconnect('');
+      }
     }
     finally { if (this.mounted && generation === this.generation) this.loading = false; }
+  }
+  private preloadMetadata(): void {
+    clearTimeout(this.preloadTimer);
+    const ids = this.sessions.filter((session: NativeSession): boolean => session.blank !== true)
+      .slice(0, 3).map((session: NativeSession): string => session.id);
+    this.preloadTimer = setTimeout((): void => {
+      const next = (index: number): void => {
+        if (!this.mounted || index >= ids.length) return;
+        this.client.modelDirectory.load(ids[index]).catch(() => {}).finally((): void => {
+          if (this.mounted) next(index + 1);
+        });
+      };
+      next(0);
+    }, 80);
   }
   private handleError(error: Error): void {
     if (!this.mounted) return;
@@ -220,7 +274,12 @@ export struct NativeWorkspace {
   }
   private async refreshSessionList(): Promise<void> {
     const rows = await this.client.sessions();
-    if (this.mounted) { this.sessions = rows.items; await this.refreshWorkspaces(); }
+    if (this.mounted) {
+      this.sessions = rows.items;
+      await this.refreshWorkspaces();
+      NativeMetadataCache.save(this.context, this.client.cacheKey(), this.sessions,
+        this.workspaces.available ? this.workspaces : null);
+    }
   }
   private async sessionAction(action: string): Promise<void> {
     const id = this.menuTarget; this.menuId = '';
@@ -257,6 +316,75 @@ export struct NativeWorkspace {
       await this.refreshSessionList();
     } catch (error) { this.handleError(error as Error); }
     finally { this.menuBusy = false; }
+  }
+  private sessionWorkspace(id: string): NativeWorkspaceItem | undefined {
+    return this.workspaces.items.find((workspace: NativeWorkspaceItem) => workspace.sessionIds.includes(id));
+  }
+  private beginSessionDrag(id: string): CustomBuilder | DragItemInfo {
+    const session = this.sessions.find((item: NativeSession) => item.id === id);
+    if (session && session.blank !== true) this.dragSessionId = id;
+    return this.sessionDragBuilder;
+  }
+  private async dropSession(target: string, event: DragEvent): Promise<void> {
+    const sourceId = this.dragSessionId;
+    this.dragSessionId = ''; this.dropSessionId = '';
+    if (!sourceId || sourceId === target) return;
+    const source = this.sessions.find((item: NativeSession) => item.id === sourceId);
+    const targetSession = this.sessions.find((item: NativeSession) => item.id === target);
+    const workspace = this.sessionWorkspace(sourceId);
+    const targetWorkspace = this.sessionWorkspace(target);
+    if (!source || source.blank === true || !targetSession || targetSession.blank === true ||
+        !workspace || !targetWorkspace || workspace.workspaceId !== targetWorkspace.workspaceId) {
+      event.setResult(DragResult.DROP_DISABLED);
+      return;
+    }
+    const sourcePinned = this.workspaces.pinnedSessionIds.includes(sourceId);
+    const targetPinned = this.workspaces.pinnedSessionIds.includes(target);
+    if (sourcePinned !== targetPinned) {
+      event.setResult(DragResult.DROP_DISABLED);
+      return;
+    }
+    event.setResult(DragResult.DROP_ENABLED);
+    const rect = this.sessionRowRects.get(target) || [];
+    const after = rect.length >= 2 && event.getWindowY() > rect[0] + rect[1] / 2;
+    const order = nativeSessionDragOrder(workspace.sessionIds, sourceId, target, after,
+      sourcePinned, targetPinned);
+    if (!order) return;
+    const sourceIndex = order.indexOf(sourceId);
+    const beforeSessionId = sourceIndex >= 0 ? order[sourceIndex + 1] || '' : '';
+    const previous = this.workspaces;
+    const next = new NativeWorkspaceSnapshot();
+    next.available = previous.available;
+    next.archivedSessionIds = previous.archivedSessionIds.slice();
+    next.pinnedSessionIds = previous.pinnedSessionIds.slice();
+    next.items = previous.items.map((item: NativeWorkspaceItem): NativeWorkspaceItem => {
+      const row = new NativeWorkspaceItem();
+      row.workspaceId = item.workspaceId; row.path = item.path; row.title = item.title;
+      row.sessionIds = item.workspaceId === workspace.workspaceId ? order : item.sessionIds.slice();
+      return row;
+    });
+    const update = (): void => { this.manualOrder = true; this.workspaces = next; this.sessionsChanged(); };
+    if (NativeExperience.reducedMotion()) update();
+    else this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, update);
+    try {
+      const body = new NativeSessionInsertRequest(workspace.workspaceId, sourceId);
+      if (beforeSessionId) body.beforeSessionId = beforeSessionId;
+      await this.client.operation(JSON.stringify(body));
+      await this.refreshSessionList();
+    } catch (error) {
+      this.workspaces = previous; this.sessionsChanged(); this.handleError(error as Error);
+      this.getUIContext().getPromptAction().showToast({ message: '排序未保存，请重试', duration: 1500 });
+    }
+  }
+  @Builder
+  private sessionDragBuilder() {
+    Row({ space: 7 }) {
+      DSHIcon({ glyph: 'new-chat-outline', glyphSize: 14, color: this.dark ? '#F9FAFB' : '#17181B' })
+      Text(this.sessions.find((item: NativeSession) => item.id === this.dragSessionId)?.title || '会话')
+        .fontSize(13).maxLines(1).fontColor(this.dark ? '#F9FAFB' : '#17181B')
+    }.padding({ left: 12, right: 12, top: 9, bottom: 9 }).borderRadius(10)
+      .backgroundColor(this.dark ? '#353638' : '#FFFFFF')
+      .border({ width: 0.5, color: this.dark ? '#4A4B4F' : '#D8DADF' })
   }
   private async copyMarkdown(): Promise<void> {
     this.utilityOpen = false; if (this.copying) return;
@@ -327,7 +455,7 @@ export struct NativeWorkspace {
     try {
       const value = await this.client.workspaces();
       if (!value.available) throw new Error('Workspace unavailable');
-      if (this.mounted) this.workspaces = value;
+      if (this.mounted) { this.workspaces = value; this.manualOrder = true; }
     } catch (error) {
       if (this.mounted) {
         this.workspaceError = '工作区加载失败';
@@ -336,7 +464,36 @@ export struct NativeWorkspace {
     } finally { if (this.mounted) this.workspaceLoading = false; }
   }
   private openNewSession(): void {
-    this.newWorkspaceId = this.workspaceId; this.newCwd = ''; this.newPreset = ''; this.newSessionOpen = true;
+    if (this.workspaceId && this.workspaceId !== 'other') {
+      this.createQuickSession(this.workspaceId);
+      return;
+    }
+    if (this.workspaces.items.length === 1) {
+      this.createQuickSession(this.workspaces.items[0].workspaceId);
+      return;
+    }
+    this.workspacePickerOpen = true;
+  }
+  private async createQuickSession(workspaceId: string): Promise<void> {
+    if (this.loading || !workspaceId) return;
+    this.loading = true; this.error = '';
+    try {
+      const workspace = this.workspaces.items.find((item: NativeWorkspaceItem) =>
+        item.workspaceId === workspaceId);
+      const reusable = workspace ? this.sessions.find((item: NativeSession) =>
+        item.blank === true && workspace.sessionIds.includes(item.id) &&
+        !this.workspaces.archivedSessionIds.includes(item.id)) : undefined;
+      const id = await this.client.create('', '', workspaceId, reusable?.id || '');
+      if (!this.mounted) return;
+      const value = await this.client.sessions();
+      if (!this.mounted) return;
+      this.sessions = value.items;
+      const refreshed = await this.client.workspaces();
+      if (this.mounted && refreshed.available) this.workspaces = refreshed;
+      this.workspaceId = workspaceId;
+      this.select(id);
+    } catch (error) { this.handleError(error as Error); }
+    finally { if (this.mounted) this.loading = false; }
   }
   private async updateWidget(): Promise<void> {
     clearTimeout(this.widgetTimer);
@@ -507,7 +664,10 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.active || this.fallbackActive || (id && this.selected !== id)) return;
     clearTimeout(this.reconnectTimer);
     this.interactions = [];
-    this.connectionPhase = 'retrying'; this.error = '';
+    const exposeFailure = this.connectionPhase === 'live' || this.retries > 0;
+    if (exposeFailure) this.connectionPhase = 'retrying';
+    else this.connectionPhase = 'syncing';
+    this.error = '';
     this.retries++;
     const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.retries, 5)));
     this.reconnectTimer = setTimeout(() => { if (id) this.follow(); else this.reload(); }, delay);
@@ -639,6 +799,18 @@ export struct NativeWorkspace {
       }
     }.padding({ left: 10, right: 4, top: 5, bottom: 5 }).width('100%').constraintSize({ minHeight: 44 }).borderRadius(10)
       .backgroundColor((!this.showSessions || this.wide) && this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
+      .border({ width: this.dropSessionId === item.id ? 1 : 0,
+        color: this.dropSessionId === item.id ? this.dark ? '#8AB4FF' : '#3964FE' : Color.Transparent })
+      .opacity(this.dragSessionId === item.id ? 0.7 : 1)
+      .draggable(item.blank !== true)
+      .onDragStart((): CustomBuilder | DragItemInfo => this.beginSessionDrag(item.id))
+      .onDragEnter((): void => { this.dropSessionId = item.id; })
+      .onDragLeave((): void => { if (this.dropSessionId === item.id) this.dropSessionId = ''; })
+      .onDrop((event: DragEvent): void => { this.dropSession(item.id, event); })
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.sessionRowRects.set(item.id,
+          [Number(area.globalPosition.y), Number(area.height)]);
+      })
   }
 
   @Builder
@@ -679,6 +851,14 @@ export struct NativeWorkspace {
                   .rotate({ angle: this.collapsedGroups.includes(entry.workspaceId) ? 180 : -90 })
                 Text(entry.title).fontSize(12).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(this.dark ? '#B5B8BD' : '#61666B')
                 Text(String(entry.count)).fontSize(11).fontColor(this.dark ? '#93969B' : '#8A8D91')
+                if (entry.workspaceId !== 'other') {
+                  Button({ type: ButtonType.Normal }) {
+                    DSHIcon({ glyph: 'plus-outline', glyphSize: 13,
+                      color: this.dark ? '#CFD3D6' : '#61666B' })
+                  }.width(30).height(28).borderRadius(8).backgroundColor(Color.Transparent)
+                    .accessibilityText('在工作区新建会话')
+                    .onClick(() => { this.createQuickSession(entry.workspaceId); })
+                }
               }.width('100%').padding({ left: 6, right: 10, top: 10, bottom: 6 })
             } else { this.sessionRow(entry.session) }
           }.onClick(() => {
@@ -704,7 +884,8 @@ export struct NativeWorkspace {
       if (this.loading) { Text('正在连接…').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
       if (!this.loading && !this.visibleSessionCount) { Text('新建会话，开始你的任务').fontSize(13).fontColor(this.dark ? '#CFD3D6' : '#61666B') }
     }.padding({ left: 12, right: 12, top: 8, bottom: 8 }).height('100%').width(this.wide ? 240 : '100%')
-      .backgroundColor(this.dark ? '#151517' : '#FFFFFF').transition(TransitionEffect.OPACITY)
+      .backgroundColor(this.dark ? '#151517' : '#FFFFFF')
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.992, y: 0.992 })))
   }
 
   @Builder
@@ -745,7 +926,20 @@ export struct NativeWorkspace {
           .width('100%').padding({ left: 4, top: 4, bottom: 4 })
       }
       List({ space: 12, scroller: this.scroller }) {
-        if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(38).onClick(() => { this.older(); }) } }
+        if (this.hasMore) {
+          ListItem() {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                if (this.paging) LoadingProgress().width(12).height(12)
+                else DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 12,
+                  color: this.dark ? '#93969B' : '#8A8D91' }).rotate({ angle: 90 })
+                Text(this.paging ? '读取中' : '更早').fontSize(11)
+                  .fontColor(this.dark ? '#93969B' : '#8A8D91')
+              }
+            }.enabled(!this.paging).height(30).padding({ left: 9, right: 9 }).borderRadius(9)
+              .backgroundColor(Color.Transparent).onClick(() => { this.older(); })
+          }
+        }
         LazyForEach(this.source, (message: NativeMessage) => {
           ListItem() {
             if (message.role === 'process') {
@@ -863,7 +1057,7 @@ export struct NativeWorkspace {
         .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
         .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
     }.padding({ left: 12, right: 12, top: 4, bottom: 8 }).height('100%').layoutWeight(1)
-      .transition(TransitionEffect.OPACITY)
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.992, y: 0.992 })))
   }
 
   build() {

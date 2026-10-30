@@ -41,6 +41,7 @@ export default class EntryAbility extends UIAbility {
     // ArkWeb reports safe-area env() values to the original viewport-fit=cover page.
     // Paint the window underneath both bars instead of reserving white native bands.
     WindowAppearance.fullscreen(false).then(() => {
+      WindowAppearance.refreshSafeArea();
       WindowAppearance.apply(this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
       stage.loadContent('pages/Index');
     }).catch(() => { stage.loadContent('pages/Index'); });
@@ -53,6 +54,7 @@ export default class EntryAbility extends UIAbility {
   onConfigurationUpdate(config: Configuration): void {
     AppStorage.setOrCreate<boolean>('systemDark', config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     this.updateTextScale(config);
+    WindowAppearance.refreshSafeArea();
     // A manually selected Harness theme takes precedence over an OS change.
     // System-following pages notify us when their own theme changes.
     if (AppStorage.get<boolean>('pocketPageThemeKnown') !== true) {
