@@ -48,6 +48,18 @@ export class PocketBridge {
     return url === this.origin || url.startsWith(this.origin + '/');
   }
 
+  private async persist(name: string, key: string, value: string | boolean): Promise<void> {
+    const store = preferences.getPreferencesSync(this.context, { name });
+    const existed = store.hasSync(key);
+    const previous = store.getSync(key, typeof value === 'string' ? '' : false);
+    store.putSync(key, value);
+    try { await store.flush(); }
+    catch (error) {
+      if (existed) store.putSync(key, previous); else store.deleteSync(key);
+      throw error as Error;
+    }
+  }
+
   // Called directly only by trusted ArkTS UI. The JavaScript proxy exposes request alone.
   async performNative(command: string, value: string): Promise<string> {
     if (command === 'nativeAuthenticated') {
@@ -57,8 +69,7 @@ export class PocketBridge {
     }
     if (command === 'uiMode') {
       if (value !== 'compatibility' && value !== 'native') throw new Error('Invalid mode');
-      const store = preferences.getPreferencesSync(this.context, { name: 'dsh-pocket' });
-      store.putSync('uiMode', value); await store.flush();
+      await this.persist('dsh-pocket', 'uiMode', value);
       AppStorage.setOrCreate<string>('uiMode', value);
       return '';
     }
@@ -68,8 +79,7 @@ export class PocketBridge {
     }
     if (command === 'themeMode') {
       if (!['system', 'light', 'dark'].includes(value)) throw new Error('Invalid theme');
-      const store = preferences.getPreferencesSync(this.context, { name: 'pocket-native-experience' });
-      store.putSync('themeMode', value); await store.flush();
+      await this.persist('pocket-native-experience', 'themeMode', value);
       AppStorage.setOrCreate<string>('nativeThemeMode', value);
       return '';
     }
@@ -109,9 +119,7 @@ export class PocketBridge {
       if (typeof levels.completed !== 'boolean' || typeof levels.failed !== 'boolean' || typeof levels.approval !== 'boolean') {
         throw new Error('Invalid notification levels');
       }
-      const store = preferences.getPreferencesSync(this.context, { name: 'dsh-notifications' });
-      store.putSync('levels', JSON.stringify({ completed: levels.completed, failed: levels.failed, approval: levels.approval }));
-      await store.flush();
+      await this.persist('dsh-notifications', 'levels', JSON.stringify({ completed: levels.completed, failed: levels.failed, approval: levels.approval }));
       return '';
     }
     if (command === 'pushEnabled' || command === 'backgroundMonitor') {
@@ -121,7 +129,7 @@ export class PocketBridge {
       if (command === 'backgroundMonitor' && enabled && !PushKitAdapter.supported) {
         await notificationManager.requestEnableNotification(this.context);
       }
-      store.putSync(command, enabled); await store.flush();
+      await this.persist('dsh-notifications', command, enabled);
       if (command === 'backgroundMonitor') AppStorage.setOrCreate<boolean>('nativeBackgroundMonitor', enabled);
       return '';
     }
@@ -174,9 +182,9 @@ export class PocketBridge {
     }
     if (command === 'widgetDisconnected') { await WidgetStore.clear(this.context); return ''; }
     if (command === 'appearanceDark' || command === 'appearanceLight') {
-      if (AppStorage.get<string>('uiMode') === 'native' && AppStorage.get<boolean>('nativeAuthSurface') !== true) return '';
-      AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
-      WindowAppearance.apply(command === 'appearanceDark');
+      AppStorage.setOrCreate<boolean>('nativeWebThemeKnown', true);
+      AppStorage.setOrCreate<boolean>('nativeWebDark', command === 'appearanceDark');
+      if (AppStorage.get<boolean>('nativeShellForeground') === false) WindowAppearance.applyBars(command === 'appearanceDark');
       return '';
     }
     if (command === 'enablePush') {

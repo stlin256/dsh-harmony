@@ -28,16 +28,26 @@ export class NativeHostSettings {
   description: NativeSettingsDescription = new NativeSettingsDescription();
   loaded: boolean = false;
   private reads: number = 0;
+  private refreshing: Promise<void> | null = null;
+  private refreshAgain: boolean = false;
   private writes: Map<string, Promise<void>> = new Map<string, Promise<void>>();
   private call: (value: string) => Promise<string>;
   private changed: () => void;
   constructor(call: (value: string) => Promise<string>, changed: () => void = (): void => {}) { this.call = call; this.changed = changed; }
   chat(): NativeChatPreferences { return nativeChatPreferences(this.description.namespaces); }
-  async refresh(): Promise<void> {
-    const version = ++this.reads;
-    const value = JSON.parse(await this.call(JSON.stringify({ operation: 'settingsDescribe' }))) as NativeSettingsDescription;
-    if (version !== this.reads) return;
-    this.description = value; this.loaded = true; this.changed();
+  refresh(force: boolean = false): Promise<void> {
+    if (this.refreshing) { if (force) this.refreshAgain = true; return this.refreshing; }
+    const pending = this.read().finally((): void => { this.refreshing = null; });
+    this.refreshing = pending;
+    return pending;
+  }
+  private async read(): Promise<void> {
+    do {
+      this.refreshAgain = false;
+      const version = ++this.reads;
+      const value = JSON.parse(await this.call(JSON.stringify({ operation: 'settingsDescribe' }))) as NativeSettingsDescription;
+      if (version === this.reads) { this.description = value; this.loaded = true; this.changed(); }
+    } while (this.refreshAgain);
   }
   set(ns: string, field: string, value: string | number): Promise<void> {
     const previous = this.writes.get(ns) || Promise.resolve();
@@ -48,10 +58,12 @@ export class NativeHostSettings {
       try {
         const result = JSON.parse(await this.call(JSON.stringify({ operation: 'settingsSet', ns, field, value, revision: row.revision }))) as NativeSettingsNamespace;
         this.reads++;
-        this.description.namespaces = this.description.namespaces.map((item: NativeSettingsNamespace) => item.ns === ns ? result : item);
+        const next = new NativeSettingsDescription(); next.writable = this.description.writable;
+        next.namespaces = this.description.namespaces.map((item: NativeSettingsNamespace) => item.ns === ns ? result : item);
+        this.description = next;
         this.changed();
       } catch (error) {
-        try { await this.refresh(); } catch (_) {}
+        try { await this.refresh(true); } catch (_) {}
         throw error as Error;
       }
     });

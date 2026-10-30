@@ -50,8 +50,8 @@ export struct NativeMessageView {
               Text(nativeReasoningPreview(this.message.reasoning, this.runningReasoning)).fontSize(12).maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
             }
-          }
-        }.height(30).fontSize(12).borderRadius(8)
+          }.width('100%')
+        }.width('100%').height(28).padding(0).fontSize(12).borderRadius(8)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.animate(() => { this.reasoningOpen = !this.reasoningOpen;
             this.disclosures.set(this.message.turnKey + '|' + this.message.id, this.reasoningOpen); }); })
@@ -113,7 +113,7 @@ export struct NativeMessageView {
         }.width('100%')
       }
     }.alignItems(HorizontalAlign.Start).width(this.message.role === 'user' ? '82%' : '100%')
-      .padding(this.message.role === 'user' || this.message.role === 'tool' ? 12 : 2)
+      .padding(this.message.role === 'user' || this.message.role === 'tool' ? 10 : this.message.role === 'reasoning' ? 0 : 2)
       .backgroundColor(this.message.role === 'user' || this.message.role === 'tool' ? this.dark ? '#2C2C2E' : '#F5F6F7' : Color.Transparent)
       .borderRadius(16)
   }

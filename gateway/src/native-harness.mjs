@@ -90,6 +90,8 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       if (req.query.format === 'zip') url.searchParams.set('includeDescendants', req.query.includeDescendants || 'true');
       const response = await fetch(url, { signal, redirect: 'error', headers: { Cookie: await credential(), Origin: target.origin } });
       if (!response.ok || !response.body) { await response.body?.cancel(); return res.sendStatus(response.status === 404 ? 404 : 502); }
+      const type = response.headers.get('content-type') || '';
+      if (!(req.query.format === 'zip' ? /^application\/zip(?:;|$)/i : /^text\/markdown(?:;|$)/i).test(type)) { await response.body.cancel(); return res.sendStatus(502); }
       res.setHeader('Content-Type', req.query.format === 'zip' ? 'application/zip' : 'text/markdown; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
       await pipeline(Readable.fromWeb(response.body), res, { signal });
@@ -157,6 +159,18 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       if (!['modelCatalog', 'workspaceCreate', 'workspaceRename', 'workspaceDelete', 'workspaceOrder', 'settingsDescribe', 'settingsSet', 'directoryList', 'directoryCreate'].includes(operation) && !sessionIdValid(sessionId)) return res.sendStatus(400);
       let request;
       switch (operation) {
+        case 'capabilities': {
+          const headers = { Cookie: await credential(), Origin: target.origin };
+          const check = async (path, type) => {
+            const url = new URL(path, target); url.searchParams.set('sessionId', sessionId);
+            url.searchParams.set('includeDescendants', 'true');
+            const response = await fetch(url, { method: 'HEAD', headers, redirect: 'error', signal });
+            await response.body?.cancel();
+            return response.ok && (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() === type;
+          };
+          const [copyMarkdown, downloadLog] = await Promise.all([check('/api/session.markdown', 'text/markdown'), check('/api/session.export', 'application/zip')]);
+          res.json({ copyMarkdown, downloadLog }); return;
+        }
         case 'settingsDescribe': {
           const value = await rpc('settings/describe', {}, signal);
           res.json({ writable: value?.writable === true, namespaces: (value?.namespaces || []).filter(row => ['ui-chat', 'ui-theme', 'ui-conversation', 'locale'].includes(row.ns))
@@ -271,13 +285,13 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         });
         return delivery;
       };
-      const opening = setTimeout(() => { send({ type: 'error', message: '等待会话快照超时，请重新连接' }); client.close(1011); }, 15000);
+      const opening = setTimeout(() => { send({ type: 'error', code: 'snapshot-timeout', retryable: true }).finally(() => client.close(1011)); }, 30000);
       opening.unref();
       client.once('close', () => clearTimeout(opening));
       upstream.once('open', () => {
         upstream.send(JSON.stringify({ type: 'open', streamId: 'interactions', endpoint: '$events', payload: { args: {} } }));
         for (const [streamId, method, request] of [
-          ['history', 'follow', { address: { kind: 'session', sessionId: id }, assistantStream: true, maxMessages: 80 }],
+          ['history', 'follow', { address: { kind: 'session', sessionId: id }, activate: true, assistantStream: true, maxMessages: 24 }],
           ['state', 'observeState', { sessionId: id }],
           ['projections', 'observeProjections', { sessionId: id }]
         ]) upstream.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/' + method, payload: { args: { request } } }));
@@ -310,7 +324,13 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
           const frame = JSON.parse(raw.toString());
           if (frame.type === 'error') {
             if (['state', 'projections'].includes(frame.streamId) && frame.error?.code === 'gateway/invocation-unavailable') { useControl(frame.streamId); return; }
-            send({ type: 'error', message: '实时会话不可用，请重新连接或切换兼容模式' }).finally(() => client.close(1011)); return;
+            if (frame.streamId !== 'history') {
+              retired.add(frame.streamId);
+              send({ type: 'capability-error', capability: frame.streamId, code: 'optional-stream-unavailable' }); return;
+            }
+            const unsupported = frame.error?.code === 'gateway/invocation-unavailable';
+            send({ type: 'error', code: unsupported ? 'history-unsupported' : 'history-unavailable', retryable: !unsupported })
+              .finally(() => client.close(unsupported ? 4404 : 1011)); return;
           }
           if (frame.type === 'end' && frame.streamId?.startsWith('wait:')) {
             const eventId = frame.streamId.slice(5);
@@ -320,7 +340,11 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
             }
             return;
           }
-          if (frame.type === 'end') { if (!retired.has(frame.streamId)) client.close(1012, 'Stream ended'); return; }
+          if (frame.type === 'end') {
+            if (frame.streamId === 'history') client.close(1012, 'History ended');
+            else if (!retired.has(frame.streamId)) { retired.add(frame.streamId); send({ type: 'capability-error', capability: frame.streamId, code: 'optional-stream-ended' }); }
+            return;
+          }
           if (frame.type !== 'item') return;
           if (frame.streamId === 'control') {
             const value = frame.value;

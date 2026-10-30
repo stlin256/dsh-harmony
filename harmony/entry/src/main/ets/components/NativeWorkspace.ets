@@ -3,7 +3,7 @@ import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { NativeHarnessClient, NativeHttpError, NativeImageDraft } from '../services/NativeHarnessClient';
-import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, NativeWorkspaceItem, NativeWorkspaceSnapshot, nativeWorkspaceSessions, nativeToolsParent } from '../services/NativeSessionModel';
+import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion, NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, nativeWorkspaceRows, nativeToolsParent } from '../services/NativeSessionModel';
 import { NativeListSource } from '../services/NativeListSource';
 import { NativeExperience } from '../services/NativeExperience';
 import { NativeTextContent } from './NativeTextContent';
@@ -17,6 +17,9 @@ import { NativeWorkspacePicker } from './NativeWorkspacePicker';
 import { BackgroundMonitor } from '../services/BackgroundMonitor';
 import { NativeActionMenu } from './NativeActionMenu';
 import { NativeNavigationState, nativeSessionMenu, nativeCanGoBack, nativeForkTitle } from '../services/NativeNavigation';
+import { NativeMenuItem } from '../services/NativeNavigation';
+
+class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
 
 class MessageSource implements IDataSource {
   private rows: NativeMessage[] = [];
@@ -67,6 +70,8 @@ export struct NativeWorkspace {
   @State private modelCaption: string = '模型';
   @State private groupHeight: number = 400;
   @State private downloading: boolean = false;
+  @State private utilityKnown: boolean = false;
+  @State private exportCapabilities: NativeExportCapabilities = new NativeExportCapabilities();
   @State private menuBusy: boolean = false;
   @State private archivedUndo: string = '';
   @State private steer: boolean = false;
@@ -85,18 +90,20 @@ export struct NativeWorkspace {
   @State @Watch('navigationChanged') private wide: boolean = false;
   @State private loading: boolean = true;
   @State private sending: boolean = false;
-  @State private connected: boolean = false;
+  @State private connectionPhase: string = 'idle';
   @State private running: boolean = false;
   @State private waiting: boolean = false;
   @State private uncertain: boolean = false;
-  @State private reconnecting: boolean = false;
   @State private error: string = '';
   @State private paging: boolean = false;
   @State private hasMore: boolean = false;
   @State private visibleSessionCount: number = 0;
+  @State private collapsedGroups: string[] = [];
+  @State private workspaceLoading: boolean = false;
+  @State private workspaceError: string = '';
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
-  private sessionSource: NativeListSource<NativeSession> = new NativeListSource<NativeSession>();
+  private sessionSource: NativeListSource<NativeWorkspaceRow> = new NativeListSource<NativeWorkspaceRow>();
   private source: MessageSource = new MessageSource();
   private scroller: Scroller = new Scroller();
   private model: NativeSessionModel = new NativeSessionModel();
@@ -113,6 +120,9 @@ export struct NativeWorkspace {
   private backgroundBusy: boolean = false;
   private backgroundStates: Map<string, string> = new Map<string, string>();
   private openTurns: Set<string> = new Set<string>();
+  private visibleRows: NativeMessage[] = [];
+  private firstVisible: number = 0;
+  private userHasScrolled: boolean = false;
 
   private preferencesChanged(): void { this.steer = this.client.hostSettings.chat().busyEnter === 'steer'; this.renderTranscript(); }
   private modelCaptionChanged(): void { this.modelCaption = this.client.modelDirectory.caption(this.selected); }
@@ -125,8 +135,9 @@ export struct NativeWorkspace {
   }
 
   private sessionsChanged(): void {
-    const visible = nativeWorkspaceSessions(this.sessions, this.workspaces, this.workspaceId, this.query, this.client.models, this.selected);
-    this.visibleSessionCount = visible.length;
+    const visible = nativeWorkspaceRows(this.sessions, this.workspaces, this.workspaceId, this.query, this.client.models,
+      !this.showSessions || this.wide ? this.selected : '', this.collapsedGroups);
+    this.visibleSessionCount = visible.filter((row: NativeWorkspaceRow) => !row.group).length;
     this.sessionSource.set(visible);
   }
   aboutToAppear(): void { this.mounted = true; this.reload(); }
@@ -173,7 +184,7 @@ export struct NativeWorkspace {
   private activityChanged(): void {
     clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
     if (!this.active || this.fallbackActive) {
-      this.interactions = []; this.client.pause(); this.connected = false;
+      this.interactions = []; this.client.pause(); this.connectionPhase = 'paused';
       if (this.backgroundMonitor && !this.supportsPush && !this.fallbackActive) this.pollBackground(true);
       else this.stopBackground();
       return;
@@ -197,6 +208,7 @@ export struct NativeWorkspace {
       return;
     }
     this.animatePane(() => { this.toolsOpen = false; this.showSessions = true; });
+    this.sessionsChanged();
     this.navigationChanged();
   }
   private openTools(page: string, id: string = this.selected): void {
@@ -281,14 +293,37 @@ export struct NativeWorkspace {
   }
   @Builder
   private utilityMenu() {
-    NativeActionMenu({ items: [
-      { id: 'copy', title: '复制 Markdown', icon: 'copy-outline', disabled: this.copying, danger: false, separator: false },
-      { id: 'download', title: '下载日志', icon: 'download-outline', disabled: this.downloading, danger: false, separator: false }
-    ], onSelect: (id: string): void => { if (id === 'copy') this.copyMarkdown(); else this.downloadLog(); } })
+    NativeActionMenu({ items: this.utilityItems(), onSelect: (id: string): void => { if (id === 'copy') this.copyMarkdown(); else if (id === 'download') this.downloadLog(); } })
+  }
+  private utilityItems(): NativeMenuItem[] {
+    const rows: NativeMenuItem[] = [];
+    if (this.utilityKnown && this.exportCapabilities.copyMarkdown) rows.push({ id: 'copy', title: '复制 Markdown', icon: 'copy-outline', disabled: this.copying, danger: false, separator: false });
+    if (this.utilityKnown && this.exportCapabilities.downloadLog) rows.push({ id: 'download', title: '下载日志', icon: 'download-outline', disabled: this.downloading, danger: false, separator: false });
+    if (!rows.length) rows.push({ id: 'none', title: this.utilityKnown ? '此服务未提供导出' : '正在加载…', icon: 'download-outline', disabled: true, danger: false, separator: false });
+    return rows;
+  }
+  private async openUtilities(): Promise<void> {
+    this.utilityOpen = !this.utilityOpen; if (!this.utilityOpen) return;
+    const id = this.selected; this.utilityKnown = false;
+    try {
+      const value = JSON.parse(await this.client.operation(JSON.stringify({ operation: 'capabilities', sessionId: id }))) as NativeExportCapabilities;
+      if (this.mounted && this.selected === id) this.exportCapabilities = value;
+    } catch (_) { if (this.mounted && this.selected === id) this.exportCapabilities = new NativeExportCapabilities(); }
+    finally { if (this.mounted && this.selected === id) this.utilityKnown = true; }
   }
   private async refreshWorkspaces(): Promise<void> {
-    try { const value = await this.client.workspaces(); if (this.mounted && value.available) this.workspaces = value; }
-    catch (_) {}
+    if (this.workspaceLoading) return;
+    this.workspaceLoading = true; this.workspaceError = '';
+    try {
+      const value = await this.client.workspaces();
+      if (!value.available) throw new Error('Workspace unavailable');
+      if (this.mounted) this.workspaces = value;
+    } catch (error) {
+      if (this.mounted) {
+        this.workspaceError = '工作区加载失败';
+        if (error instanceof NativeHttpError && error.status === 401) this.onLogin();
+      }
+    } finally { if (this.mounted) this.workspaceLoading = false; }
   }
   private openNewSession(): void {
     this.newWorkspaceId = this.workspaceId; this.newCwd = ''; this.newPreset = ''; this.newSessionOpen = true;
@@ -394,8 +429,7 @@ export struct NativeWorkspace {
     this.renderTranscript();
     this.streamText = ''; this.streamReasoning = '';
     this.running = false; this.waiting = false; this.retries = 0;
-    this.reconnecting = true;
-    this.hydrateHistory(id);
+    this.connectionPhase = 'opening'; this.userHasScrolled = false;
     this.follow();
     this.client.modelDirectory.load(id).catch(() => {});
   }
@@ -414,7 +448,7 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.active || this.fallbackActive || !this.selected) return;
     clearTimeout(this.reconnectTimer);
     const id = this.selected;
-    this.connected = false;
+    this.connectionPhase = 'syncing';
     this.client.follow(id, (frame: NativeFrame): void => {
       if (!this.mounted || this.selected !== id) return;
       if (frame.type === 'questions') {
@@ -435,12 +469,12 @@ export struct NativeWorkspace {
         // Preserve the server's close/reconnect lifecycle instead of throwing
         // through the WebSocket parser and misreporting an invalid JSON frame.
         console.error('DSH Harmony live stream returned an error frame');
-        this.connected = false; this.reconnecting = true;
+        this.connectionPhase = 'retrying';
         return;
       }
       this.model.apply(frame);
       if (frame.type === 'snapshot') {
-        this.connected = true; this.reconnecting = false; this.error = ''; this.retries = 0;
+        this.connectionPhase = 'live'; this.error = ''; this.retries = 0;
       }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
     }, (reason: string): void => {
@@ -450,7 +484,7 @@ export struct NativeWorkspace {
   }
   private async reconnect(id: string): Promise<void> {
     if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
-    this.connected = false;
+    this.connectionPhase = 'syncing';
     try {
       const state = await this.client.state();
       if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
@@ -463,7 +497,7 @@ export struct NativeWorkspace {
     if (!this.mounted || !this.active || this.fallbackActive || (id && this.selected !== id)) return;
     clearTimeout(this.reconnectTimer);
     this.interactions = [];
-    this.connected = false; this.reconnecting = true; this.error = '';
+    this.connectionPhase = 'retrying'; this.error = '';
     this.retries++;
     const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.retries, 5)));
     this.reconnectTimer = setTimeout(() => { if (id) this.follow(); else this.reload(); }, delay);
@@ -472,7 +506,6 @@ export struct NativeWorkspace {
     if (!this.mounted) return;
     this.previousRows = this.model.messages; this.renderTranscript();
     this.running = this.model.running; this.waiting = this.model.waiting; this.hasMore = this.model.hasMore;
-    this.sessionsChanged();
     this.streamText = this.model.streamText; this.streamReasoning = this.model.streamReasoning;
     if (this.followTail) setTimeout(() => { if (this.mounted) this.scroller.scrollEdge(Edge.Bottom); }, 0);
   }
@@ -480,7 +513,7 @@ export struct NativeWorkspace {
     const rows = nativeTranscript(this.model.messages, this.model.running, this.model.streamTools, this.model.streamReasoning, this.model.streamText);
     const visible = nativePresentTranscript(rows, this.client.hostSettings.chat(), this.model.turnDisclosure, this.model.collapseThrough);
     this.openTurns = new Set<string>(visible.filter((row: NativeMessage) => row.role === 'process').map((row: NativeMessage) => row.turnKey));
-    this.source.set(visible);
+    this.visibleRows = visible; this.source.set(visible);
   }
   private toggleTurn(key: string): void {
     const next = !this.openTurns.has(key);
@@ -561,11 +594,41 @@ export struct NativeWorkspace {
       const id = this.selected;
       const page = await this.client.page(id, this.model.historyBefore, this.model.historyCut);
       if (this.selected !== id || !this.mounted) return;
-      const previousCount = this.model.messages.length;
+      const offset = this.hasMore ? 1 : 0;
+      let anchorIndex = Math.max(0, this.firstVisible - offset);
+      while (anchorIndex < this.visibleRows.length - 1 && this.visibleRows[anchorIndex].role === 'turn-control') anchorIndex++;
+      const anchor = this.visibleRows[anchorIndex]?.id || '';
+      const top = this.scroller.getItemRect(anchorIndex + offset).y;
       this.model.prepend(page); this.paint();
-      this.scroller.scrollToIndex(this.model.messages.length - previousCount + (this.model.hasMore ? 1 : 0), false);
+      const next = this.visibleRows.findIndex((row: NativeMessage) => row.id === anchor);
+      if (next >= 0) setTimeout(() => { if (!this.mounted || this.selected !== id) return;
+        this.scroller.scrollToIndex(next + (this.hasMore ? 1 : 0), false, ScrollAlign.START); this.scroller.scrollBy(0, -top);
+      }, 0);
     } catch (error) { this.handleError(error as Error); }
     finally { this.paging = false; }
+  }
+
+  @Builder
+  private sessionRow(item: NativeSession) {
+    Row({ space: 8 }) {
+      Text(item.title.trim() || '未命名会话').fontSize(14).layoutWeight(1).wordBreak(WordBreak.BREAK_WORD)
+        .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+      if (item.running) { Text('运行中').fontSize(10).fontColor(this.dark ? '#C7D8FF' : '#3B5B9A') }
+      if (this.workspaces.pinnedSessionIds.includes(item.id)) {
+        DSHIcon({ glyph: 'pin-fill', glyphSize: 12, color: this.dark ? '#93969B' : '#8A8D91' })
+      }
+      if (item.blank !== true) {
+        Button({ type: ButtonType.Normal }) { DSHIcon({ glyph: 'ellipsis-outline', color: this.menuId === item.id ? this.dark ? '#F9FAFB' : '#17181B' : this.dark ? '#93969B' : '#8A8D91' }) }
+          .width(34).height(34).padding(6).borderRadius(8)
+          .backgroundColor(this.menuId === item.id ? this.dark ? '#45464B' : '#DBDEE4' : Color.Transparent).enabled(!this.menuBusy)
+          .accessibilityText(item.title + '，会话操作').onClick(() => { this.menuTarget = item.id; this.menuId = item.id; })
+          .bindPopup(this.menuId === item.id, { builder: this.sessionMenu, placement: Placement.BottomRight,
+            enableArrow: false, targetSpace: 4, radius: 16, mask: true,
+            popupColor: this.dark ? '#37383C' : '#F8F9FA', backgroundBlurStyle: BlurStyle.NONE,
+            onStateChange: (event): void => { if (!event.isVisible && this.menuId === item.id) this.menuId = ''; } })
+      }
+    }.padding({ left: 10, right: 4, top: 5, bottom: 5 }).width('100%').constraintSize({ minHeight: 44 }).borderRadius(10)
+      .backgroundColor((!this.showSessions || this.wide) && this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
   }
 
   @Builder
@@ -594,35 +657,36 @@ export struct NativeWorkspace {
           .accessibilityText('应用设置').onClick(() => { this.onSettings(); })
       }.width('100%')
       TextInput({ text: this.query, placeholder: '搜索会话' }).height(34).fontSize(13).borderRadius(9)
+        .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
         .backgroundColor(this.dark ? '#232324' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
         .onChange((value: string) => { this.query = value; })
       List({ space: 2 }) {
-        LazyForEach(this.sessionSource, (item: NativeSession) => {
+        LazyForEach(this.sessionSource, (entry: NativeWorkspaceRow) => {
           ListItem() {
-            Row({ space: 8 }) {
-              Text(item.title.trim() || '未命名会话').fontSize(14).maxLines(1).layoutWeight(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                .fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-              if (item.running) {
-                Text('运行中').fontSize(10).fontColor(this.dark ? '#C7D8FF' : '#3B5B9A')
-              }
-              if (this.workspaces.pinnedSessionIds.includes(item.id)) {
-                DSHIcon({ glyph: 'pin-fill', glyphSize: 12, color: this.dark ? '#93969B' : '#8A8D91' })
-              }
-              if (item.blank !== true) {
-                Button({ type: ButtonType.Normal }) { DSHIcon({ glyph: 'ellipsis-outline', color: this.dark ? '#93969B' : '#8A8D91' }) }
-                  .width(32).height(32).padding(6).borderRadius(10).backgroundColor(Color.Transparent).enabled(!this.menuBusy)
-                  .accessibilityText(item.title + '，会话操作').onClick(() => { this.menuTarget = item.id; this.menuId = item.id; })
-                  .bindPopup(this.menuId === item.id, { builder: this.sessionMenu, placement: Placement.BottomRight,
-                    enableArrow: false, targetSpace: 4, radius: 16, mask: true,
-                    popupColor: this.dark ? '#37383C' : '#F8F9FA', backgroundBlurStyle: BlurStyle.NONE,
-                    onStateChange: (event): void => { if (!event.isVisible && this.menuId === item.id) this.menuId = ''; } })
-              }
-            }.padding({ left: 10, right: 4, top: 2, bottom: 2 }).width('100%').borderRadius(10)
-              .backgroundColor(this.selected === item.id ? this.dark ? '#2C2C2E' : '#EBEEF2' : Color.Transparent)
-          }.onClick(() => this.select(item.id)).accessibilityText(item.title + (item.running ? '，运行中' : ''))
-        }, (item: NativeSession) => item.id)
+            if (entry.group) {
+              Row({ space: 6 }) {
+                DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 12, color: this.dark ? '#93969B' : '#777A80' })
+                  .rotate({ angle: this.collapsedGroups.includes(entry.workspaceId) ? 180 : -90 })
+                Text(entry.title).fontSize(12).fontWeight(FontWeight.Medium).layoutWeight(1).fontColor(this.dark ? '#B5B8BD' : '#61666B')
+                Text(String(entry.count)).fontSize(11).fontColor(this.dark ? '#93969B' : '#8A8D91')
+              }.width('100%').padding({ left: 6, right: 10, top: 10, bottom: 6 })
+            } else { this.sessionRow(entry.session) }
+          }.onClick(() => {
+            if (!entry.group) this.select(entry.session.id);
+            else {
+              this.collapsedGroups = this.collapsedGroups.includes(entry.workspaceId) ? this.collapsedGroups.filter((id: string) => id !== entry.workspaceId) : this.collapsedGroups.concat([entry.workspaceId]);
+              this.sessionsChanged();
+            }
+          }).accessibilityText(entry.group ? entry.title : entry.session.title + (entry.session.running ? '，运行中' : ''))
+        }, (entry: NativeWorkspaceRow) => entry.key)
       }.layoutWeight(1).width('100%')
-      if (this.reconnecting) {
+      if (this.workspaceError) {
+        Row() {
+          Text(this.workspaceError).fontSize(12).layoutWeight(1).fontColor(this.dark ? '#FF9393' : '#C53737')
+          Button('重试', { type: ButtonType.Normal }).height(32).fontSize(12).onClick(() => { this.refreshWorkspaces(); })
+        }.width('100%')
+      }
+      if (this.connectionPhase === 'retrying' && !this.selected) {
           Text('连接中断，正在尝试重连').fontSize(11).padding({ left: 10, right: 10, top: 6, bottom: 6 })
           .width('100%').borderRadius(9).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
@@ -646,24 +710,29 @@ export struct NativeWorkspace {
             .onClick(() => { this.backToSessions(); })
         }
         Text(this.title).fontSize(15).fontWeight(FontWeight.Medium).layoutWeight(1)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+          .onClick(() => { this.getUIContext().getPromptAction().showDialog({ title: '会话标题', message: this.title, buttons: [{ text: '关闭', color: this.dark ? '#AFC9FF' : '#315ECA' }] }); })
         Button({ type: ButtonType.Normal }) {
           DSHIcon({ glyph: 'ellipsis-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
         }.width(36).height(36).borderRadius(10)
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          .accessibilityText('更多操作').onClick(() => { this.utilityOpen = !this.utilityOpen; })
+          .accessibilityText('更多操作').onClick(() => { this.openUtilities(); })
           .bindPopup(this.utilityOpen, { builder: this.utilityMenu, placement: Placement.BottomRight,
             enableArrow: false, targetSpace: 4, radius: 16, mask: true,
             popupColor: this.dark ? '#37383C' : '#F8F9FA', backgroundBlurStyle: BlurStyle.NONE,
             onStateChange: (event): void => { if (!event.isVisible) this.utilityOpen = false; } })
       }.width('100%')
-      if (this.reconnecting) {
+      if (this.connectionPhase === 'retrying') {
         Row({ space: 8 }) {
           Text('•').fontSize(14).fontColor(this.dark ? '#F8C86A' : '#A56A00')
           Text('连接中断，正在尝试重连').fontSize(12).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           Blank()
         }.padding({ left: 10, right: 10, top: 6, bottom: 6 }).width('100%').borderRadius(9)
           .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7')
+      }
+      if ((this.connectionPhase === 'opening' || this.connectionPhase === 'syncing') && !this.model.messages.length) {
+        Row({ space: 8 }) { LoadingProgress().width(14).height(14); Text('正在加载会话…').fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91') }
+          .width('100%').padding({ left: 4, top: 4, bottom: 4 })
       }
       List({ space: 12, scroller: this.scroller }) {
         if (this.hasMore) { ListItem() { Button(this.paging ? '正在加载…' : '加载更早消息').enabled(!this.paging).height(38).onClick(() => { this.older(); }) } }
@@ -690,7 +759,9 @@ export struct NativeWorkspace {
         }, (message: NativeMessage) => message.id)
       }.layoutWeight(1).width('100%').cachedCount(6)
         .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
-        .onReachStart(() => { if (this.hasMore) this.older(); })
+        .onReachStart(() => { if (this.userHasScrolled && this.hasMore && this.connectionPhase === 'live') this.older(); })
+        .onScrollIndex((first: number) => { this.firstVisible = first; })
+        .onScrollFrameBegin((offset: number, state: ScrollState) => { if (state === ScrollState.Scroll) this.userHasScrolled = true; return { offsetRemain: offset }; })
         .onScroll(() => { this.followTail = this.scroller.isAtEnd(); })
       ForEach(this.interactions.concat(this.continued), (frame: NativeFrame) => {
         NativeInteraction({ client: this.client, frame, onDone: (): void => {
@@ -722,6 +793,7 @@ export struct NativeWorkspace {
       }
       Column({ space: 8 }) {
         TextArea({ text: this.draft, placeholder: '发送消息…' }).height(44).enabled(!this.sending)
+          .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
           .fontSize(14).borderRadius(0).padding({ left: 7, right: 7, top: 3, bottom: 3 })
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
           .onChange((value: string) => { this.draft = value; this.client.drafts.set(this.selected, value); })
@@ -767,8 +839,8 @@ export struct NativeWorkspace {
               else { DSHIcon({ glyph: 'send-arrow', color: '#FFFFFF' }) }
             }.width(34).height(34).borderRadius(17)
               .backgroundColor(this.dark ? '#679EFE' : '#3964FE')
-              .enabled(this.connected && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0))
-              .opacity(this.connected && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0) ? 1 : 0.4)
+              .enabled(this.connectionPhase === 'live' && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0))
+              .opacity(this.connectionPhase === 'live' && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0) ? 1 : 0.4)
               .accessibilityText(this.sending ? '发送中' : '发送').onClick(() => { this.followTail = true; this.send(); })
           }
         }.width('100%')

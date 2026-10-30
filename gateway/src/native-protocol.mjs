@@ -113,7 +113,7 @@ export function normalizeFollow(frame) {
   if (frame?.type === 'snapshot') {
     const history = normalizedHistory(frame.records);
     const active = frame.assistantStream?.activeAttempt;
-    return { type: 'snapshot', ...history, cursor: frame.cursor, beforeSeq: frame.records?.[0]?.event?.seq ?? 0,
+    return { type: 'snapshot', ...history, cursor: frame.cursor, hasMore: frame.hasMore === true, beforeSeq: frame.records?.[0]?.event?.seq ?? 0,
 
       attemptId: active?.attemptId || '', nextIndex: active?.nextIndex || 0, ...compactText(active?.stream) };
   }

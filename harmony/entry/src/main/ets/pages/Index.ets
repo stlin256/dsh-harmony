@@ -177,10 +177,12 @@ struct Index {
     }
   }
   private applyNativeTheme(): void {
-    if (this.uiMode === 'native' && !this.authSurface) {
-      AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
-      WindowAppearance.apply(this.nativeThemeMode === 'dark' || (this.nativeThemeMode === 'system' && this.systemDark));
-    }
+    const shell = !this.ready || this.nativeSettings || this.connectionManager ||
+      (this.uiMode === 'native' && !this.authSurface && !this.compatibilitySurface);
+    AppStorage.setOrCreate<boolean>('nativeShellForeground', shell);
+    AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
+    WindowAppearance.apply(this.nativeThemeMode === 'dark' || (this.nativeThemeMode === 'system' && this.systemDark));
+    if (!shell && AppStorage.get<boolean>('nativeWebThemeKnown') === true) WindowAppearance.applyBars(AppStorage.get<boolean>('nativeWebDark') === true);
   }
   private loginSurface(): void {
     this.invokeNative('widgetDisconnected', '').catch(() => {});
@@ -232,7 +234,6 @@ struct Index {
   private closeCompatibility(): void {
     this.compatibilitySurface = false;
     AppStorage.setOrCreate<boolean>('nativeCompatibilityActive', false);
-    AppStorage.setOrCreate<number>('nativeRefreshRevision', (AppStorage.get<number>('nativeRefreshRevision') || 0) + 1);
     this.applyNativeTheme();
   }
   @Builder
@@ -252,6 +253,7 @@ struct Index {
   }
   private settingsChanged(): void {
     if (!this.nativeSettings) AppStorage.setOrCreate<string>('nativeSettingsPage', 'root');
+    this.applyNativeTheme();
   }
   private refreshContent(): void {
     if (this.uiMode === 'native' && !this.authSurface) {
@@ -422,6 +424,7 @@ struct Index {
   }
 
   build() {
+    WithTheme({ colorMode: this.nativeDark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
     Navigation() {
       this.pageContent()
     }
@@ -432,6 +435,7 @@ struct Index {
     .width('100%').height('100%')
     .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
     .bindSheet(this.modePicker, this.modeSheet, { height: SheetSize.FIT_CONTENT, showClose: true })
+    }
   }
 
 }

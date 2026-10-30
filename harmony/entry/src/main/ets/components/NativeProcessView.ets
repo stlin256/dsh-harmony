@@ -38,7 +38,7 @@ export struct NativeProcessView {
   }
   @Builder
   private members() {
-    Column({ space: 4 }) {
+    Column({ space: 2 }) {
       ForEach(this.message.children, (child: NativeMessage) => {
         if (child.role === 'tool') { NativeToolCallView({ client: this.client, sessionId: this.sessionId, message: child, disclosures: this.disclosures }) }
         else if (child.role === 'reasoning') { NativeMessageView({ client: this.client, sessionId: this.sessionId, message: child,

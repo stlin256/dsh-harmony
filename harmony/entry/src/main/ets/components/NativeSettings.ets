@@ -47,6 +47,7 @@ export struct NativeSettings {
   @State private chat: NativeChatPreferences = new NativeChatPreferences();
   @State private tab: string = 'general';
   @State private hostBusy: boolean = false;
+  @State private hostSaving: string[] = [];
   @State private hostError: string = '';
   @State private themeMode: string = 'system';
   @State private reduceMotion: boolean = false;
@@ -66,6 +67,7 @@ export struct NativeSettings {
 
   aboutToAppear(): void {
     this.mounted = true;
+    this.hostChanged();
     this.initialize().catch(() => { this.status = '读取设置失败'; this.busy = false; });
     this.refreshHost();
   }
@@ -78,11 +80,11 @@ export struct NativeSettings {
     finally { if (this.mounted) this.hostBusy = false; }
   }
   private async saveHost(ns: string, field: string, value: string | number): Promise<void> {
-    if (this.hostBusy) return;
-    this.hostBusy = true; this.hostError = '';
+    if (this.hostSaving.includes(ns)) return;
+    this.hostSaving = this.hostSaving.concat([ns]); this.hostError = '';
     try { await this.client.hostSettings.set(ns, field, value); if (this.mounted) this.hostChanged(); }
     catch (_) { if (this.mounted) this.hostError = '保存失败，已同步最新设置'; }
-    finally { if (this.mounted) this.hostBusy = false; }
+    finally { if (this.mounted) this.hostSaving = this.hostSaving.filter((name: string) => name !== ns); }
   }
   private hasHost(ns: string): boolean { return this.host.namespaces.some((row) => row.ns === ns); }
   @Builder
@@ -92,7 +94,10 @@ export struct NativeSettings {
       Select(labels.map((value: string): SelectOption => ({ value }))).selected(Math.max(0, values.indexOf(current)))
         .value(labels[Math.max(0, values.indexOf(current))]).font({ size: 13 }).height(36).borderRadius(10)
         .backgroundColor(this.dark ? '#2C2C2E' : '#F5F6F7').fontColor(this.dark ? '#F9FAFB' : '#17181B')
-        .enabled(!this.hostBusy && this.host.writable).onSelect((index: number) => { this.saveHost(ns, field, values[index]); })
+        .optionFontColor(this.dark ? '#F9FAFB' : '#17181B').selectedOptionFontColor(this.dark ? '#AFC9FF' : '#315ECA')
+        .optionBgColor(this.dark ? '#232324' : '#FFFFFF').selectedOptionBgColor(this.dark ? '#353638' : '#EBEEF2')
+        .menuBackgroundColor(this.dark ? '#232324' : '#FFFFFF')
+        .enabled(!this.hostSaving.includes(ns) && this.host.writable).onSelect((index: number) => { this.saveHost(ns, field, values[index]); })
     }.width('100%').constraintSize({ minHeight: 52 })
   }
   @Builder
@@ -161,6 +166,9 @@ export struct NativeSettings {
   private async setting(command: string, value: boolean): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    const previousCompleted = this.notifyCompleted;
+    const previousFailed = this.notifyFailed;
+    const previousApproval = this.notifyApproval;
     try {
       if (command === 'reduceMotion') this.reduceMotion = value;
       if (command === 'reduceTransparency') this.reduceTransparency = value;
@@ -169,11 +177,23 @@ export struct NativeSettings {
       if (command === 'notifyFailed') this.notifyFailed = value;
       if (command === 'notifyApproval') this.notifyApproval = value;
       if (command === 'backgroundMonitor') this.backgroundMonitor = value;
-      await this.invoke(command, value ? 'true' : 'false');
-      if (command.startsWith('notify') || command === 'backgroundMonitor') await this.saveNotificationOptions();
+      if (command.startsWith('notify')) await this.saveNotificationOptions();
+      else await this.invoke(command, value ? 'true' : 'false');
       this.status = '已保存';
-    } catch (_) { this.status = '保存失败'; }
-    finally { this.busy = false; }
+    } catch (_) {
+      if (command.startsWith('notify')) {
+        try { await this.invoke('notificationLevels', JSON.stringify({ completed: previousCompleted, failed: previousFailed, approval: previousApproval })); } catch (_) {}
+      }
+      this.status = '保存失败';
+    } finally {
+      try {
+        const state = JSON.parse(await this.invoke('nativeState', '')) as SettingsState;
+        this.reduceMotion = state.reduceMotion; this.reduceTransparency = state.reduceTransparency; this.widgetDetails = state.widgetDetails;
+        this.notifyCompleted = state.notifyCompleted; this.notifyFailed = state.notifyFailed; this.notifyApproval = state.notifyApproval;
+        this.backgroundMonitor = state.backgroundMonitor; this.pushEnabled = state.pushEnabled;
+      } catch (_) { if (command.startsWith('notify')) { this.notifyCompleted = previousCompleted; this.notifyFailed = previousFailed; this.notifyApproval = previousApproval; } }
+      this.busy = false;
+    }
   }
   private async saveNotificationOptions(): Promise<void> {
     const notifications = new NotificationPreferences();
@@ -189,6 +209,7 @@ export struct NativeSettings {
   }
   private async action(command: string): Promise<void> {
     if (command === 'connection') { this.openPage('connection'); return; }
+    if (command === 'modes') { this.onModes(); return; }
     if (command === 'about') { this.setAbout(true); return; }
     if (this.busy) return;
     this.busy = true; this.status = '';
@@ -220,7 +241,7 @@ export struct NativeSettings {
   }
 
   private setAbout(open: boolean): void {
-    this.openPage(open ? 'about' : 'root');
+    this.tab = open ? 'about' : 'app'; this.settingsPage = 'root';
   }
   private openPage(page: string): void {
     const update = (): void => { this.settingsPage = page; };
@@ -293,7 +314,7 @@ export struct NativeSettings {
   @Builder
   private appPreferences() {
     Column({ space: 14 }) {
-      Text('外观').fontSize(13).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#93969B' : '#8A8D91')
+      Text('应用外观').fontSize(13).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#93969B' : '#8A8D91')
       Row({ space: 8 }) {
         ForEach(['light', 'dark', 'system'], (mode: string) => {
           Button({ type: ButtonType.Normal }) {
@@ -333,6 +354,8 @@ export struct NativeSettings {
       }.width('100%')
       Text('连接').fontSize(13).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#93969B' : '#8A8D91')
       Column() {
+        this.actionRow('界面模式', '', 'modes', false)
+        Divider().strokeWidth(0.5).color(this.dark ? '#353638' : '#E8E9EC')
         this.actionRow('服务与登录', '', 'connection', false)
         Divider().strokeWidth(0.5).color(this.dark ? '#353638' : '#E8E9EC')
         this.actionRow('退出当前连接', '', 'logout', true)
@@ -341,10 +364,7 @@ export struct NativeSettings {
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
   build() {
-    if (this.settingsPage === 'about') {
-      AboutSettings({ onBack: (): void => { this.setAbout(false); } })
-        .transition(NativeExperience.reducedMotion() ? TransitionEffect.IDENTITY : TransitionEffect.OPACITY)
-    } else if (this.settingsPage === 'connection') {
+    if (this.settingsPage === 'connection') {
       this.connectionPage()
     } else {
       Column({ space: 8 }) {
@@ -363,17 +383,20 @@ export struct NativeSettings {
               .backgroundColor(this.tab === 'app' ? this.dark ? '#353638' : '#EBEEF2' : Color.Transparent)
               .fontColor(this.dark ? '#F9FAFB' : '#17181B').onClick(() => { this.tab = 'app'; })
             Button('关于', { type: ButtonType.Normal }).height(40).width(108).fontSize(14).borderRadius(12)
-              .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#17181B').onClick(() => { this.setAbout(true); })
+              .backgroundColor(this.tab === 'about' ? this.dark ? '#353638' : '#EBEEF2' : Color.Transparent)
+              .fontColor(this.dark ? '#F9FAFB' : '#17181B').onClick(() => { this.tab = 'about'; })
           }.padding({ left: 16, right: 16 })
         }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').height(48)
         Divider().strokeWidth(0.5).color(this.dark ? '#353638' : '#E8E9EC')
-        Scroll() {
+        if (this.tab === 'about') { AboutSettings({ embedded: true }).layoutWeight(1) }
+        else { Scroll() {
           Column() {
             if (this.tab === 'general') { this.hostGeneral() }
             else { this.appPreferences() }
           }.padding({ left: 16, right: 16, top: 8, bottom: 24 }).width('100%').constraintSize({ maxWidth: 680 })
             .alignItems(HorizontalAlign.Start)
         }.width('100%').layoutWeight(1).align(Alignment.Top)
+        }
       }.width('100%').height('100%').backgroundColor(this.dark ? '#151517' : '#FFFFFF')
     }
   }

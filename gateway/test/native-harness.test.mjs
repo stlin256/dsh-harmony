@@ -12,9 +12,11 @@ const origin = 'https://dsh.example.com';
 async function setup(t, options = {}) {
   const calls = [];
   const backend = createServer(async (req, res) => {
-    if (req.method === 'GET') {
+    if (req.method === 'GET' || req.method === 'HEAD') {
       assert.equal(req.headers.cookie, 'harness=server-only');
       const route = new URL(req.url, 'http://localhost');
+      if (options.unavailableExports) { res.writeHead(404).end(); return; }
+      if (options.htmlExport) { res.setHeader('Content-Type','text/html'); res.end('<h1>Authentication required</h1>'); return; }
       assert.equal(route.searchParams.get('sessionId'), 'session');
       if (route.pathname === '/api/session.markdown') { res.setHeader('Content-Type','text/markdown'); res.end('# Complete transcript\n\nnot just the visible window'); return; }
       if (route.pathname === '/api/session.export') { assert.equal(route.searchParams.get('includeDescendants'),'true'); res.setHeader('Content-Type','application/zip'); res.end(Buffer.from([0x50,0x4b,3,4,0,255])); return; }
@@ -126,6 +128,7 @@ test('header utilities export complete Host content and profile writes use named
   assert.equal((await call('/pocket/api/native/export?sessionId=session&format=zip')).status,200);
   assert.equal((await call('/pocket/api/native/export?sessionId=../bad&format=zip')).status,400);
   assert.equal((await call('/pocket/api/native/export?sessionId=session&format=markdown',undefined,false)).status,401);
+  assert.deepEqual(JSON.parse((await call('/pocket/api/native/operation',{operation:'capabilities',sessionId:'session'})).text),{copyMarkdown:true,downloadLog:true});
   const settings=JSON.parse((await call('/pocket/api/native/operation',{operation:'settingsDescribe'})).text);
   assert.equal(settings.namespaces.length,1);assert.doesNotMatch(JSON.stringify(settings),/must-not-forward/);
   assert.deepEqual(calls.at(-1).value.payload.args,{});
@@ -136,6 +139,15 @@ test('header utilities export complete Host content and profile writes use named
     {ns:'provider',field:'apiKey',value:'never'}, {ns:'ui-chat',field:'transcriptView',value:'invented'},
     {ns:'ui-theme',field:'fontSize',value:23}, {ns:'ui-chat',field:'collapseTiming',value:'completion',revision:-1}
   ]) assert.equal((await call('/pocket/api/native/operation',{operation:'settingsSet',revision:4,...body})).status,400);
+});
+
+test('older Host exports are negotiated and an HTML login response never becomes a transcript or archive',async t=>{
+  const old=await setup(t,{unavailableExports:true});
+  assert.deepEqual(JSON.parse((await old.call('/pocket/api/native/operation',{operation:'capabilities',sessionId:'session'})).text),{copyMarkdown:false,downloadLog:false});
+  const html=await setup(t,{htmlExport:true});
+  assert.deepEqual(JSON.parse((await html.call('/pocket/api/native/operation',{operation:'capabilities',sessionId:'session'})).text),{copyMarkdown:false,downloadLog:false});
+  assert.equal((await html.call('/pocket/api/native/export?sessionId=session&format=markdown')).status,502);
+  assert.equal((await html.call('/pocket/api/native/export?sessionId=session&format=zip')).status,502);
 });
 
 test('native adapter uses official RPC envelopes and keeps upstream credentials server-side',async t=>{

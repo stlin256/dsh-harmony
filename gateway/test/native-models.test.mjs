@@ -27,7 +27,8 @@ function storage() {
       if (!disk.has(name)) disk.set(name, new Map());
       const file = disk.get(name);
       return { getSync: (key, fallback) => structuredClone(file.has(key) ? file.get(key) : fallback),
-        putSync: (key, value) => file.set(key, structuredClone(value)), flushSync() {} };
+        putSync: (key, value) => file.set(key, structuredClone(value)),
+        hasSync: key => file.has(key), deleteSync: key => file.delete(key), flushSync() {} };
     }
   };
   return { disk, preferences };

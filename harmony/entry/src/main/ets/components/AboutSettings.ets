@@ -5,6 +5,7 @@ import { DSHIcon } from './DSHIcon';
 
 @Component
 export struct AboutSettings {
+  @Prop embedded: boolean = false;
   onBack: () => void = (): void => {};
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private status: string = '';
@@ -21,6 +22,7 @@ export struct AboutSettings {
   build() {
     Scroll() {
       Column({ space: 13 }) {
+        if (!this.embedded) {
         Row({ space: 8 }) {
           Button({ type: ButtonType.Normal }) { DSHIcon({ glyph: 'chevron-left-outline', color: this.dark ? '#F9FAFB' : '#33353A' }) }
             .width(38).height(38).borderRadius(12).backgroundColor(Color.Transparent)
@@ -31,6 +33,7 @@ export struct AboutSettings {
             Text('DSH Harmony').fontSize(11).fontColor(this.dark ? '#929298' : '#888B91')
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         }.width('100%')
+        }
         Column({ space: 8 }) {
           Image($r('app.media.app_icon')).width(72).height(72).borderRadius(18)
           Text(BuildInfo.appName).fontSize(20).fontWeight(FontWeight.Medium)

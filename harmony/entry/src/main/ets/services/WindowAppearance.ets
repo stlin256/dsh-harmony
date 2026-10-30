@@ -12,6 +12,10 @@ export class WindowAppearance {
 
   static apply(dark: boolean): void {
     AppStorage.setOrCreate<boolean>('nativeDark', dark);
+    WindowAppearance.applyBars(dark);
+  }
+
+  static applyBars(dark: boolean): void {
     if (WindowAppearance.mainWindow === null) return;
     const surface = dark ? '#151517' : '#FFFFFF';
     WindowAppearance.mainWindow.setWindowSystemBarProperties({

@@ -194,7 +194,10 @@ export class NativeHarnessClient {
         frame = JSON.parse(text) as NativeFrame;
       } catch (_) { finish('invalid_frame'); return; }
       try { receive(frame); }
-      catch (_) { finish('frame_handler_error'); }
+      catch (error) {
+        const message = (error as Error).message;
+        finish(message === 'Stream gap' ? 'assistant_index_gap' : message === 'Stream attempt changed' ? 'assistant_attempt_changed' : 'frame_handler_error');
+      }
     });
     socket.on('close', (_error: BusinessError, result: webSocket.CloseResult): void => {
       finish('close_' + (result?.code || 0));

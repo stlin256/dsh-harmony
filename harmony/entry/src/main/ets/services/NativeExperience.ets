@@ -22,8 +22,9 @@ export class NativeExperience {
   static setPreference(context: common.Context, key: string, value: boolean): void {
     if (key !== 'reduceTransparency' && key !== 'reduceMotion') throw new Error('Unknown presentation preference');
     const store = preferences.getPreferencesSync(context, { name: 'pocket-native-experience' });
-    store.putSync(key, value);
-    store.flushSync();
+    const previous = store.getSync(key, false);
+    try { store.putSync(key, value); store.flushSync(); }
+    catch (error) { store.putSync(key, previous); throw error as Error; }
     NativeExperience.refresh(context);
   }
 
