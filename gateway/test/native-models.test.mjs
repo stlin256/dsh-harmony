@@ -61,6 +61,8 @@ test('widget task-name defaults, opt-out, cross-process restoration, expiry and 
   assert.deepEqual(JSON.parse(WidgetStore.data(context).tasks).map(task => task.state), ['waiting', 'running', 'completed']);
   assert.notEqual(disk.get('pocket-widget-snapshot').get('snapshot'), '');
   assert.equal(deliveries.length, 1, 'duplicate form instance IDs must not duplicate delivery');
+  await WidgetStore.update(context, snapshot);
+  assert.equal(deliveries.length, 1, 'unchanged card content must not republish');
   await WidgetStore.setDetails(context, false);
   await WidgetStore.update(context, snapshot);
   assert.equal(WidgetStore.data(context).showCounts, true, 'privacy mode keeps anonymous counts');

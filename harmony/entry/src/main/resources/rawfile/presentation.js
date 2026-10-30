@@ -50,11 +50,8 @@
     if (!['plugins', 'automation', 'more'].includes(route)) return;
     url.searchParams.delete('dshHarmonyRoute');
     history.replaceState(history.state, '', url.pathname + url.search + url.hash);
-    if (route === 'more') {
-      window.__dshHarmonyRouteReady = true;
-      return;
-    }
-    const labels = route === 'plugins' ? ['插件', 'Plugins'] : ['自动化任务', 'Automation tasks'];
+    const labels = route === 'plugins' ? ['插件', 'Plugins'] :
+      route === 'automation' ? ['自动化任务', 'Automation tasks'] : ['更多', 'More'];
     let attempts = 0;
     const select = () => {
       const navigation = document.querySelector('nav[aria-label="全局面板"], nav[aria-label="Global panels"]');
