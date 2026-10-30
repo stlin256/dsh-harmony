@@ -47,6 +47,10 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-motion-system.md](docs/specs/2026-10-31-motion-system.md)
 - Pin, workspace ordering and scroll spec:
   [2026-10-31-workspace-pin-order-scroll-bottom.md](docs/specs/2026-10-31-workspace-pin-order-scroll-bottom.md)
+- Self-contained plugin requirement:
+  [2026-10-31-plugin-self-contained.md](docs/requirements/2026-10-31-plugin-self-contained.md)
+- Self-contained plugin implementation spec:
+  [2026-10-31-plugin-self-contained.md](docs/specs/2026-10-31-plugin-self-contained.md)
 - HarmonyOS 7 motion research:
   [2026-10-31-harmonyos7-motion-strategy.md](docs/research/2026-10-31-harmonyos7-motion-strategy.md)
 - Control motion audit:

@@ -4,7 +4,7 @@
 
 ## 已有 Pocket ID 和 Harness OIDC 网关
 
-准备 Node.js 24.9+、Python 3、pnpm 和 systemd。将仓库的 `gateway/`、`plugins/`、`deploy/` 放在 `/srv/dsh-harmony/releases/<release>/`。在 `gateway/` 运行 `npm ci --omit=dev --ignore-scripts`，然后执行：
+准备 Node.js 24.9+、Python 3、pnpm 和 systemd。先运行 `node scripts/package-plugin.mjs`，把生成的 `.tgz` 解包到发布目录的 `plugins/dsh-harmony/`；该目录必须包含脚本验证过的生产依赖，不能只复制仓库中的轻量 `plugins/dsh-harmony/`。同时将 `deploy/` 放在 `/srv/dsh-harmony/releases/<release>/`，然后执行：
 
 ```bash
 sudo python3 deploy/install-pocket-id.py \
@@ -23,6 +23,8 @@ sudo systemctl restart deepseek-harness harness-gateway
 ```
 
 没有新增独立 Harmony 后台服务或 relay。插件在 Harness 进程内承载 `/pocket/*`；现有 OIDC 网关验证账号后才将这些请求交给插件。App 填工作空间 HTTPS 地址，选择下面的“Pocket ID · Passkey”。局域网使用同样可访问且证书受信任的 HTTPS 地址。
+
+安装器在切换 `current` 前会实际导入发布目录中的插件入口。若发布包缺少依赖，安装立即停止，原发布和原 profile 保持可用。
 
 ## 从零准备 Passkey
 
@@ -50,7 +52,7 @@ sudo systemctl restart deepseek-harness harness-gateway
 
 Native login is the default and requires only the single `@dsh-harmony/plugin` installed in Harness. Enter the Web origin and access key from Harness's startup URL. HTTP and HTTPS are supported on LAN or public deployments; configure standard Harness binding and trusted hosts as appropriate.
 
-Pocket ID login is optional and requires HTTPS. The bundled MIT OIDC gateway, `bootstrap-passkey.py`, `install-pocket-id.py`, environment/service templates and Caddy example provide the deployment tools. Register a confidential Pocket ID OIDC client with PKCE S256 and the workspace's `/_gateway/callback`, keep credentials in the private server environment, and apply the installation command above. The installer prepares backups and configuration without restarting services. Restart only after checking that Harness has no running tasks.
+Pocket ID login is optional and requires HTTPS. Build and extract the self-contained plugin artifact into `plugins/dsh-harmony/` under the release directory. The lightweight source directory by itself is not a deployable plugin because its nested gateway imports production dependencies. The bundled MIT OIDC gateway, `bootstrap-passkey.py`, `install-pocket-id.py`, environment/service templates and Caddy example provide the remaining deployment tools. Register a confidential Pocket ID OIDC client with PKCE S256 and the workspace's `/_gateway/callback`, keep credentials in the private server environment, and apply the installation command above. The installer verifies the staged plugin imports before switching releases, prepares backups and configuration without restarting services. Restart only after checking that Harness has no running tasks.
 
 The adapter forwards `/pocket/*` only after verifying the existing OIDC session and strips browser-supplied attestation headers. The plugin requires both a loopback peer and the private adapter key. Native login independently uses Harness's public token exchange and signed-cookie validation. No additional companion daemon or relay is required. The App permits the configured identity origin for navigation; its native JavaScript bridge remains restricted to the workspace origin.
 

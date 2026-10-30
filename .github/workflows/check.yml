@@ -22,4 +22,5 @@ jobs:
         working-directory: gateway
       - run: npm audit --audit-level=low
         working-directory: gateway
+      - run: node scripts/package-plugin.mjs
       - run: node scripts/check-publication.mjs

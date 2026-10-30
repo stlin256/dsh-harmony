@@ -26,6 +26,9 @@ if os.geteuid() != 0:
 release = a.release.resolve()
 if not release.is_relative_to(Path('/srv/dsh-harmony/releases')) or not (release / 'plugins/dsh-harmony/index.mjs').is_file():
     raise SystemExit('Expected a complete release under /srv/dsh-harmony/releases')
+subprocess.run(['/usr/local/bin/node', '--input-type=module', '--eval',
+                f'await import({json.dumps((release / "plugins/dsh-harmony/index.mjs").as_uri())})'],
+               check=True)
 for unit in (a.oidc_unit, a.harness_unit):
     if not unit.replace('-', '').isalnum():
         raise SystemExit('Invalid unit name')

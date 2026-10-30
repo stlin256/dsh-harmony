@@ -19,7 +19,7 @@
 
 1. 准备可访问的 Harness Web，服务器 Node.js 24.9+。
 2. 在 `gateway/` 运行 `npm ci`，回到仓库根目录运行 `node scripts/package-plugin.mjs`。
-3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.3.0.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
+3. 在 Harness 插件管理中安装生成的 `.artifacts/dsh-harmony-plugin-0.3.1.tgz`，启用 `@dsh-harmony/plugin`。[手动安装说明](plugins/dsh-harmony/README.md)。
 4. 安装 App，默认选原生登录，填写地址和 Harness 启动 URL 中 `token=` 后的访问密钥。密钥不保存在 App 配置中；后续使用有效 Cookie。
 5. 可选 Pocket ID 的[流程与工具](docs/OIDC-DEPLOYMENT.md)均在仓库中，配置后选择下面的 Passkey 登录。
 

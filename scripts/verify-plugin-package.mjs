@@ -1,9 +1,21 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { createServer, request } from 'node:http';
-const root = pathToFileURL(resolve(process.argv[2]) + '/');
+import { spawnSync } from 'node:child_process';
+const input = resolve(process.argv[2] || '');
+if (!existsSync(input)) throw Error('Plugin package does not exist: ' + input);
+const temporary = input.toLowerCase().endsWith('.tgz') ? await mkdtemp(resolve(tmpdir(), 'dsh-harmony-pack-')) : '';
+if (temporary) {
+  const extracted = spawnSync('tar', ['-xzf', input, '-C', temporary], { stdio: 'inherit' });
+  if (extracted.status !== 0) { await rm(temporary, { recursive: true, force: true }); process.exit(extracted.status || 1); }
+}
+const packagePath = temporary ? resolve(temporary, 'package') : input;
+const root = pathToFileURL(packagePath + '/');
+try {
 const pkg = JSON.parse(await readFile(new URL('package.json', root)));
 const plugin = await import(new URL('index.mjs', root));
 const browser = await readFile(new URL(pkg.exports['./client'], root), 'utf8');
@@ -26,3 +38,6 @@ try {
   });
   console.log('Packed plugin host, browser factory and static assets passed');
 } finally { pocket.close(); server.closeAllConnections(); server.close(); db.close(); }
+} finally {
+  if (temporary) await rm(temporary, { recursive: true, force: true });
+}
