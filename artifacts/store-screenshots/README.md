@@ -22,3 +22,6 @@ and writes `manifest.json`.
 Use `-SkipBuild` to reuse the current signed store HAP and `-SkipInstall` to
 capture with a HAP that is already installed. The model selection in Mock data
 is `DeepSeek-V4-Pro` with `max` reasoning effort.
+
+Pass `-RestorePersonal` to rebuild and reinstall the personal Push Kit variant
+after the captures are complete.

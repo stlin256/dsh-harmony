@@ -46,6 +46,9 @@ also pass `-SkipInstall`.
 .\scripts\capture-store-screenshots.ps1 -Device '<device-id>'
 ```
 
+Pass `-RestorePersonal` to rebuild and reinstall the personal Push Kit variant
+after capture. Without it, the device remains on the captured store build.
+
 `scripts/compose-store-screenshots.py` places each real-device portrait capture
 in a branded rounded device frame. The phone is enlarged to dominate the right
 half of landscape art and the lower visual block of portrait art. Titles,
