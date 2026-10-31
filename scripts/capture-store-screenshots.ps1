@@ -18,6 +18,8 @@ if (-not $OutputDir) {
 $rawDir = Join-Path $OutputDir 'raw'
 $finalDir = Join-Path $OutputDir 'final'
 New-Item -ItemType Directory -Force -Path $rawDir, $finalDir | Out-Null
+Get-ChildItem -LiteralPath $rawDir -Filter '*.png' -File |
+  Remove-Item -Force
 
 $hdc = Join-Path $DevEcoHome 'sdk\default\openharmony\toolchains\hdc.exe'
 if (-not (Test-Path -LiteralPath $hdc)) {
