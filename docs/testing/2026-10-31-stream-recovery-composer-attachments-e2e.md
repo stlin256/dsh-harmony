@@ -42,6 +42,9 @@ Status: pending device run.
 | ATT-E2E-07 | Cause a host refusal such as an unsupported image or size limit. | A concise non-retryable error is shown; the item remains removable and send stays disabled. | Pending |
 | ATT-E2E-08 | Send mixed text, images and files, then reopen the session. | User message renders compact images/files in order and reopens with the same durable attachments. | Pending |
 | ATT-E2E-09 | Cancel the picker and repeat each action. | No empty draft, stale upload state, or compatibility surface is created. | Pending |
+| ATT-E2E-10 | Select one image on the current device build and wait for upload settlement. | The picker action spinner stops, the image action is usable again, the attachment spinner disappears, send becomes enabled, and no cold restart is needed. | Pending |
+| ATT-E2E-11 | Select one image while the keyboard is open. | The compact draft chip is leading-aligned above the composer, only the chip has a themed surface, and no full-width dark draft row appears. | Pending |
+| ATT-E2E-12 | Start an image upload, switch Sessions, then return after it completes. | The attachment is ready in its owning Session and cannot leave a permanent spinner. | Pending |
 
 ## Validation and release
 

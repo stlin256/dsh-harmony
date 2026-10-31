@@ -931,6 +931,8 @@ test('native transport shares only gateway cookies, disables redirects and never
   assert.equal(uploaded.receiptId,'receipt-one');
   assert.match(calls.at(-1).url,/\/pocket\/api\/native\/upload\?sessionId=session&name=note\.txt$/);
   assert.ok(calls.at(-1).options.extraData instanceof ArrayBuffer);
+  assert.equal(calls.at(-1).options.header['Content-Length'],'4');
+  assert.equal(calls.at(-1).options.readTimeout,45000);
   streamBody='{}';
   const {NativeAttachmentDraft}=load('NativeHarnessClient',{
     '@kit.NetworkKit':network,'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookie:()=>cookie,configCookie:async()=>{},saveCookieAsync:async()=>{}}}},
@@ -966,6 +968,10 @@ test('composer source contract uses intrinsic model width and native image/file 
   assert.doesNotMatch(source,/accessibilityText\('更多附件'\)\s*[\s\S]{0,120}\.onClick\(this\.onCompatibility\)/);
   assert.match(source,/symbol|glyph: 'image-outline'/);
   assert.match(source,/glyph: 'file-outline'/);
+  assert.match(clientSource,/requestInStream\(this\.origin \+ '\/pocket\/api\/native\/upload'/);
+  assert.match(source,/this\.attaching = false;[\s\S]{0,180}added\.forEach/);
+  assert.match(source,/translate\(\{ y: -\(this\.composerHeight \+ 8\) \}\)/);
+  assert.doesNotMatch(source,/if \(this\.attachments\.length\) \{\s*Scroll\(\)/);
   assert.match(source,/const deadline = this\.active \? 15000 : 45000/);
   assert.match(source,/background \? 45000 : 20000/);
   assert.match(clientSource,/profile=background/);

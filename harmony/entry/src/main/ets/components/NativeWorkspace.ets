@@ -98,6 +98,7 @@ export struct NativeWorkspace {
   @State private fileViewOpen: boolean = false;
   @State private fileView: NativeFileViewRequest = new NativeFileViewRequest();
   @State private attaching: boolean = false;
+  @State private composerHeight: number = 0;
   @State @Watch('navigationChanged') private toolsOpen: boolean = false;
   @State private toolsId: string = '';
   @State @Watch('navigationChanged') private modelPickerOpen: boolean = false;
@@ -1369,7 +1370,9 @@ export struct NativeWorkspace {
       if (item.id !== attachmentId) return item;
       const next = new NativeAttachmentDraft();
       next.id = item.id; next.kind = item.kind; next.name = item.name; next.mediaType = item.mediaType;
-      next.uri = item.uri; next.bytes = item.bytes; next.data = item.data;
+      next.uri = item.uri; next.bytes = item.bytes;
+      // Retain bytes only while retry is possible. Ready drafts keep the local preview, not a second copy.
+      next.data = status === 'ready' ? new Uint8Array(0) : item.data;
       next.status = status; next.receiptId = receiptId; next.error = error; next.retryable = retryable;
       return next;
     });
@@ -1418,9 +1421,9 @@ export struct NativeWorkspace {
   private async uploadAttachment(id: string, item: NativeAttachmentDraft): Promise<void> {
     try {
       const result = await this.client.uploadAttachment(id, item.name, item.data, item.mediaType);
-      if (this.selected === id) this.updateAttachment(id, item.id, 'ready', result.receiptId);
+      this.updateAttachment(id, item.id, 'ready', result.receiptId);
     } catch (error) {
-      if (this.selected === id) this.updateAttachment(id, item.id, 'error',
+      this.updateAttachment(id, item.id, 'error',
         '', error instanceof Error ? error.message : '附件上传失败', true);
     }
   }
@@ -1436,7 +1439,10 @@ export struct NativeWorkspace {
       }
       const items = (this.client.attachments.get(id) || []).concat(added);
       this.publishAttachments(id, items);
-      for (const item of added) await this.uploadAttachment(id, item);
+      this.attaching = false;
+      // Reading and uploading are independent. Each chip converges on its own so
+      // one slow request cannot keep both picker actions blocked.
+      added.forEach((item: NativeAttachmentDraft): void => { this.uploadAttachment(id, item); });
     } catch (error) { this.handleError(error as Error); }
     finally { this.attaching = false; }
   }
@@ -1983,99 +1989,128 @@ export struct NativeWorkspace {
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.client.uncertain.delete(this.selected); this.uncertain = false; })
       }
-      if (this.attachments.length) {
-        Scroll() {
-          Row({ space: 8 }) {
-            ForEach(this.attachments, (item: NativeAttachmentDraft) => {
-              Row({ space: 6 }) {
-                if (item.kind === 'image') {
-                  Image(item.uri).width(32).height(32).borderRadius(7).objectFit(ImageFit.Cover)
-                } else {
-                  DSHIcon({ glyph: 'file-outline', glyphSize: 16, color: this.dark ? '#CFD3D6' : '#61666B' })
-                }
-                if (item.kind !== 'image') {
-                  Text(item.name).fontSize(11).maxLines(1).constraintSize({ maxWidth: 120 })
-                    .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#17181B')
-                }
-                if (item.status === 'uploading') LoadingProgress().width(12).height(12)
-                else if (item.status === 'error') {
-                  Button(item.retryable ? '重试' : '失败', { type: ButtonType.Normal }).height(26).fontSize(10)
-                    .enabled(item.retryable).onClick(() => { this.retryAttachment(item); })
-                }
-                Button({ type: ButtonType.Circle }) {
-                  DSHIcon({ glyph: 'close-outline', glyphSize: 11, color: this.dark ? '#93969B' : '#8A8D91' })
-                }.width(24).height(24).backgroundColor(Color.Transparent)
-                  .accessibilityText('移除附件').onClick(() => { this.removeAttachment(item.id); })
-              }.height(38).padding({ left: 5, right: 2 }).borderRadius(10)
-                .backgroundColor(this.dark ? '#2C2C2E' : '#F1F3F5')
-            }, (item: NativeAttachmentDraft) => item.id)
-          }
-        }.scrollable(ScrollDirection.Horizontal).width('100%')
-      }
-      Column({ space: 8 }) {
-        TextArea({ text: this.draft, placeholder: '发送消息…' }).height(44).enabled(!this.sending)
-          .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
-          .fontSize(14).borderRadius(0).padding({ left: 7, right: 7, top: 3, bottom: 3 })
-          .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-          .onChange((value: string) => { this.draft = value; this.client.drafts.set(this.selected, value); })
-        Row({ space: 6 }) {
-          Button({ type: ButtonType.Normal }) {
-            Row({ space: 4 }) {
-              Text(this.modelCaption).fontSize(11).maxLines(1).constraintSize({ maxWidth: 160 })
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-            }.constraintSize({ maxWidth: 168 })
-          }.height(32).padding({ left: 4, right: 4 }).backgroundColor(Color.Transparent)
-            .fontColor(this.dark ? '#CFD3D6' : '#61666B').accessibilityText('模型与推理')
-            .onClick(() => { this.utilityOpen = false; this.modelPickerOpen = true; })
-            .bindPopup(this.modelPickerOpen, { builder: this.modelPicker, placement: Placement.Top,
-              enableArrow: false, targetSpace: 8, radius: 16, mask: false,
-              popupColor: this.dark ? '#242527' : '#FFFFFF', backgroundBlurStyle: BlurStyle.NONE,
-              onStateChange: (event): void => { if (!event.isVisible) this.modelPickerOpen = false; } })
-          Blank()
-          Button({ type: ButtonType.Normal }) {
-            if (this.attaching) { LoadingProgress().width(14).height(14).color(this.dark ? '#F9FAFB' : '#0F1115') }
-            else { DSHIcon({ glyph: 'image-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }
-          }.width(32).height(32).borderRadius(16)
-            .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-            .accessibilityText(this.attaching ? '读取中' : '添加图片')
-            .enabled(!this.attaching && !this.sending).onClick(() => { this.attachImages(); })
-          Button({ type: ButtonType.Normal }) {
-            DSHIcon({ glyph: 'file-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
-          }.width(32).height(32).borderRadius(16)
-            .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-            .accessibilityText('添加文件')
-            .enabled(!this.attaching && !this.sending).onClick(() => { this.attachFiles(); })
-          if (this.running) { Button({ type: ButtonType.Normal }) {
-            Row({ space: 5 }) {
-              DSHIcon({ glyph: this.steer ? 'paper-plane-outline' : 'queue-outline', color: this.dark ? '#CFD3D6' : '#61666B', glyphSize: 14 })
-              Text(this.steer ? '接管' : '排队').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+      Stack({ alignContent: Alignment.BottomStart }) {
+        Column({ space: 8 }) {
+          TextArea({ text: this.draft, placeholder: '发送消息…' }).height(44).enabled(!this.sending)
+            .placeholderColor(this.dark ? '#93969B' : '#8A8D91')
+            .fontSize(14).borderRadius(0).padding({ left: 7, right: 7, top: 3, bottom: 3 })
+            .backgroundColor(Color.Transparent).fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+            .onChange((value: string) => { this.draft = value; this.client.drafts.set(this.selected, value); })
+          Row({ space: 6 }) {
+            Button({ type: ButtonType.Normal }) {
+              Row({ space: 4 }) {
+                Text(this.modelCaption).fontSize(11).maxLines(1).constraintSize({ maxWidth: 160 })
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }.constraintSize({ maxWidth: 168 })
+            }.height(32).padding({ left: 4, right: 4 }).backgroundColor(Color.Transparent)
+              .fontColor(this.dark ? '#CFD3D6' : '#61666B').accessibilityText('模型与推理')
+              .onClick(() => { this.utilityOpen = false; this.modelPickerOpen = true; })
+              .bindPopup(this.modelPickerOpen, { builder: this.modelPicker, placement: Placement.Top,
+                enableArrow: false, targetSpace: 8, radius: 16, mask: false,
+                popupColor: this.dark ? '#242527' : '#FFFFFF', backgroundBlurStyle: BlurStyle.NONE,
+                onStateChange: (event): void => { if (!event.isVisible) this.modelPickerOpen = false; } })
+            Blank()
+            Button({ type: ButtonType.Normal }) {
+              if (this.attaching) { LoadingProgress().width(14).height(14).color(this.dark ? '#F9FAFB' : '#0F1115') }
+              else { DSHIcon({ glyph: 'image-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }
+            }.width(32).height(32).borderRadius(16)
+              .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+              .accessibilityText(this.attaching ? '读取中' : '添加图片')
+              .enabled(!this.attaching && !this.sending).onClick(() => { this.attachImages(); })
+            Button({ type: ButtonType.Normal }) {
+              DSHIcon({ glyph: 'file-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+            }.width(32).height(32).borderRadius(16)
+              .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
+              .accessibilityText('添加文件')
+              .enabled(!this.attaching && !this.sending).onClick(() => { this.attachFiles(); })
+            if (this.running) { Button({ type: ButtonType.Normal }) {
+              Row({ space: 5 }) {
+                DSHIcon({ glyph: this.steer ? 'paper-plane-outline' : 'queue-outline', color: this.dark ? '#CFD3D6' : '#61666B', glyphSize: 14 })
+                Text(this.steer ? '接管' : '排队').fontSize(11).fontColor(this.dark ? '#CFD3D6' : '#61666B')
+              }
+            }.height(32).borderRadius(9).backgroundColor(Color.Transparent)
+              .accessibilityText(this.steer ? '发送模式：接管' : '发送模式：排队，点击切换')
+              .onClick(() => { this.steer = !this.steer; })
             }
-          }.height(32).borderRadius(9).backgroundColor(Color.Transparent)
-            .accessibilityText(this.steer ? '发送模式：接管' : '发送模式：排队，点击切换')
-            .onClick(() => { this.steer = !this.steer; })
-          }
-          if (this.running && !this.sending && !this.draft.trim() && !this.attachments.length) {
-            Button({ type: ButtonType.Normal }) {
-              DSHIcon({ glyph: 'stop-fill', color: '#FFFFFF' })
-            }.width(34).height(34).borderRadius(17)
-              .backgroundColor(this.dark ? '#679EFE' : '#3964FE').accessibilityText('停止任务')
-              .onClick(() => { this.client.cancel(this.selected).catch((error: Error) => this.handleError(error)); })
-          } else {
-            Button({ type: ButtonType.Normal }) {
-              if (this.sending) { LoadingProgress().width(16).height(16).color('#FFFFFF') }
-              else { DSHIcon({ glyph: 'send-arrow', color: '#FFFFFF' }) }
-            }.width(34).height(34).borderRadius(17)
-              .backgroundColor(this.dark ? '#679EFE' : '#3964FE')
-              .enabled(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
-                (this.draft.trim().length > 0 || this.attachments.length > 0))
-              .opacity(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
-                (this.draft.trim().length > 0 || this.attachments.length > 0) ? 1 : 0.4)
-              .accessibilityText(this.sending ? '发送中' : '发送').onClick(() => { this.followTail = true; this.send(); })
-          }
-        }.width('100%')
-      }.padding(8).width('100%').borderRadius(16)
-        .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
-        .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
+            if (this.running && !this.sending && !this.draft.trim() && !this.attachments.length) {
+              Button({ type: ButtonType.Normal }) {
+                DSHIcon({ glyph: 'stop-fill', color: '#FFFFFF' })
+              }.width(34).height(34).borderRadius(17)
+                .backgroundColor(this.dark ? '#679EFE' : '#3964FE').accessibilityText('停止任务')
+                .onClick(() => { this.client.cancel(this.selected).catch((error: Error) => this.handleError(error)); })
+            } else {
+              Button({ type: ButtonType.Normal }) {
+                if (this.sending) { LoadingProgress().width(16).height(16).color('#FFFFFF') }
+                else { DSHIcon({ glyph: 'send-arrow', color: '#FFFFFF' }) }
+              }.width(34).height(34).borderRadius(17)
+                .backgroundColor(this.dark ? '#679EFE' : '#3964FE')
+                .enabled(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
+                  (this.draft.trim().length > 0 || this.attachments.length > 0))
+                .opacity(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
+                  (this.draft.trim().length > 0 || this.attachments.length > 0) ? 1 : 0.4)
+                .accessibilityText(this.sending ? '发送中' : '发送').onClick(() => { this.followTail = true; this.send(); })
+            }
+          }.width('100%')
+        }.padding(8).width('100%').borderRadius(16)
+          .border({ width: 0.5, color: this.dark ? '#3B3B3E' : '#DFE1E5' })
+          .backgroundColor(this.dark ? '#232324' : '#FFFFFF')
+          .onAreaChange((_old: Area, area: Area): void => {
+            const height = Number(area.height);
+            if (height > 0 && height !== this.composerHeight) this.composerHeight = height;
+          })
+        if (this.attachments.length) {
+          Row() {
+            Scroll() {
+              Row({ space: 8 }) {
+                ForEach(this.attachments, (item: NativeAttachmentDraft) => {
+                  if (item.kind === 'image') {
+                    Stack({ alignContent: Alignment.Center }) {
+                      Image(item.uri).width(46).height(46).borderRadius(11).objectFit(ImageFit.Cover)
+                      if (item.status === 'uploading') {
+                        Stack({ alignContent: Alignment.Center }) {
+                          LoadingProgress().width(16).height(16).color('#FFFFFF')
+                        }.width(46).height(46).borderRadius(11).backgroundColor('#66000000')
+                      } else if (item.status === 'error') {
+                        Text('!').fontSize(15).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+                          .width(22).height(22).borderRadius(11).textAlign(TextAlign.Center)
+                          .backgroundColor('#C34B4B')
+                      }
+                      Button({ type: ButtonType.Circle }) {
+                        DSHIcon({ glyph: 'close-outline', glyphSize: 9, color: '#FFFFFF' })
+                      }.width(20).height(20).backgroundColor('#99000000').align(Alignment.TopEnd)
+                        .accessibilityText('移除附件').onClick(() => { this.removeAttachment(item.id); })
+                    }.width(48).height(48).borderRadius(12)
+                      .backgroundColor(this.dark ? '#2C2C2E' : '#F1F3F5')
+                      .shadow({ radius: 7, color: this.dark ? '#66000000' : '#22000000', offsetY: 2 })
+                      .accessibilityText(item.status === 'error' ? '图片上传失败，点击重试' : '图片附件')
+                      .onClick(() => { if (item.status === 'error') this.retryAttachment(item); })
+                      .transition(NativeMotion.rowTransition())
+                  } else {
+                    Row({ space: 6 }) {
+                      DSHIcon({ glyph: 'file-outline', glyphSize: 16, color: this.dark ? '#CFD3D6' : '#61666B' })
+                      Text(item.name).fontSize(11).maxLines(1).constraintSize({ maxWidth: 120 })
+                        .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#17181B')
+                      if (item.status === 'uploading') LoadingProgress().width(12).height(12)
+                      else if (item.status === 'error') {
+                        Button(item.retryable ? '重试' : '失败', { type: ButtonType.Normal }).height(26).fontSize(10)
+                          .enabled(item.retryable).onClick(() => { this.retryAttachment(item); })
+                      }
+                      Button({ type: ButtonType.Circle }) {
+                        DSHIcon({ glyph: 'close-outline', glyphSize: 10, color: this.dark ? '#93969B' : '#8A8D91' })
+                      }.width(22).height(22).backgroundColor(Color.Transparent)
+                        .accessibilityText('移除附件').onClick(() => { this.removeAttachment(item.id); })
+                    }.height(42).padding({ left: 7, right: 3 }).borderRadius(10)
+                      .backgroundColor(this.dark ? '#2C2C2E' : '#F1F3F5')
+                      .transition(NativeMotion.rowTransition())
+                  }
+                }, (item: NativeAttachmentDraft) => item.id)
+              }
+            }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+          }.width('100%').padding({ left: 8, right: 12 })
+            .translate({ y: -(this.composerHeight + 8) })
+            .transition(NativeMotion.rowTransition())
+        }
+      }.width('100%').clip(false)
     }.padding({ left: 12, right: 12, top: this.safeTop + 4,
       bottom: Math.ceil(this.safeBottom * 1.2) + 8 })
       .height('100%').layoutWeight(1)

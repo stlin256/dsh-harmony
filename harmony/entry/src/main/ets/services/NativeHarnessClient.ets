@@ -370,15 +370,30 @@ export class NativeHarnessClient {
       (mediaType ? '&mediaType=' + encodeURIComponent(mediaType) : '');
     const task = http.createHttp();
     try {
-      const response = await task.request(this.origin + '/pocket/api/native/upload' + query, {
-        method: http.RequestMethod.POST,
-        header: { 'Content-Type': 'application/octet-stream', Origin: this.origin, Cookie: await this.cookie() },
-        extraData: data.buffer as ArrayBuffer,
-        expectDataType: http.HttpDataType.STRING, usingCache: false,
-        maxRedirects: 0, connectTimeout: 10000, readTimeout: 120000
+      const chunks: Uint8Array[] = [];
+      let total: number = 0;
+      const ended = new Promise<void>((resolve: () => void): void => { task.on('dataEnd', resolve); });
+      task.on('dataReceive', (part: ArrayBuffer): void => {
+        const bytes = new Uint8Array(part);
+        chunks.push(bytes); total += bytes.byteLength;
       });
-      if (response.responseCode < 200 || response.responseCode >= 300) throw new NativeHttpError(response.responseCode);
-      const envelope = JSON.parse(response.result as string) as Record<string, Object>;
+      const status = await task.requestInStream(this.origin + '/pocket/api/native/upload' + query, {
+        method: http.RequestMethod.POST,
+        header: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': data.byteLength.toString(),
+          Origin: this.origin,
+          Cookie: await this.cookie()
+        },
+        extraData: data.buffer as ArrayBuffer,
+        usingCache: false, maxRedirects: 0, connectTimeout: 10000, readTimeout: 45000
+      });
+      await ended;
+      if (status < 200 || status >= 300) throw new NativeHttpError(status);
+      const response = new Uint8Array(total);
+      let offset: number = 0;
+      chunks.forEach((part: Uint8Array): void => { response.set(part, offset); offset += part.byteLength; });
+      const envelope = JSON.parse(util.TextDecoder.create('utf-8').decodeToString(response)) as Record<string, Object>;
       if (envelope.ok !== true) throw new Error('附件上传失败');
       const value = envelope.value as Record<string, Object> | undefined;
       if (!value || typeof value.receiptId !== 'string' || !value.receiptId) throw new Error('附件上传失败');

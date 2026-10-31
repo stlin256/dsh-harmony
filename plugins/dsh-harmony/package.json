@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-harmony/plugin", "version": "0.3.3", "type": "module", "license": "AGPL-3.0-only",
+  "name": "@dsh-harmony/plugin", "version": "0.3.4", "type": "module", "license": "AGPL-3.0-only",
   "description": "DSH Harmony native login, session APIs, notifications and web session handoff in one Harness plugin",
   "main": "index.mjs", "exports": { ".": "./index.mjs", "./client": "./client.browser.js", "./package.json": "./package.json" },
   "dsh": { "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-workspace"] } },

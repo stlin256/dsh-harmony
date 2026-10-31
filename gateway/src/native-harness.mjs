@@ -266,6 +266,9 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const mediaType = req.query?.mediaType;
       if (!sessionIdValid(id) || typeof name !== 'string' || !name || name.length > 512 ||
           (mediaType !== undefined && typeof mediaType !== 'string')) return res.sendStatus(400);
+      const rawLength = req.headers['content-length'];
+      if (typeof rawLength !== 'string' || !/^(?:0|[1-9]\d*)$/.test(rawLength) ||
+          !Number.isSafeInteger(Number(rawLength))) return res.sendStatus(411);
       const url = new URL('/api/session/uploadFileBinary', target);
       url.searchParams.set('sessionId', id);
       url.searchParams.set('name', name);
@@ -273,7 +276,12 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       const response = await fetch(url, {
         method: 'POST', redirect: 'error', duplex: 'half',
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
-        headers: { 'Content-Type': 'application/octet-stream', Origin: target.origin, Cookie: await credential() },
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': rawLength,
+          Origin: target.origin,
+          Cookie: await credential()
+        },
         body: Readable.toWeb(req)
       });
       const body = await response.text();

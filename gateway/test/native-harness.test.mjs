@@ -37,7 +37,7 @@ async function setup(t, options = {}) {
       assert.equal(req.headers.cookie, 'harness=server-only');
       assert.equal(req.headers['content-type'], 'application/octet-stream');
       const bytes = Buffer.concat(chunks);
-      uploads.push({ query: Object.fromEntries(route.searchParams), bytes });
+      uploads.push({ query: Object.fromEntries(route.searchParams), bytes, headers: req.headers });
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ ok: true, value: { receiptId: 'receipt-1',
         file: { attachmentId: 'attachment-1', name: route.searchParams.get('name'), bytes: bytes.length } } }));
@@ -158,9 +158,9 @@ async function setup(t, options = {}) {
       });
     });req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));
   });
-  const upload=(path,bytes)=>new Promise((resolve,reject)=>{
+  const upload=(path,bytes,headers={})=>new Promise((resolve,reject)=>{
     const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:'POST',
-      headers:{host:'dsh.example.com',origin,'content-type':'application/octet-stream',cookie}},res=>{
+      headers:{host:'dsh.example.com',origin,'content-type':'application/octet-stream',cookie,...headers}},res=>{
       const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>{
         const buffer=Buffer.concat(chunks);resolve({status:res.statusCode,text:buffer.toString()});
       });
@@ -569,6 +569,7 @@ test('latest DSH raw uploads stay byte-exact and prompt emits staged file receip
   assert.equal(response.status,200);
   assert.equal(JSON.parse(response.text).value.receiptId,'receipt-1');
   assert.deepEqual(uploads[0].bytes,bytes);
+  assert.equal(uploads[0].headers['content-length'],String(bytes.length));
   assert.deepEqual(uploads[0].query,{sessionId:'session',name:'report.pdf'});
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'receipt-prompt',
     text:'inspect',attachments:[{type:'file',receiptId:'receipt-1'}]})).status,200);
@@ -577,6 +578,15 @@ test('latest DSH raw uploads stay byte-exact and prompt emits staged file receip
   ]);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'bad-receipt',
     text:'',attachments:[{type:'file',receiptId:''}]})).status,400);
+});
+
+test('native raw uploads require and preserve an explicit byte length', async t => {
+  const {upload,uploads}=await setup(t);
+  const response=await upload('/pocket/api/native/upload?sessionId=session&name=missing-length',Buffer.from([1,2,3]),{
+    'transfer-encoding':'chunked'
+  });
+  assert.equal(response.status,411);
+  assert.equal(uploads.length,0);
 });
 test('continued question RPC uses agent scope rather than an invented request wrapper', async t => {
   const {call,calls} = await setup(t);

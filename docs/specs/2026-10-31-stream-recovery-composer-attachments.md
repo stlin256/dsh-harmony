@@ -2,7 +2,7 @@
 
 Date: 2026-10-31
 
-Status: proposed; implementation has not started.
+Status: implementation in progress; device validation pending.
 
 ## Scope and baseline
 
@@ -184,6 +184,13 @@ supported SDK before shipping. It must not switch to base64 as a silent
 fallback; a platform limitation requires a separately reviewed gateway request
 body contract.
 
+The app sends an explicit `Content-Length` equal to the selected byte array's
+length and consumes the upload response through `requestInStream` with an
+explicit `dataReceive`/`dataEnd` completion path. A missing response end must
+settle as a retryable attachment error instead of leaving a spinner active
+forever. The gateway validates the incoming length, forwards that exact length
+to current DSH, and keeps the request body byte-exact.
+
 ### Composer state
 
 Each draft attachment has stable identity, kind (`image` or `file`), optional
@@ -198,6 +205,13 @@ uploading/error -> removed
 Files upload immediately after selection. Images upload through the image form
 of the same receipt route. Ready drafts keep only the local data needed for a
 thumbnail; uploaded bytes are not retained a second time in ArkTS memory.
+
+Local picker/read work and network upload are separate states. `attaching`
+covers only reading and publishing the selected drafts. Once the drafts are
+visible, the image and file actions unlock even if one attachment continues
+uploading. Each draft owns its upload lifecycle and independently transitions
+to ready or a retryable error. A late completion updates the owning Session's
+draft list even when another Session is currently visible.
 
 Send is disabled while any attachment is uploading or failed. Removing an
 uploading item cancels its operation when supported and prevents a late result
@@ -238,6 +252,10 @@ uncertain, both remain visible for explicit user action.
 - Image drafts render as small, wrapping thumbnails without file-name labels.
   File drafts render as compact document chips. Neither expands the transcript
   width or introduces explanatory paragraphs.
+- The draft tray overlays the transcript immediately above the composer,
+  aligned to the leading edge. Only each compact chip paints a themed surface;
+  the tray itself remains transparent and does not reserve a full-width dark
+  row when it contains one item.
 - Press states use existing semantic motion tokens. Streaming reconciliation
   and completed uploads do not play transcript entrance animations.
 
@@ -261,9 +279,11 @@ bytes, receipt IDs, cookies, host addresses, or full upstream frames.
   end, end-before-committed, abandoned end, and settlement timeout.
 - Reconnect tests prove a snapshot atomically replaces the active attempt while
   preserving unrelated cached history.
-- Upload tests cover MIME-less files, image media types, business failures,
-  pending/error/ready transitions, removal, retry, stable ordering, and path or
-  origin rejection.
+- Upload tests cover MIME-less files, image media types, explicit byte length,
+  streamed response completion, business failures, pending/error/ready
+  transitions, removal, retry, stable ordering, and path or origin rejection.
+- Gateway tests prove the exact `Content-Length` reaches current DSH. A missing
+  or invalid length is rejected before an upstream request is attempted.
 - Prompt tests prove only ready receipts are serialized and an uncertain
   request is not automatically replayed.
 - ArkUI source checks prove the selector has no full-width layout weight or
