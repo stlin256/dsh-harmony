@@ -63,7 +63,7 @@ Status: pending device execution.
 | FILE-06 | Tap each of several valid file and folder links in one transcript message | Every tapped link resolves independently and opens its matching root-level preview/browser | Pending |
 | SET-05 | Open `设置 > 服务与账户` | The `当前服务` label and service address align to the leading edge | Pending |
 | SET-06 | Open interface mode, dismiss it, then open it again without leaving the service page | The sheet opens on every attempt and closes cleanly by outside tap, close control or selection | Pending |
-| SET-07 | Open `设置 > DSH 设置` against plugin 0.3.5 | The page shows `插件版本 0.3.5` in a compact read-only row; an older Host without the field shows `未报告` | Pending |
+| SET-07 | Open `设置 > DSH 设置` against plugin 0.3.5 | The page shows `插件版本 0.3.5` in a compact read-only row; an older Host without the field shows `未报告` | Passed; the online phone showed `插件版本 v0.3.5` and the deployed `/pocket/api/state` returned `pluginVersion: "0.3.5"` |
 | AUTH-01 | Tap logout, dismiss the confirmation, then confirm logout | Cancel keeps the session; confirmation clears auth/caches and returns to login | Pending |
 | AUTH-02 | Complete logout and inspect the login address field | The previous service address is prefilled and can be reused without retyping | Pending |
 | NAV-11 | Authenticate on a phone with no selected conversation | The session drawer opens automatically after authentication and exposes the current sessions | Pending |
