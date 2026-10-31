@@ -118,6 +118,13 @@ or real transcript content in source, tests, docs, logs or commits.
 - Stability, settings feedback, notification prominence and composer inset
   E2E:
   [2026-10-31-stability-settings-notification-composer-e2e.md](docs/testing/2026-10-31-stability-settings-notification-composer-e2e.md)
+- Latest DSH stream recovery and native composer attachment requirement:
+  [2026-10-31-stream-recovery-composer-attachments.md](docs/requirements/2026-10-31-stream-recovery-composer-attachments.md)
+- Latest DSH stream recovery and native composer attachment implementation
+  spec:
+  [2026-10-31-stream-recovery-composer-attachments.md](docs/specs/2026-10-31-stream-recovery-composer-attachments.md)
+- Latest DSH stream recovery and native composer attachment E2E:
+  [2026-10-31-stream-recovery-composer-attachments-e2e.md](docs/testing/2026-10-31-stream-recovery-composer-attachments-e2e.md)
 - Native interaction baseline:
   [NATIVE-INTERACTION-SPEC.md](docs/NATIVE-INTERACTION-SPEC.md)
 - Existing shell/performance E2E:
