@@ -23,7 +23,6 @@ export struct NativeMessageView {
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private reasoningOpen: boolean = false;
   @State private toolOpen: boolean = false;
-  @State private copied: boolean = false;
   aboutToAppear(): void {
     this.reasoningOpen = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true;
     this.toolOpen = true;
@@ -33,7 +32,13 @@ export struct NativeMessageView {
     const text = this.message.text || this.message.blocks.map((block: NativeTextBlock) => block.text).join('\n');
     if (!text) return;
     pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text))
-      .then(() => { this.copied = true; }).catch(() => { this.copied = false; });
+      .then((): void => {
+        this.getUIContext().getPromptAction().showToast({ message: '已复制', duration: 900 });
+      }).catch((): void => {});
+  }
+
+  private hasCopyableText(): boolean {
+    return this.message.role === 'user' && (!!this.message.text || this.message.blocks.length > 0);
   }
 
   private animate(action: () => void): void {
@@ -119,18 +124,16 @@ export struct NativeMessageView {
         Text('此消息包含高级内容，请在兼容模式查看。').fontSize(13)
           .fontColor(this.dark ? '#CFD3D6' : '#61666B')
       }
-      if (this.message.role === 'user' && this.message.text) {
-        Row() {
-          Blank()
-          Button({ type: ButtonType.Normal }) {
-            DSHIcon({ glyph: this.copied ? 'check-outline' : 'copy-outline', color: this.dark ? '#93969B' : '#8A8D91', glyphSize: 14 })
-          }.width(28).height(28).borderRadius(14).backgroundColor(Color.Transparent)
-            .accessibilityText(this.copied ? '已复制' : '复制消息').onClick(() => { this.copyMessage(); })
-        }.width('100%')
-      }
     }.alignItems(HorizontalAlign.Start).width(this.message.role === 'user' ? '82%' : '100%')
       .padding(this.message.role === 'user' || this.message.role === 'tool' ? 10 : this.message.role === 'reasoning' ? 0 : 2)
       .backgroundColor(this.message.role === 'user' || this.message.role === 'tool' ? this.dark ? '#2C2C2E' : '#F5F6F7' : Color.Transparent)
       .borderRadius(16)
+      .accessibilityText(this.hasCopyableText() ? '消息，长按复制' : '')
+      .gesture(
+        LongPressGesture({ repeat: false })
+          .onAction((): void => {
+            if (this.hasCopyableText()) this.copyMessage();
+          })
+      )
   }
 }

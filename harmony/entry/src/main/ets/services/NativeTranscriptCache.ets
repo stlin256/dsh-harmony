@@ -5,6 +5,43 @@ import {
   NativeSessionModel
 } from './NativeSessionModel';
 
+const TRANSCRIPT_CHUNK_CHARS: number = 256 * 1024;
+
+/** SQLite substr/length use Unicode code points rather than UTF-16 units. */
+export function nativeCodePointLength(value: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xD800 && code <= 0xDBFF && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) index++;
+    }
+    count++;
+  }
+  return count;
+}
+
+/**
+ * RDB shared blocks can reject multi-megabyte TEXT reads. Split captured JSON
+ * before persistence and never cut a UTF-16 surrogate pair.
+ */
+export function nativeTranscriptChunks(payload: string, limit: number = TRANSCRIPT_CHUNK_CHARS): string[] {
+  const chunks: string[] = [];
+  const safeLimit = Math.max(1024, limit);
+  let start = 0;
+  while (start < payload.length) {
+    let end = Math.min(payload.length, start + safeLimit);
+    if (end < payload.length) {
+      const code = payload.charCodeAt(end - 1);
+      if (code >= 0xD800 && code <= 0xDBFF) end--;
+    }
+    if (end <= start) end = Math.min(payload.length, start + safeLimit);
+    chunks.push(payload.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+
 /** Content is scoped by the one-way gateway/login cache key and stored in an encrypted RDB. */
 export class NativeTranscriptCache {
   private static store: relationalStore.RdbStore | null = null;
@@ -38,6 +75,23 @@ export class NativeTranscriptCache {
         PRIMARY KEY(scope_id, session_id)
       )`);
       await store.executeSql('CREATE INDEX IF NOT EXISTS transcript_cache_access ON transcript_cache(updated_at)');
+      await store.executeSql(`CREATE TABLE IF NOT EXISTS transcript_manifest(
+        scope_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        chunk_count INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        PRIMARY KEY(scope_id, session_id)
+      )`);
+      await store.executeSql(
+        'CREATE INDEX IF NOT EXISTS transcript_manifest_access ON transcript_manifest(updated_at)');
+      await store.executeSql(`CREATE TABLE IF NOT EXISTS transcript_chunk(
+        scope_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(scope_id, session_id, chunk_index)
+      )`);
       await store.executeSql(`CREATE TABLE IF NOT EXISTS route_state(
         scope_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -56,15 +110,70 @@ export class NativeTranscriptCache {
     // Capture synchronously so a queued write persists this exact model state
     // rather than a later streaming mutation of the same model object.
     const payload = JSON.stringify(model.capture());
+    const chunks = nativeTranscriptChunks(payload);
     const operation = NativeTranscriptCache.writes.catch((): void => {}).then(async (): Promise<void> => {
       const store = await NativeTranscriptCache.database(context);
-      await store.executeSql(`INSERT INTO transcript_cache(scope_id,session_id,payload,updated_at,bytes)
-        VALUES (?,?,?,?,?) ON CONFLICT(scope_id,session_id)
-        DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at,bytes=excluded.bytes`,
-        [scopeId, sessionId, payload, Date.now(), payload.length]);
+      const now = Date.now();
+      store.beginTransaction();
+      try {
+        await store.executeSql(
+          'DELETE FROM transcript_chunk WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
+        await store.executeSql(
+          'DELETE FROM transcript_cache WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
+        for (let index = 0; index < chunks.length; index++) {
+          await store.executeSql(
+            'INSERT INTO transcript_chunk(scope_id,session_id,chunk_index,payload) VALUES (?,?,?,?)',
+            [scopeId, sessionId, index, chunks[index]]);
+        }
+        await store.executeSql(`INSERT INTO transcript_manifest(
+          scope_id,session_id,chunk_count,updated_at,bytes) VALUES (?,?,?,?,?)
+          ON CONFLICT(scope_id,session_id) DO UPDATE SET
+          chunk_count=excluded.chunk_count,updated_at=excluded.updated_at,bytes=excluded.bytes`,
+          [scopeId, sessionId, chunks.length, now, payload.length]);
+        store.commit();
+      } catch (error) {
+        store.rollBack();
+        throw error as Error;
+      }
     });
     NativeTranscriptCache.writes = operation;
     return operation;
+  }
+
+  private static async readLegacyPayload(store: relationalStore.RdbStore,
+    scopeId: string, sessionId: string): Promise<string> {
+    const size = await store.querySql(
+      'SELECT length(payload) FROM transcript_cache WHERE scope_id=? AND session_id=? LIMIT 1',
+      [scopeId, sessionId]);
+    let total = 0;
+    try {
+      if (!size.goToFirstRow()) return '';
+      total = size.getLong(0);
+    } finally {
+      size.close();
+    }
+    if (total <= 0) return '';
+    let payload = '';
+    let offset = 1;
+    let consumed = 0;
+    while (consumed < total) {
+      const length = Math.min(TRANSCRIPT_CHUNK_CHARS, total - consumed);
+      const part = await store.querySql(
+        'SELECT substr(payload,?,?) FROM transcript_cache WHERE scope_id=? AND session_id=? LIMIT 1',
+        [offset, length, scopeId, sessionId]);
+      try {
+        if (!part.goToFirstRow()) return '';
+        const value = part.getString(0);
+        if (!value) return '';
+        payload += value;
+        const points = nativeCodePointLength(value);
+        offset += points;
+        consumed += points;
+      } finally {
+        part.close();
+      }
+    }
+    return consumed === total ? payload : '';
   }
 
   static async loadSession(context: common.UIAbilityContext, scope: string,
@@ -73,21 +182,63 @@ export class NativeTranscriptCache {
     try {
       await NativeTranscriptCache.writes;
       const store = await NativeTranscriptCache.database(context);
-      const result = await store.querySql(
-        'SELECT payload FROM transcript_cache WHERE scope_id=? AND session_id=? LIMIT 1',
+      const manifest = await store.querySql(
+        'SELECT chunk_count,bytes FROM transcript_manifest WHERE scope_id=? AND session_id=? LIMIT 1',
         [scopeId, sessionId]);
+      let chunkCount = -1;
+      let expectedBytes = -1;
       try {
-        if (!result.goToFirstRow()) return null;
-        const saved = JSON.parse(result.getString(0)) as NativeSessionCacheRecord;
+        if (manifest.goToFirstRow()) {
+          chunkCount = manifest.getLong(0);
+          expectedBytes = manifest.getLong(1);
+        }
+      } finally {
+        manifest.close();
+      }
+      if (chunkCount >= 0) {
+        if (chunkCount === 0 || expectedBytes <= 0) return null;
+        const parts: string[] = [];
+        const chunks = await store.querySql(
+          'SELECT chunk_index,payload FROM transcript_chunk WHERE scope_id=? AND session_id=? ORDER BY chunk_index ASC',
+          [scopeId, sessionId]);
+        try {
+          let row = chunks.goToFirstRow();
+          let expectedIndex = 0;
+          while (row) {
+            if (chunks.getLong(0) !== expectedIndex) return null;
+            parts.push(chunks.getString(1));
+            expectedIndex++;
+            row = chunks.goToNextRow();
+          }
+        } finally {
+          chunks.close();
+        }
+        if (parts.length !== chunkCount) return null;
+        const payload = parts.join('');
+        if (payload.length !== expectedBytes) return null;
+        const saved = JSON.parse(payload) as NativeSessionCacheRecord;
         await store.executeSql(
-          'UPDATE transcript_cache SET updated_at=? WHERE scope_id=? AND session_id=?',
+          'UPDATE transcript_manifest SET updated_at=? WHERE scope_id=? AND session_id=?',
           [Date.now(), scopeId, sessionId]);
         return saved;
-      } finally {
-        result.close();
       }
+
+      // Compatibility path for caches created before transcript chunking.
+      const payload = await NativeTranscriptCache.readLegacyPayload(store, scopeId, sessionId);
+      if (!payload) return null;
+      const saved = JSON.parse(payload) as NativeSessionCacheRecord;
+      await store.executeSql(
+        'UPDATE transcript_cache SET updated_at=? WHERE scope_id=? AND session_id=?',
+        [Date.now(), scopeId, sessionId]);
+      // Return the first paint immediately; migration then replaces the large
+      // legacy row with bounded chunks for all later launches.
+      const restored = new NativeSessionModel();
+      restored.restore(saved);
+      NativeTranscriptCache.saveSession(context, scope, sessionId, restored).catch((): void => {});
+      return saved;
     } catch (_) {
-      await NativeTranscriptCache.clearSession(context, scope, sessionId).catch((): void => {});
+      // A transient query or shared-block error must not destroy the only
+      // available cache. Keep it for a later retry.
       return null;
     }
   }
@@ -98,6 +249,8 @@ export class NativeTranscriptCache {
       const store = await NativeTranscriptCache.database(context);
       store.beginTransaction();
       try {
+        await store.executeSql('DELETE FROM transcript_chunk WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
+        await store.executeSql('DELETE FROM transcript_manifest WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
         await store.executeSql('DELETE FROM transcript_cache WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
         await store.executeSql('DELETE FROM route_state WHERE scope_id=? AND session_id=?', [scopeId, sessionId]);
         store.commit();
@@ -116,6 +269,8 @@ export class NativeTranscriptCache {
       const store = await NativeTranscriptCache.database(context);
       store.beginTransaction();
       try {
+        await store.executeSql('DELETE FROM transcript_chunk WHERE scope_id=?', [scopeId]);
+        await store.executeSql('DELETE FROM transcript_manifest WHERE scope_id=?', [scopeId]);
         await store.executeSql('DELETE FROM transcript_cache WHERE scope_id=?', [scopeId]);
         await store.executeSql('DELETE FROM route_state WHERE scope_id=?', [scopeId]);
         store.commit();
@@ -165,17 +320,25 @@ export class NativeTranscriptCache {
     const protectedIds: Set<string> = new Set<string>(protectedSessionIds);
     const operation = NativeTranscriptCache.writes.catch((): void => {}).then(async (): Promise<void> => {
       const store = await NativeTranscriptCache.database(context);
-      const total = await store.querySql('SELECT COALESCE(SUM(bytes),0) FROM transcript_cache');
+      const chunkTotal = await store.querySql('SELECT COALESCE(SUM(bytes),0) FROM transcript_manifest');
+      const legacyTotal = await store.querySql('SELECT COALESCE(SUM(bytes),0) FROM transcript_cache');
       let bytes = 0;
       try {
-        if (total.goToFirstRow()) bytes = total.getLong(0);
+        if (chunkTotal.goToFirstRow()) bytes += chunkTotal.getLong(0);
+        if (legacyTotal.goToFirstRow()) bytes += legacyTotal.getLong(0);
       } finally {
-        total.close();
+        chunkTotal.close();
+        legacyTotal.close();
       }
       while (bytes > quota) {
         const rows = await store.querySql(
-          'SELECT scope_id,session_id,bytes FROM transcript_cache WHERE NOT(scope_id=? AND session_id=?) ORDER BY updated_at ASC LIMIT 64',
-          [scopeId, activeSessionId]);
+          `SELECT scope_id,session_id,bytes,updated_at FROM transcript_manifest
+           WHERE NOT(scope_id=? AND session_id=?)
+           UNION ALL
+           SELECT scope_id,session_id,bytes,updated_at FROM transcript_cache
+           WHERE NOT(scope_id=? AND session_id=?)
+           ORDER BY updated_at ASC LIMIT 64`,
+          [scopeId, activeSessionId, scopeId, activeSessionId]);
         const staleScope: string[] = [];
         const staleSessions: string[] = [];
         let removedBytes: number = 0;
@@ -193,6 +356,10 @@ export class NativeTranscriptCache {
         }
         if (!staleScope.length) break;
         for (let index = 0; index < staleScope.length; index++) {
+          await store.executeSql('DELETE FROM transcript_chunk WHERE scope_id=? AND session_id=?',
+            [staleScope[index], staleSessions[index]]);
+          await store.executeSql('DELETE FROM transcript_manifest WHERE scope_id=? AND session_id=?',
+            [staleScope[index], staleSessions[index]]);
           await store.executeSql('DELETE FROM transcript_cache WHERE scope_id=? AND session_id=?',
             [staleScope[index], staleSessions[index]]);
         }

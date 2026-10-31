@@ -1094,6 +1094,65 @@ test('native history grows past former limits and retains older pages on reconne
   assert.equal(model.streamReasoning.length,200000);
 });
 
+test('history prefetch keeps retrying with bounded backoff and rejects no-progress pages', () => {
+  const { NativeHistoryRetryPolicy, nativeHistoryPageAdvanced } =
+    load('NativeHistoryPrefetch', {});
+  const retry = new NativeHistoryRetryPolicy();
+  assert.deepEqual(Array.from({length:8},()=>retry.nextDelay()),[600,1200,2400,4800,8000,8000,8000,8000]);
+  retry.succeed();
+  assert.equal(retry.failureCount(),0);
+  assert.equal(retry.nextDelay(),600);
+  assert.equal(nativeHistoryPageAdvanced(100,90,20,32,true),true);
+  assert.equal(nativeHistoryPageAdvanced(100,100,20,20,true),false);
+  assert.equal(nativeHistoryPageAdvanced(100,100,20,20,false),true);
+});
+
+test('workspace history drain autocancels stale work and restarts after live recovery', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeWorkspace.ets', import.meta.url),'utf8');
+  assert.match(source,/frame\.type === 'snapshot'[\s\S]{0,500}startHistoryDrain\(true\)/);
+  assert.match(source,/private select\(id: string\): void \{[\s\S]{0,100}this\.stopHistoryDrain\(\)/);
+  assert.match(source,/private scheduleReconnect\(id: string\): void \{[\s\S]{0,150}this\.pauseHistoryDrain\(\)/);
+  assert.match(source,/await this\.older\(true\)[\s\S]{0,1200}this\.historyRetry\.nextDelay\(\)/);
+  assert.match(source,/nativeHistoryPageAdvanced\(historyBefore/);
+});
+
+test('encrypted transcript persistence splits large JSON without cutting surrogate pairs', () => {
+  const kits={'@kit.AbilityKit':{},'@kit.ArkData':{relationalStore:{SecurityLevel:{S3:1}}}};
+  const { nativeTranscriptChunks, nativeCodePointLength } = load('NativeTranscriptCache',kits);
+  const payload='a'.repeat(2047)+'😀'+'正文'.repeat(200000);
+  assert.equal(nativeCodePointLength('a😀正文'),4);
+  assert.equal(nativeCodePointLength('a😀正文'),Array.from('a😀正文').length);
+  const chunks=nativeTranscriptChunks(payload,2048);
+  assert.equal(chunks.join(''),payload);
+  assert.ok(chunks.every(part=>part.length<=2048));
+  assert.ok(chunks.every(part=>{
+    const end=part.charCodeAt(part.length-1);
+    const start=part.charCodeAt(0);
+    return !(end>=0xD800&&end<=0xDBFF)&&!(start>=0xDC00&&start<=0xDFFF);
+  }));
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/services/NativeTranscriptCache.ets', import.meta.url),'utf8');
+  assert.match(source,/CREATE TABLE IF NOT EXISTS transcript_chunk/);
+  assert.match(source,/ORDER BY chunk_index ASC/);
+  assert.match(source,/SELECT substr\(payload,\?,\?\) FROM transcript_cache/);
+  assert.match(source,/NativeTranscriptCache\.saveSession\(context, scope, sessionId, restored\)/);
+  const loadBody=source.slice(source.indexOf('static async loadSession'),source.indexOf('static clearSession'));
+  assert.doesNotMatch(loadBody,/clearSession\(/);
+});
+
+test('user message copy is a long-press action and does not add a footer row', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeMessageView.ets', import.meta.url),'utf8');
+  assert.match(source,/LongPressGesture\(\{ repeat: false \}\)/);
+  assert.match(source,/if \(this\.hasCopyableText\(\)\) this\.copyMessage\(\)/);
+  assert.match(source,/this\.message\.role === 'user' && \(!!this\.message\.text \|\| this\.message\.blocks\.length > 0\)/);
+  assert.doesNotMatch(source,/if \(this\.message\.role === 'user' && this\.message\.text\) \{\s*Row\(\)/);
+});
+
+test('sent-image lightbox exposes the shared download and close actions', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeImageLightbox.ets', import.meta.url),'utf8');
+  assert.match(source,/glyph: 'download-outline'[\s\S]{0,180}accessibilityText\('下载图片'\)[\s\S]{0,80}saveToGallery\(\)/);
+  assert.match(source,/glyph: 'close-outline'[\s\S]{0,160}accessibilityText\('关闭图片预览'\)/);
+});
+
 test('virtual native text windows reconstruct complete Unicode without splitting surrogate pairs', () => {
   const { NativeTextSource } = load('NativeTextSource', {});
   const source = new NativeTextSource();

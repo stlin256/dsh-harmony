@@ -391,6 +391,11 @@ export struct NativeImageLightbox {
           .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor('#FFFFFF')
         if (this.saving) {
           LoadingProgress().width(20).height(20).color('#FFFFFF')
+        } else {
+          Button({ type: ButtonType.Circle }) {
+            DSHIcon({ glyph: 'download-outline', glyphSize: 16, color: '#FFFFFF' })
+          }.width(40).height(40).backgroundColor('#303136').accessibilityText('下载图片')
+            .onClick((): void => { this.saveToGallery(); })
         }
         Button({ type: ButtonType.Circle }) {
           DSHIcon({ glyph: 'close-outline', glyphSize: 17, color: '#FFFFFF' })

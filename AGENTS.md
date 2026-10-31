@@ -125,6 +125,12 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-stream-recovery-composer-attachments.md](docs/specs/2026-10-31-stream-recovery-composer-attachments.md)
 - Latest DSH stream recovery and native composer attachment E2E:
   [2026-10-31-stream-recovery-composer-attachments-e2e.md](docs/testing/2026-10-31-stream-recovery-composer-attachments-e2e.md)
+- Continuous history prefetch and split transcript-cache requirement:
+  [2026-10-31-history-continuous-prefetch.md](docs/requirements/2026-10-31-history-continuous-prefetch.md)
+- Continuous history prefetch and split transcript-cache implementation spec:
+  [2026-10-31-history-continuous-prefetch.md](docs/specs/2026-10-31-history-continuous-prefetch.md)
+- Continuous history prefetch E2E:
+  [2026-10-31-history-continuous-prefetch-e2e.md](docs/testing/2026-10-31-history-continuous-prefetch-e2e.md)
 - Native interaction baseline:
   [NATIVE-INTERACTION-SPEC.md](docs/NATIVE-INTERACTION-SPEC.md)
 - Existing shell/performance E2E:

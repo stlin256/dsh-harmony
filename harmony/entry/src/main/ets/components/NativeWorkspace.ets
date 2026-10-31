@@ -29,6 +29,7 @@ import { NativeMotion } from '../services/NativeMotion';
 import { NativeImageLightbox } from './NativeImageLightbox';
 import { NativeFilePreview } from './NativeFilePreview';
 import { NativeFileBrowser } from './NativeFileBrowser';
+import { NativeHistoryRetryPolicy, nativeHistoryPageAdvanced } from '../services/NativeHistoryPrefetch';
 
 class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
 class NativeWorkspaceOrderRequest {
@@ -167,6 +168,7 @@ export struct NativeWorkspace {
   private generation: number = 0;
   private paintTimer: number = -1;
   private reconnectTimer: number = -1;
+  private historyRetryTimer: number = -1;
   private followWatchdogTimer: number = -1;
   private settlementTimer: number = -1;
   private followActivityAt: number = 0;
@@ -181,8 +183,9 @@ export struct NativeWorkspace {
   private visibleRows: NativeMessage[] = [];
   private firstVisible: number = 0;
   private userHasScrolled: boolean = false;
-  private prefetchQueue: number = 0;
-  private prefetching: boolean = false;
+  private historyDraining: boolean = false;
+  private historyPumpRunning: boolean = false;
+  private historyRetry: NativeHistoryRetryPolicy = new NativeHistoryRetryPolicy();
   private selectionGeneration: number = 0;
   private cacheTimer: number = -1;
   private backToBottomTimer: number = -1;
@@ -299,6 +302,7 @@ export struct NativeWorkspace {
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
     clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    this.stopHistoryDrain();
     clearTimeout(this.widgetEventTimer);
     clearTimeout(this.backgroundTimer); clearTimeout(this.preloadTimer);
     clearTimeout(this.cacheTimer); clearTimeout(this.backToBottomTimer);
@@ -434,6 +438,7 @@ export struct NativeWorkspace {
     clearTimeout(this.followWatchdogTimer); clearTimeout(this.settlementTimer);
     clearTimeout(this.widgetEventTimer);
     if (!this.active || this.fallbackActive) {
+      this.pauseHistoryDrain();
       this.persistCache();
       const keepBackgroundLive = !this.active && !this.fallbackActive && this.backgroundMonitor &&
         !this.supportsPush && this.selected.length > 0;
@@ -1133,9 +1138,9 @@ export struct NativeWorkspace {
   }
   private select(id: string): void {
     if (!id) return;
+    this.stopHistoryDrain();
     const selection = ++this.selectionGeneration;
     this.paging = false;
-    this.prefetchQueue = 0;
     if (this.selected) {
       const previousId = this.selected;
       this.client.models.set(previousId, this.model);
@@ -1252,9 +1257,10 @@ export struct NativeWorkspace {
       if (frame.type === 'snapshot') {
         this.connectionPhase = 'live'; this.error = ''; this.retries = 0;
         this.connectionNotified = false;
-        // The live snapshot starts at 24 records. Three 60-record pages bring
-        // the normal working set above the 180-record preload floor.
-        setTimeout((): void => { this.queuePrefetch(3); }, 80);
+        // Let the first snapshot paint, then keep draining history until the
+        // Host says it is exhausted. Manual scrolling only prioritizes the
+        // same pump; it is no longer required to restart a failed page.
+        setTimeout((): void => { this.startHistoryDrain(true); }, 80);
       }
       if (this.paintTimer < 0) this.paintTimer = setTimeout(() => { this.paintTimer = -1; this.paint(); }, 40);
     }, (reason: string): void => {
@@ -1276,6 +1282,7 @@ export struct NativeWorkspace {
   }
   private scheduleReconnect(id: string): void {
     if (!this.liveAllowed(id) || (id && this.selected !== id)) return;
+    this.pauseHistoryDrain();
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.followWatchdogTimer); clearTimeout(this.settlementTimer);
     this.interactions = [];
@@ -1477,9 +1484,33 @@ export struct NativeWorkspace {
     this.updateAttachment(this.selected, item.id, 'uploading');
     this.uploadAttachment(this.selected, item);
   }
-  private queuePrefetch(pages: number): void {
-    this.prefetchQueue = Math.min(4, Math.max(this.prefetchQueue, pages));
-    this.pumpPrefetch();
+  private startHistoryDrain(resetRetry: boolean = false): void {
+    if (!this.mounted || !this.selected || this.connectionPhase !== 'live' ||
+      !this.model.hasMore || this.model.historyBefore < 0) {
+      if (!this.model.hasMore || this.model.historyBefore < 0) this.stopHistoryDrain();
+      return;
+    }
+    clearTimeout(this.historyRetryTimer);
+    this.historyRetryTimer = -1;
+    if (resetRetry) this.historyRetry.reset();
+    this.historyDraining = true;
+    this.pumpHistoryDrain();
+  }
+  private pauseHistoryDrain(): void {
+    clearTimeout(this.historyRetryTimer);
+    this.historyRetryTimer = -1;
+    this.historyDraining = false;
+  }
+  private stopHistoryDrain(): void {
+    this.pauseHistoryDrain();
+    this.historyRetry.reset();
+  }
+  private scheduleHistoryPump(delay: number): void {
+    if (this.historyRetryTimer >= 0) return;
+    this.historyRetryTimer = setTimeout((): void => {
+      this.historyRetryTimer = -1;
+      this.pumpHistoryDrain();
+    }, Math.max(0, delay));
   }
   private scheduleCache(): void {
     clearTimeout(this.cacheTimer);
@@ -1499,38 +1530,44 @@ export struct NativeWorkspace {
         NativeTranscriptCache.trimToQuota(this.context, scope, id, protectedSessions).catch(() => {});
       }).catch(() => {});
   }
-  private async pumpPrefetch(): Promise<void> {
-    if (this.prefetching || this.prefetchQueue <= 0 || !this.hasMore || this.connectionPhase !== 'live') return;
+  private async pumpHistoryDrain(): Promise<void> {
+    if (this.historyPumpRunning || !this.historyDraining || !this.mounted || !this.selected ||
+      this.connectionPhase !== 'live' || !this.model.hasMore || this.model.historyBefore < 0) return;
     const id = this.selected;
     const generation = this.selectionGeneration;
-    this.prefetching = true;
-    try {
-      while (this.mounted && this.selected === id && this.selectionGeneration === generation &&
-        this.prefetchQueue > 0 && this.hasMore && this.connectionPhase === 'live') {
-        this.prefetchQueue--;
-        await this.older(true);
-        if (this.selected !== id || this.selectionGeneration !== generation) break;
-        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 32); });
-      }
-    } finally {
-      this.prefetching = false;
-      if (this.mounted && this.prefetchQueue > 0 && this.hasMore && this.connectionPhase === 'live') {
-        setTimeout((): void => { this.pumpPrefetch(); }, 120);
-      }
+    this.historyPumpRunning = true;
+    const advanced = await this.older(true);
+    this.historyPumpRunning = false;
+    if (!this.mounted) return;
+    if (this.selected !== id || this.selectionGeneration !== generation ||
+      !this.historyDraining || this.connectionPhase !== 'live') {
+      if (this.historyDraining) this.scheduleHistoryPump(0);
+      return;
     }
+    if (!this.model.hasMore || this.model.historyBefore < 0) {
+      this.stopHistoryDrain();
+      return;
+    }
+    if (advanced) {
+      this.historyRetry.succeed();
+      this.scheduleHistoryPump(40);
+      return;
+    }
+    this.scheduleHistoryPump(this.historyRetry.nextDelay());
   }
-  private async older(prefetch: boolean = false): Promise<void> {
-    if (this.paging || !this.hasMore || this.model.historyBefore < 0) return;
+  private async older(prefetch: boolean = false): Promise<boolean> {
+    if (this.paging || !this.model.hasMore || this.model.historyBefore < 0) return false;
     const id = this.selected;
     const generation = this.selectionGeneration;
     const scope = this.client.cacheKey();
     const historyBefore = this.model.historyBefore;
     const historyCut = this.model.historyCut;
+    const previousRows = this.model.messages.length;
     this.paging = true;
     if (!prefetch) this.followTail = false;
     try {
       const page = await this.client.page(id, historyBefore, historyCut);
-      if (this.selected !== id || this.selectionGeneration !== generation || !this.mounted) return;
+      if (this.selected !== id || this.selectionGeneration !== generation || !this.mounted) return false;
       const offset = this.hasMore ? 1 : 0;
       let anchorIndex = Math.max(0, this.firstVisible - offset);
       const anchor = this.visibleRows[anchorIndex]?.id || '';
@@ -1542,6 +1579,10 @@ export struct NativeWorkspace {
         // Prepend the page without forcing a scroll correction in that case.
       }
       this.model.prepend(page); this.paint();
+      if (!nativeHistoryPageAdvanced(historyBefore, page.beforeSeq, previousRows,
+        this.model.messages.length, page.hasMore)) {
+        throw new Error('History page did not advance');
+      }
       NativeTranscriptCache.saveSession(this.context, scope, id, this.model).catch(() => {});
       const next = this.visibleRows.findIndex((row: NativeMessage) => row.id === anchor);
       if (next >= 0 && top !== 0) setTimeout(() => { if (!this.mounted || this.selected !== id) return;
@@ -1550,8 +1591,11 @@ export struct NativeWorkspace {
           this.scroller.scrollBy(0, -top);
         } catch (_) {}
       }, 0);
+      return true;
     } catch (error) {
-      if (this.selected === id && this.selectionGeneration === generation) this.handleError(error as Error);
+      if (this.selected === id && this.selectionGeneration === generation &&
+        error instanceof NativeHttpError && error.status === 401) this.handleError(error as Error);
+      return false;
     } finally {
       if (this.selectionGeneration === generation) this.paging = false;
     }
@@ -1892,7 +1936,7 @@ export struct NativeWorkspace {
                     .fontColor(this.dark ? '#93969B' : '#8A8D91')
                 }
               }.enabled(!this.paging).height(30).padding({ left: 9, right: 9 }).borderRadius(9)
-                .backgroundColor(Color.Transparent).onClick(() => { this.older(); })
+                .backgroundColor(Color.Transparent).onClick(() => { this.startHistoryDrain(false); })
             }
           }
           LazyForEach(this.source, (message: NativeMessage) => {
@@ -1927,10 +1971,12 @@ export struct NativeWorkspace {
           }, (message: NativeMessage) => message.id)
         }.width('100%').height('100%').cachedCount(6)
           .edgeEffect(NativeExperience.reducedMotion() ? EdgeEffect.None : EdgeEffect.Spring)
-          .onReachStart(() => { if (this.userHasScrolled && this.hasMore && this.connectionPhase === 'live') this.older(); })
+          .onReachStart(() => {
+            if (this.userHasScrolled && this.hasMore && this.connectionPhase === 'live') this.startHistoryDrain(false);
+          })
           .onScrollIndex((first: number) => {
             this.firstVisible = first;
-            if (this.userHasScrolled && first <= 20 && this.hasMore && this.connectionPhase === 'live') this.queuePrefetch(1);
+            if (this.userHasScrolled && first <= 20 && this.hasMore && this.connectionPhase === 'live') this.startHistoryDrain(false);
           })
           .onScrollFrameBegin((offset: number, state: ScrollState) => {
             if (state === ScrollState.Scroll && !this.returningToBottom) {
