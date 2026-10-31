@@ -1,6 +1,7 @@
 # Navigation and process refinement device E2E
 
-Status: pending device execution.
+Status: core image interactions passed on the connected device; remaining rows
+wait for a fresh full regression.
 
 | ID | Scenario | Expected evidence | Status |
 | --- | --- | --- | --- |
@@ -31,8 +32,8 @@ Status: pending device execution.
 | PROC-05 | Expand a `工作过程` group with several operations | A bounded inner scroll region may occupy up to 60% of the transcript viewport without expanding the full page | Pending |
 | IMG-01 | Expand a tool result containing an image and tap its thumbnail | App-level lightbox opens with the authenticated image and a close control | Pending |
 | IMG-02 | Pinch and double-tap inside the image lightbox, then press system Back | Content zooms, double tap resets, and Back closes the lightbox before chat navigation | Pending |
-| IMG-09 | Pinch to enlarge an image, drag around the enlarged image, release, then pause | The image stays enlarged and translated; the release does not trigger an outside-tap close or reset zoom | Pending |
-| IMG-10 | Repeat pinch gestures after an initial zoom and drag in all directions | Each pinch multiplies the current scale, translation follows the focus point, and panning stops at image bounds | Pending |
+| IMG-09 | Pinch to enlarge an attachment or workspace image, drag around it, release, then pause | The image stays enlarged and translated; the release does not trigger an outside-tap close or reset zoom | Passed |
+| IMG-10 | Repeat pinch gestures after an initial zoom and drag in all directions | Each pinch continues from the retained scale and never snaps back to one-times; translation follows the focus point and panning stops at image bounds | Passed |
 | IMG-05 | Open the image lightbox in both theme modes | Close control remains below the status-bar boundary with a consistent compact top inset | Pending |
 | IMG-03 | Expand a `read_image` operation with one image | Only the small left-aligned thumbnail is shown; no raw arguments, path metadata or text output appears | Pending |
 | IMG-04 | Expand a `read_image` operation with multiple images | Thumbnails wrap into multiple leading-aligned rows as needed and each opens the matching lightbox image | Pending |

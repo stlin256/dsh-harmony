@@ -183,9 +183,12 @@
   shows a persistent active surface while the menu is open.
 - The lightbox toolbar retains safe top spacing even when the app-content inset
   is zero.
-- After pinch zoom, a drag moves the enlarged image inside the viewport so local
-  detail can be inspected. Release and taps elsewhere must not reset the zoom
-  unless the user deliberately double-taps or closes the lightbox.
+- After pinch zoom, a one-finger drag moves the enlarged image inside the
+  viewport so local detail can be inspected. A later pinch must continue from
+  the retained scale. Release and the platform's synthetic tap after a pinch
+  must not reset the zoom unless the user deliberately double-taps or closes
+  the lightbox. Attachment lightboxes and workspace image previews use the same
+  interaction contract.
 - `设置 > DSH 设置` reports the installed `@dsh-harmony/plugin` version returned
   by the connected Host.
 - The drawer workspace selector label has no trailing blank area after `全部`.

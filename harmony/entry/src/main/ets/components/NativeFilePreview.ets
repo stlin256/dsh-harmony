@@ -36,6 +36,8 @@ export struct NativeFilePreview {
   @State private hasMore: boolean = false;
   @State private imageMap: image.PixelMap | null = null;
   @State private zoom: number = 1;
+  @State private offsetX: number = 0;
+  @State private offsetY: number = 0;
   @State private documentKind: string = 'unknown';
   @State private language: string = '';
   @State private mode: string = 'code';
@@ -47,6 +49,27 @@ export struct NativeFilePreview {
   private nextOffset: number = 1;
   private generation: number = 0;
   private expectedBytes: number = -1;
+  private imageWidth: number = 1;
+  private imageHeight: number = 1;
+  private viewportWidth: number = 1;
+  private viewportHeight: number = 1;
+  private pinchStartZoom: number = 1;
+  private pinchStartOffsetX: number = 0;
+  private pinchStartOffsetY: number = 0;
+  private pinchStartDistance: number = 0;
+  private pinchStartMidX: number = 0;
+  private pinchStartMidY: number = 0;
+  private touchMode: string = 'none';
+  private touchLastX: number = 0;
+  private touchLastY: number = 0;
+  private touchStartAt: number = 0;
+  private touchStartX: number = 0;
+  private touchStartY: number = 0;
+  private touchMoved: boolean = false;
+  private lastTapAt: number = 0;
+  private lastTapX: number = 0;
+  private lastTapY: number = 0;
+  private lastPinchEndedAt: number = 0;
 
   aboutToAppear(): void {
     this.mounted = true;
@@ -67,6 +90,9 @@ export struct NativeFilePreview {
     this.hasMore = false; this.error = ''; this.loading = true; this.loadingMore = false;
     this.title = this.basename(this.path);
     this.expectedBytes = -1;
+    this.zoom = 1;
+    this.offsetX = 0;
+    this.offsetY = 0;
     this.applyDescriptor(nativeDocumentDescriptor(this.path));
     this.load(this.generation);
   }
@@ -88,6 +114,139 @@ export struct NativeFilePreview {
   }
   private animate(action: () => void): void {
     NativeMotion.animate(this.getUIContext(), 'navigation', action);
+  }
+  private resetImageZoom(): void {
+    if (this.touchMode === 'pinch' || Date.now() - this.lastPinchEndedAt < 450) return;
+    this.animate((): void => {
+      this.zoom = 1;
+      this.offsetX = 0;
+      this.offsetY = 0;
+    });
+  }
+  private clampOffset(value: number, viewport: number, content: number): number {
+    const limit = Math.max(0, (content - viewport) / 2);
+    return Math.max(-limit, Math.min(limit, value));
+  }
+  private clampTranslation(x: number, y: number, zoom: number): void {
+    const width = Math.max(1, this.viewportWidth);
+    const height = Math.max(1, this.viewportHeight);
+    const fit = Math.min(width / Math.max(1, this.imageWidth),
+      height / Math.max(1, this.imageHeight));
+    this.offsetX = this.clampOffset(x, width, this.imageWidth * fit * zoom);
+    this.offsetY = this.clampOffset(y, height, this.imageHeight * fit * zoom);
+  }
+  private beginImagePinch(first: TouchObject, second: TouchObject): void {
+    this.touchMode = 'pinch';
+    this.pinchStartZoom = this.zoom;
+    this.pinchStartOffsetX = this.offsetX;
+    this.pinchStartOffsetY = this.offsetY;
+    this.pinchStartDistance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+    this.pinchStartMidX = (first.x + second.x) / 2;
+    this.pinchStartMidY = (first.y + second.y) / 2;
+    this.touchMoved = true;
+  }
+  private updateImagePinchTouches(first: TouchObject, second: TouchObject): void {
+    const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+    const midpointX = (first.x + second.x) / 2;
+    const midpointY = (first.y + second.y) / 2;
+    const nextZoom = Math.max(1, Math.min(5, this.pinchStartZoom * distance / this.pinchStartDistance));
+    const startZoom = Math.max(0.001, this.pinchStartZoom);
+    const startFocusX = this.pinchStartMidX - this.viewportWidth / 2;
+    const startFocusY = this.pinchStartMidY - this.viewportHeight / 2;
+    const focusX = midpointX - this.viewportWidth / 2;
+    const focusY = midpointY - this.viewportHeight / 2;
+    const ratio = nextZoom / startZoom;
+    this.zoom = nextZoom;
+    this.clampTranslation(
+      focusX - (startFocusX - this.pinchStartOffsetX) * ratio,
+      focusY - (startFocusY - this.pinchStartOffsetY) * ratio,
+      nextZoom);
+  }
+  private beginImagePan(point: TouchObject): void {
+    this.touchMode = 'pan';
+    this.touchLastX = point.x;
+    this.touchLastY = point.y;
+  }
+  private updateImagePan(point: TouchObject): void {
+    const dx = point.x - this.touchLastX;
+    const dy = point.y - this.touchLastY;
+    this.touchLastX = point.x;
+    this.touchLastY = point.y;
+    if (this.zoom <= 1.001) return;
+    this.clampTranslation(this.offsetX + dx, this.offsetY + dy, this.zoom);
+  }
+  private activeTouches(event: TouchEvent): TouchObject[] {
+    const values: TouchObject[] = [];
+    for (const point of event.touches) {
+      if (point.type !== TouchType.Up && point.type !== TouchType.Cancel) values.push(point);
+    }
+    return values;
+  }
+  private finishImageTouch(event: TouchEvent, points: TouchObject[]): void {
+    if (points.length >= 2) {
+      this.beginImagePinch(points[0], points[1]);
+      return;
+    }
+    if (points.length === 1) {
+      this.lastPinchEndedAt = Date.now();
+      this.beginImagePan(points[0]);
+      return;
+    }
+    if (this.touchMode === 'pinch') this.lastPinchEndedAt = Date.now();
+    if (!this.touchMoved && event.type === TouchType.Up) {
+      const now = Date.now();
+      if (now - this.touchStartAt < 300 &&
+        now - this.lastTapAt < 320 &&
+        Math.abs(this.touchStartX - this.lastTapX) < 32 &&
+        Math.abs(this.touchStartY - this.lastTapY) < 32) {
+        this.lastTapAt = 0;
+        this.touchMode = 'none';
+        this.resetImageZoom();
+        return;
+      }
+      this.lastTapAt = now;
+      this.lastTapX = this.touchStartX;
+      this.lastTapY = this.touchStartY;
+    }
+    this.touchMode = 'none';
+  }
+  private handleImageTouch(event: TouchEvent): void {
+    event.stopPropagation();
+    const points = this.activeTouches(event);
+    if (event.type === TouchType.Down) {
+      if (points.length >= 2) {
+        this.lastTapAt = 0;
+        this.beginImagePinch(points[0], points[1]);
+      } else if (points.length === 1) {
+        if (this.touchMode !== 'pan') {
+          this.touchStartAt = Date.now();
+          this.touchStartX = points[0].x;
+          this.touchStartY = points[0].y;
+          this.touchMoved = false;
+          this.beginImagePan(points[0]);
+        }
+      }
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      if (points.length >= 2) {
+        if (this.touchMode !== 'pinch') this.beginImagePinch(points[0], points[1]);
+        this.touchMoved = true;
+        this.updateImagePinchTouches(points[0], points[1]);
+      } else if (points.length === 1) {
+        if (this.touchMode !== 'pan') {
+          this.beginImagePan(points[0]);
+          return;
+        }
+        if (Math.abs(points[0].x - this.touchStartX) > 7 ||
+          Math.abs(points[0].y - this.touchStartY) > 7) this.touchMoved = true;
+        this.updateImagePan(points[0]);
+      }
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.finishImageTouch(event, points);
+    }
   }
   private async load(generation: number): Promise<void> {
     if (!this.path || !this.sessionId) {
@@ -149,6 +308,11 @@ export struct NativeFilePreview {
       this.releaseImage();
       this.source = pending;
       this.imageMap = bitmap;
+      this.imageWidth = width;
+      this.imageHeight = height;
+      this.zoom = 1;
+      this.offsetX = 0;
+      this.offsetY = 0;
       this.version = content.version;
       this.bytesLabel = content.totalBytes >= 0 ? this.formatBytes(content.totalBytes) : this.bytesLabel;
       this.error = '';
@@ -277,17 +441,17 @@ export struct NativeFilePreview {
   }
   @Builder
   private imageBody() {
-    Scroll() {
-      Image(this.imageMap).objectFit(ImageFit.Contain).width('100%')
+    Stack({ alignContent: Alignment.Center }) {
+      Image(this.imageMap).objectFit(ImageFit.Contain).width('100%').height('100%')
         .scale({ x: this.zoom, y: this.zoom })
-        .gesture(PinchGesture().onActionUpdate((event: GestureEvent): void => {
-          this.zoom = Math.max(1, Math.min(5, event.scale));
-        }))
-        .gesture(TapGesture({ count: 2 }).onAction((): void => {
-          this.animate((): void => { this.zoom = 1; });
-        }))
-    }.scrollable(ScrollDirection.Free).layoutWeight(1).width('100%')
-      .align(Alignment.Center).edgeEffect(EdgeEffect.None)
+        .translate({ x: this.offsetX, y: this.offsetY })
+    }.layoutWeight(1).width('100%').clip(true)
+      .onAreaChange((_old: Area, area: Area): void => {
+        this.viewportWidth = Number(area.width);
+        this.viewportHeight = Number(area.height);
+        this.clampTranslation(this.offsetX, this.offsetY, this.zoom);
+      })
+      .onTouch((event: TouchEvent): void => { this.handleImageTouch(event); })
   }
   @Builder
   private textBody() {

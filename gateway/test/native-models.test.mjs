@@ -979,12 +979,24 @@ test('composer source contract uses intrinsic model width and native image/file 
 
 test('lightbox zoom keeps translation and does not treat drag release as a background tap', () => {
   const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeImageLightbox.ets', import.meta.url),'utf8');
-  assert.match(source,/GestureGroup\(GestureMode\.Parallel/);
-  assert.match(source,/this\.pinchStartZoom \* event\.scale/);
-  assert.match(source,/this\.panStartOffsetX \+ event\.offsetX/);
+  assert.match(source,/\.onTouch\(\(event: TouchEvent\): void => \{ this\.handleTouch\(event\); \}\)/);
+  assert.match(source,/this\.pinchStartZoom \* distance \/ this\.pinchStartDistance/);
+  assert.match(source,/this\.offsetX \+ dx/);
   assert.match(source,/\.translate\(\{ x: this\.offsetX, y: this\.offsetY \}\)/);
   assert.match(source,/Date\.now\(\) < this\.suppressClickUntil/);
+  assert.match(source,/this\.touchMode === 'pinch' \|\| Date\.now\(\) - this\.lastPinchEndedAt < 450/);
   assert.match(source,/this\.offsetX = 0;[\s\S]{0,80}this\.offsetY = 0;/);
+  assert.doesNotMatch(source,/Scroll\(\) \{[\s\S]{0,500}Image\(this\.bitmap\)/);
+});
+
+test('workspace image preview uses the same retained pinch and pan interaction', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeFilePreview.ets', import.meta.url),'utf8');
+  assert.match(source,/\.onTouch\(\(event: TouchEvent\): void => \{ this\.handleImageTouch\(event\); \}\)/);
+  assert.match(source,/this\.pinchStartZoom \* distance \/ this\.pinchStartDistance/);
+  assert.match(source,/this\.offsetX \+ dx/);
+  assert.match(source,/\.translate\(\{ x: this\.offsetX, y: this\.offsetY \}\)/);
+  assert.match(source,/this\.touchMode === 'pinch' \|\| Date\.now\(\) - this\.lastPinchEndedAt < 450/);
+  assert.doesNotMatch(source,/Scroll\(\) \{[\s\S]{0,500}Image\(this\.imageMap\)/);
 });
 
 test('DSH settings source consumes and displays the connected plugin version', () => {

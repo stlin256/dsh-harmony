@@ -36,8 +36,21 @@ export struct NativeImageLightbox {
   private pinchStartZoom: number = 1;
   private pinchStartOffsetX: number = 0;
   private pinchStartOffsetY: number = 0;
-  private panStartOffsetX: number = 0;
-  private panStartOffsetY: number = 0;
+  private pinchStartDistance: number = 0;
+  private pinchStartMidX: number = 0;
+  private pinchStartMidY: number = 0;
+  private touchMode: string = 'none';
+  private touchLastX: number = 0;
+  private touchLastY: number = 0;
+  private touchStartAt: number = 0;
+  private touchStartX: number = 0;
+  private touchStartY: number = 0;
+  private touchMoved: boolean = false;
+  private lastTapAt: number = 0;
+  private lastTapX: number = 0;
+  private lastTapY: number = 0;
+  private longPressTimer: number = -1;
+  private lastPinchEndedAt: number = 0;
   private suppressClickUntil: number = 0;
   private bytes: Uint8Array | null = null;
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -49,6 +62,7 @@ export struct NativeImageLightbox {
 
   aboutToDisappear(): void {
     this.mounted = false;
+    this.clearLongPress();
     this.bytes = null;
     this.bitmap?.release();
     this.bitmap = null;
@@ -93,6 +107,9 @@ export struct NativeImageLightbox {
   }
 
   private resetZoom(): void {
+    // Some platform versions synthesize a double tap at the end of a two-finger
+    // pinch. A reset must only follow a deliberate two-tap sequence.
+    if (this.touchMode === 'pinch' || Date.now() - this.lastPinchEndedAt < 450) return;
     NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
       this.zoom = 1;
       this.offsetX = 0;
@@ -121,25 +138,154 @@ export struct NativeImageLightbox {
     this.offsetY = this.clampOffset(y, height, sourceHeight * fit * zoom);
   }
 
-  private updatePinch(event: GestureEvent): void {
-    const nextZoom = Math.max(1, Math.min(5, this.pinchStartZoom * event.scale));
+  private beginPinch(first: TouchObject, second: TouchObject): void {
+    this.clearLongPress();
+    this.touchMode = 'pinch';
+    this.pinchStartZoom = this.zoom;
+    this.pinchStartOffsetX = this.offsetX;
+    this.pinchStartOffsetY = this.offsetY;
+    this.pinchStartDistance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+    this.pinchStartMidX = (first.x + second.x) / 2;
+    this.pinchStartMidY = (first.y + second.y) / 2;
+    this.touchMoved = true;
+    this.markGestureActivity();
+  }
+
+  private updatePinchTouches(first: TouchObject, second: TouchObject): void {
+    const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+    const midpointX = (first.x + second.x) / 2;
+    const midpointY = (first.y + second.y) / 2;
+    const nextZoom = Math.max(1, Math.min(5, this.pinchStartZoom * distance / this.pinchStartDistance));
     const startZoom = Math.max(0.001, this.pinchStartZoom);
-    const focusX = event.pinchCenterX - this.viewportWidth / 2;
-    const focusY = event.pinchCenterY - this.viewportHeight / 2;
+    const startFocusX = this.pinchStartMidX - this.viewportWidth / 2;
+    const startFocusY = this.pinchStartMidY - this.viewportHeight / 2;
+    const focusX = midpointX - this.viewportWidth / 2;
+    const focusY = midpointY - this.viewportHeight / 2;
     const ratio = nextZoom / startZoom;
     this.zoom = nextZoom;
     this.clampTranslation(
-      focusX - (focusX - this.pinchStartOffsetX) * ratio,
-      focusY - (focusY - this.pinchStartOffsetY) * ratio,
+      focusX - (startFocusX - this.pinchStartOffsetX) * ratio,
+      focusY - (startFocusY - this.pinchStartOffsetY) * ratio,
       nextZoom);
     this.markGestureActivity();
   }
 
-  private updatePan(event: GestureEvent): void {
+  private beginPan(point: TouchObject): void {
+    this.touchMode = 'pan';
+    this.touchLastX = point.x;
+    this.touchLastY = point.y;
+  }
+
+  private updatePan(point: TouchObject): void {
+    const dx = point.x - this.touchLastX;
+    const dy = point.y - this.touchLastY;
+    this.touchLastX = point.x;
+    this.touchLastY = point.y;
     if (this.zoom <= 1.001) return;
-    this.clampTranslation(this.panStartOffsetX + event.offsetX,
-      this.panStartOffsetY + event.offsetY, this.zoom);
+    this.clampTranslation(this.offsetX + dx, this.offsetY + dy, this.zoom);
     this.markGestureActivity();
+  }
+
+  private activeTouches(event: TouchEvent): TouchObject[] {
+    const values: TouchObject[] = [];
+    for (const point of event.touches) {
+      if (point.type !== TouchType.Up && point.type !== TouchType.Cancel) values.push(point);
+    }
+    return values;
+  }
+
+  private clearLongPress(): void {
+    if (this.longPressTimer >= 0) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = -1;
+    }
+  }
+
+  private scheduleLongPress(): void {
+    this.clearLongPress();
+    this.longPressTimer = setTimeout((): void => {
+      this.longPressTimer = -1;
+      if (this.touchMode === 'pan' && !this.touchMoved && this.mounted) {
+        this.markGestureActivity();
+        this.saveToGallery();
+      }
+    }, 520);
+  }
+
+  private finishTouch(event: TouchEvent, points: TouchObject[]): void {
+    this.clearLongPress();
+    if (points.length >= 2) {
+      this.beginPinch(points[0], points[1]);
+      return;
+    }
+    if (points.length === 1) {
+      this.lastPinchEndedAt = Date.now();
+      this.beginPan(points[0]);
+      return;
+    }
+    if (this.touchMode === 'pinch') this.lastPinchEndedAt = Date.now();
+    if (!this.touchMoved && event.type === TouchType.Up) {
+      const now = Date.now();
+      if (now - this.touchStartAt < 300 &&
+        now - this.lastTapAt < 320 &&
+        Math.abs(this.touchStartX - this.lastTapX) < 32 &&
+        Math.abs(this.touchStartY - this.lastTapY) < 32) {
+        this.lastTapAt = 0;
+        this.touchMode = 'none';
+        this.resetZoom();
+        return;
+      }
+      this.lastTapAt = now;
+      this.lastTapX = this.touchStartX;
+      this.lastTapY = this.touchStartY;
+      const changed = event.changedTouches.length ? event.changedTouches[0] : null;
+      this.touchMode = 'none';
+      if (changed) this.closeIfOutside(changed.x, changed.y);
+      return;
+    }
+    this.touchMode = 'none';
+  }
+
+  private handleTouch(event: TouchEvent): void {
+    const points = this.activeTouches(event);
+    if (event.type === TouchType.Down) {
+      if (points.length >= 2) {
+        this.lastTapAt = 0;
+        this.beginPinch(points[0], points[1]);
+      } else if (points.length === 1) {
+        if (this.touchMode !== 'pan') {
+          this.touchStartAt = Date.now();
+          this.touchStartX = points[0].x;
+          this.touchStartY = points[0].y;
+          this.touchMoved = false;
+          this.beginPan(points[0]);
+          this.scheduleLongPress();
+        }
+      }
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      if (points.length >= 2) {
+        if (this.touchMode !== 'pinch') this.beginPinch(points[0], points[1]);
+        this.touchMoved = true;
+        this.updatePinchTouches(points[0], points[1]);
+      } else if (points.length === 1) {
+        if (this.touchMode !== 'pan') {
+          this.beginPan(points[0]);
+          return;
+        }
+        if (Math.abs(points[0].x - this.touchStartX) > 7 ||
+          Math.abs(points[0].y - this.touchStartY) > 7) {
+          this.touchMoved = true;
+          this.clearLongPress();
+        }
+        this.updatePan(points[0]);
+      }
+      return;
+    }
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.finishTouch(event, points);
+    }
   }
 
   private mediaExtension(): string {
@@ -215,42 +361,18 @@ export struct NativeImageLightbox {
   build() {
     Stack({ alignContent: Alignment.Center }) {
       if (this.bitmap) {
-        Scroll() {
+        Stack({ alignContent: Alignment.Center }) {
           Image(this.bitmap).objectFit(ImageFit.Contain).width('100%').height('100%')
             .scale({ x: this.zoom, y: this.zoom })
             .translate({ x: this.offsetX, y: this.offsetY })
             .accessibilityText('长按可保存图片')
-            .gesture(GestureGroup(GestureMode.Parallel,
-              PinchGesture({ fingers: 2, distance: 5 })
-                .onActionStart((): void => {
-                  this.pinchStartZoom = this.zoom;
-                  this.pinchStartOffsetX = this.offsetX;
-                  this.pinchStartOffsetY = this.offsetY;
-                  this.markGestureActivity();
-                })
-                .onActionUpdate((event: GestureEvent): void => { this.updatePinch(event); })
-                .onActionEnd((): void => { this.markGestureActivity(); })
-                .onActionCancel((): void => { this.markGestureActivity(); }),
-              PanGesture({ fingers: 1, distance: 2 })
-                .onActionStart((): void => {
-                  this.panStartOffsetX = this.offsetX;
-                  this.panStartOffsetY = this.offsetY;
-                  this.markGestureActivity();
-                })
-                .onActionUpdate((event: GestureEvent): void => { this.updatePan(event); })
-                .onActionEnd((): void => { this.markGestureActivity(); })
-                .onActionCancel((): void => { this.markGestureActivity(); })))
-            .gesture(TapGesture({ count: 2 }).onAction((): void => { this.resetZoom(); }))
-            .gesture(LongPressGesture({ repeat: false, duration: 500 })
-              .onAction((): void => { this.saveToGallery(); }))
-        }.width('100%').height('100%').scrollable(ScrollDirection.Free)
-          .edgeEffect(EdgeEffect.None)
+        }.width('100%').height('100%')
           .onAreaChange((_old: Area, area: Area): void => {
             this.viewportWidth = Number(area.width);
             this.viewportHeight = Number(area.height);
             this.clampTranslation(this.offsetX, this.offsetY, this.zoom);
           })
-          .onClick((event: ClickEvent): void => { this.closeIfOutside(event.x, event.y); })
+          .onTouch((event: TouchEvent): void => { this.handleTouch(event); })
       } else if (this.loading) {
         Column({ space: 10 }) {
           LoadingProgress().width(28).height(28).color('#FFFFFF')

@@ -161,11 +161,18 @@ Zoom state includes scale plus translation. Pinch scale is relative to the scale
 at pinch start, so a second pinch never restarts from one-times scale. The pinch
 focus adjusts translation around the focal point. A one-finger pan records the
 translation at drag start, applies the gesture's cumulative offset, and clamps
-the result to the scaled image bounds. Pinch and pan recognizers run in parallel.
-The lightbox suppresses the synthetic click that follows a pan or pinch, which
-prevents a drag release from being interpreted as an outside tap. Deliberate
+the result to the scaled image bounds. The image surface is not owned by a
+scroll container, so Scroll cannot claim the first vertical drag. Raw
+`TouchEvent` handling owns pinch, pan, tap and long-press arbitration instead of
+competing gesture recognizers. It records the first two active touch points,
+uses their distance ratio and midpoint to update scale and translation, and
+treats a single remaining point as a fresh pan baseline after pinch. A short
+post-pinch guard rejects a platform-synthesized double-tap, and the lightbox
+suppresses the synthetic outside click that follows movement. Deliberate
 double-tap resets scale and translation together. An actual tap outside the
-translated, scaled image still closes the lightbox.
+translated, scaled image still closes the lightbox. `NativeFilePreview` applies
+the same raw-touch model, relative pinch scale, translation clamp and reset
+guard to images opened from workspace links or the file browser.
 
 Scrollable process bodies reserve a trailing content gutter for platform
 scrollbars. The gutter belongs to the inside of the detail surface, so text,
