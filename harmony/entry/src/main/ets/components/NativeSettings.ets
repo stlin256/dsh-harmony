@@ -57,6 +57,7 @@ export struct NativeSettings {
   @State private host: NativeSettingsDescription = new NativeSettingsDescription();
   @State private chat: NativeChatPreferences = new NativeChatPreferences();
   @State private hostLoading: boolean = false;
+  @State private pluginVersion: string = '';
   @State private hostSaving: string[] = [];
   @State private hostError: string = '';
   @State private retryHostNs: string = '';
@@ -121,6 +122,8 @@ export struct NativeSettings {
     this.hostError = '';
     try {
       await this.client.hostSettings.refresh();
+      const state = await this.client.state();
+      if (this.mounted) this.pluginVersion = state.pluginVersion;
       if (this.mounted) this.hostChanged();
     } catch (_) {
       if (this.mounted) this.hostError = 'DSH 设置暂不可用';
@@ -562,6 +565,14 @@ export struct NativeSettings {
       this.pageHeader('DSH 设置')
       Scroll() {
         Column({ space: 10 }) {
+          Row({ space: 10 }) {
+            Text('插件版本').fontSize(14).fontWeight(FontWeight.Medium)
+              .fontColor(this.dark ? '#F0F1F2' : '#24262A')
+            Blank()
+            Text(this.pluginVersion ? 'v' + this.pluginVersion : '未报告').fontSize(12)
+              .fontColor(this.dark ? '#8E9197' : '#777B81')
+          }.width('100%').constraintSize({ minHeight: 48 }).padding({ left: 14, right: 14 })
+            .borderRadius(16).backgroundColor(this.dark ? '#232326' : '#FFFFFF')
           if (this.hasHost('ui-chat')) {
             Column() {
               this.hostChoice('工作步骤展示', 'transcriptView',

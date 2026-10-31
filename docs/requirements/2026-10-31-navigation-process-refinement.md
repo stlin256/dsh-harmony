@@ -183,6 +183,11 @@
   shows a persistent active surface while the menu is open.
 - The lightbox toolbar retains safe top spacing even when the app-content inset
   is zero.
+- After pinch zoom, a drag moves the enlarged image inside the viewport so local
+  detail can be inspected. Release and taps elsewhere must not reset the zoom
+  unless the user deliberately double-taps or closes the lightbox.
+- `设置 > DSH 设置` reports the installed `@dsh-harmony/plugin` version returned
+  by the connected Host.
 - The drawer workspace selector label has no trailing blank area after `全部`.
 - Expanding a large `工作过程` group exposes only viewport-near operation rows
   while scrolling; the first frame does not instantiate the entire list.
@@ -206,6 +211,12 @@
 - A normal tap outside the rendered image closes the lightbox; a tap inside the
   image does not. Long press opens the system-confirmed gallery save flow and
   reports success or failure with one short toast.
+- Pinch and drag share one interruptible gesture surface. Zoom-relative movement
+  is clamped to the scaled image bounds, and a completed pan does not synthesize
+  an outside-tap close or a reset to one-times scale.
+- The DSH settings page shows the connected plugin version in a compact
+  read-only metadata row. If an older Host omitted the field, the row states
+  that the version is unavailable.
 - Repeated expand/collapse keeps operation preview text stable with no
   one-frame flash while the detail surface enters or leaves.
 - The drawer's workspace icon and label remain one trailing-aligned group.

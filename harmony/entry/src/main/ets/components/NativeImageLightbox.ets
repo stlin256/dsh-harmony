@@ -27,10 +27,18 @@ export struct NativeImageLightbox {
   @State private loading: boolean = true;
   @State private error: string = '';
   @State private zoom: number = 1;
+  @State private offsetX: number = 0;
+  @State private offsetY: number = 0;
   @State private saving: boolean = false;
   @State private viewportWidth: number = 0;
   @State private viewportHeight: number = 0;
   private mounted: boolean = false;
+  private pinchStartZoom: number = 1;
+  private pinchStartOffsetX: number = 0;
+  private pinchStartOffsetY: number = 0;
+  private panStartOffsetX: number = 0;
+  private panStartOffsetY: number = 0;
+  private suppressClickUntil: number = 0;
   private bytes: Uint8Array | null = null;
   private context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
 
@@ -74,6 +82,8 @@ export struct NativeImageLightbox {
       this.bitmap?.release();
       this.bitmap = bitmap;
       this.zoom = 1;
+      this.offsetX = 0;
+      this.offsetY = 0;
     } catch (_) {
       if (this.mounted) this.error = '图片加载失败';
     } finally {
@@ -83,7 +93,53 @@ export struct NativeImageLightbox {
   }
 
   private resetZoom(): void {
-    NativeMotion.animate(this.getUIContext(), 'micro', (): void => { this.zoom = 1; });
+    NativeMotion.animate(this.getUIContext(), 'micro', (): void => {
+      this.zoom = 1;
+      this.offsetX = 0;
+      this.offsetY = 0;
+    });
+  }
+
+  private markGestureActivity(): void {
+    // A completed drag/pinch commonly emits a click at the release point. Do not
+    // reinterpret that synthetic click as a background-tap dismissal.
+    this.suppressClickUntil = Date.now() + 350;
+  }
+
+  private clampOffset(value: number, viewport: number, content: number): number {
+    const limit = Math.max(0, (content - viewport) / 2);
+    return Math.max(-limit, Math.min(limit, value));
+  }
+
+  private clampTranslation(x: number, y: number, zoom: number): void {
+    const width = Math.max(1, this.viewportWidth);
+    const height = Math.max(1, this.viewportHeight);
+    const sourceWidth = Math.max(1, this.attachment.width);
+    const sourceHeight = Math.max(1, this.attachment.height);
+    const fit = Math.min(width / sourceWidth, height / sourceHeight);
+    this.offsetX = this.clampOffset(x, width, sourceWidth * fit * zoom);
+    this.offsetY = this.clampOffset(y, height, sourceHeight * fit * zoom);
+  }
+
+  private updatePinch(event: GestureEvent): void {
+    const nextZoom = Math.max(1, Math.min(5, this.pinchStartZoom * event.scale));
+    const startZoom = Math.max(0.001, this.pinchStartZoom);
+    const focusX = event.pinchCenterX - this.viewportWidth / 2;
+    const focusY = event.pinchCenterY - this.viewportHeight / 2;
+    const ratio = nextZoom / startZoom;
+    this.zoom = nextZoom;
+    this.clampTranslation(
+      focusX - (focusX - this.pinchStartOffsetX) * ratio,
+      focusY - (focusY - this.pinchStartOffsetY) * ratio,
+      nextZoom);
+    this.markGestureActivity();
+  }
+
+  private updatePan(event: GestureEvent): void {
+    if (this.zoom <= 1.001) return;
+    this.clampTranslation(this.panStartOffsetX + event.offsetX,
+      this.panStartOffsetY + event.offsetY, this.zoom);
+    this.markGestureActivity();
   }
 
   private mediaExtension(): string {
@@ -142,6 +198,7 @@ export struct NativeImageLightbox {
   }
 
   private closeIfOutside(x: number, y: number): void {
+    if (Date.now() < this.suppressClickUntil) return;
     const width = Math.max(1, this.viewportWidth);
     const height = Math.max(1, this.viewportHeight);
     const sourceWidth = Math.max(1, this.attachment.width);
@@ -149,8 +206,8 @@ export struct NativeImageLightbox {
     const fit = Math.min(width / sourceWidth, height / sourceHeight);
     const imageWidth = sourceWidth * fit * this.zoom;
     const imageHeight = sourceHeight * fit * this.zoom;
-    const left = (width - imageWidth) / 2;
-    const top = (height - imageHeight) / 2;
+    const left = (width - imageWidth) / 2 + this.offsetX;
+    const top = (height - imageHeight) / 2 + this.offsetY;
     const inside = x >= left && x <= left + imageWidth && y >= top && y <= top + imageHeight;
     if (!inside) this.onClose();
   }
@@ -161,11 +218,28 @@ export struct NativeImageLightbox {
         Scroll() {
           Image(this.bitmap).objectFit(ImageFit.Contain).width('100%').height('100%')
             .scale({ x: this.zoom, y: this.zoom })
+            .translate({ x: this.offsetX, y: this.offsetY })
             .accessibilityText('长按可保存图片')
-            .gesture(PinchGesture({ fingers: 2, distance: 5 })
-              .onActionUpdate((event: GestureEvent): void => {
-                this.zoom = Math.max(1, Math.min(5, event.scale));
-              }))
+            .gesture(GestureGroup(GestureMode.Parallel,
+              PinchGesture({ fingers: 2, distance: 5 })
+                .onActionStart((): void => {
+                  this.pinchStartZoom = this.zoom;
+                  this.pinchStartOffsetX = this.offsetX;
+                  this.pinchStartOffsetY = this.offsetY;
+                  this.markGestureActivity();
+                })
+                .onActionUpdate((event: GestureEvent): void => { this.updatePinch(event); })
+                .onActionEnd((): void => { this.markGestureActivity(); })
+                .onActionCancel((): void => { this.markGestureActivity(); }),
+              PanGesture({ fingers: 1, distance: 2 })
+                .onActionStart((): void => {
+                  this.panStartOffsetX = this.offsetX;
+                  this.panStartOffsetY = this.offsetY;
+                  this.markGestureActivity();
+                })
+                .onActionUpdate((event: GestureEvent): void => { this.updatePan(event); })
+                .onActionEnd((): void => { this.markGestureActivity(); })
+                .onActionCancel((): void => { this.markGestureActivity(); })))
             .gesture(TapGesture({ count: 2 }).onAction((): void => { this.resetZoom(); }))
             .gesture(LongPressGesture({ repeat: false, duration: 500 })
               .onAction((): void => { this.saveToGallery(); }))
@@ -174,6 +248,7 @@ export struct NativeImageLightbox {
           .onAreaChange((_old: Area, area: Area): void => {
             this.viewportWidth = Number(area.width);
             this.viewportHeight = Number(area.height);
+            this.clampTranslation(this.offsetX, this.offsetY, this.zoom);
           })
           .onClick((event: ClickEvent): void => { this.closeIfOutside(event.x, event.y); })
       } else if (this.loading) {

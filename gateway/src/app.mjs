@@ -26,7 +26,7 @@ const normalizedNotificationLevels = value => Object.fromEntries(Object.entries(
 const cookie = req => /(?:^|;\s*)pocket=([A-Za-z0-9_-]{43})(?:;|$)/.exec(req.headers.cookie || '')?.[1];
 const SESSION_TTL = 30 * 86400000;
 
-export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'passkey', allowNoAuth = false, bootstrapSecret, eventSecret, pushConfigured = false, proxySecret, authOrigin = '', hostAuthenticate }) {
+export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'passkey', allowNoAuth = false, bootstrapSecret, eventSecret, pushConfigured = false, pluginVersion = '', proxySecret, authOrigin = '', hostAuthenticate }) {
   const publicURL = new URL(origin);
   const target = new URL(upstream);
   if (!(publicURL.protocol === 'https:' || (mode === 'host' && publicURL.protocol === 'http:')) || publicURL.origin !== origin) throw Error('PUBLIC_ORIGIN must be an HTTPS origin');
@@ -36,6 +36,8 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   db.exec('CREATE TABLE IF NOT EXISTS host_revocations(id TEXT PRIMARY KEY, expires INTEGER NOT NULL)');
   if (!eventSecret || eventSecret.length < 32) throw Error('EVENT_SECRET must have at least 32 characters');
   if (mode === 'passkey' && (!bootstrapSecret || bootstrapSecret.length < 32)) throw Error('BOOTSTRAP_SECRET must have at least 32 characters');
+  const reportedPluginVersion = typeof pluginVersion === 'string' &&
+    /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/.test(pluginVersion) ? pluginVersion : '';
   const attest = mode === 'proxy' ? proxyAuthentication(proxySecret, db) : null;
   let proxyUpstreamCookie = '';
   const upstreamCredential = () => typeof upstreamCookie === 'function' ? upstreamCookie() : mode === 'proxy' ? proxyUpstreamCookie : upstreamCookie;
@@ -129,6 +131,7 @@ export function createApp({ db, origin, upstream, upstreamCookie = '', mode = 'p
   });
   app.get('/pocket/api/state', (req, res) => {
     res.json({ mode, authenticated: authenticated(req), registered: mode === 'proxy' || !!db.prepare('SELECT id FROM credentials LIMIT 1').get(), pushConfigured,
+      pluginVersion: reportedPluginVersion,
       ...(mode === 'proxy' ? { authOrigin } : {}) });
   });
   app.post('/pocket/api/auth/none', (req, res) => {

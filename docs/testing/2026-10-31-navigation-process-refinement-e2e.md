@@ -31,6 +31,8 @@ Status: pending device execution.
 | PROC-05 | Expand a `工作过程` group with several operations | A bounded inner scroll region may occupy up to 60% of the transcript viewport without expanding the full page | Pending |
 | IMG-01 | Expand a tool result containing an image and tap its thumbnail | App-level lightbox opens with the authenticated image and a close control | Pending |
 | IMG-02 | Pinch and double-tap inside the image lightbox, then press system Back | Content zooms, double tap resets, and Back closes the lightbox before chat navigation | Pending |
+| IMG-09 | Pinch to enlarge an image, drag around the enlarged image, release, then pause | The image stays enlarged and translated; the release does not trigger an outside-tap close or reset zoom | Pending |
+| IMG-10 | Repeat pinch gestures after an initial zoom and drag in all directions | Each pinch multiplies the current scale, translation follows the focus point, and panning stops at image bounds | Pending |
 | IMG-05 | Open the image lightbox in both theme modes | Close control remains below the status-bar boundary with a consistent compact top inset | Pending |
 | IMG-03 | Expand a `read_image` operation with one image | Only the small left-aligned thumbnail is shown; no raw arguments, path metadata or text output appears | Pending |
 | IMG-04 | Expand a `read_image` operation with multiple images | Thumbnails wrap into multiple leading-aligned rows as needed and each opens the matching lightbox image | Pending |
@@ -61,6 +63,7 @@ Status: pending device execution.
 | FILE-06 | Tap each of several valid file and folder links in one transcript message | Every tapped link resolves independently and opens its matching root-level preview/browser | Pending |
 | SET-05 | Open `设置 > 服务与账户` | The `当前服务` label and service address align to the leading edge | Pending |
 | SET-06 | Open interface mode, dismiss it, then open it again without leaving the service page | The sheet opens on every attempt and closes cleanly by outside tap, close control or selection | Pending |
+| SET-07 | Open `设置 > DSH 设置` against plugin 0.3.5 | The page shows `插件版本 0.3.5` in a compact read-only row; an older Host without the field shows `未报告` | Pending |
 | AUTH-01 | Tap logout, dismiss the confirmation, then confirm logout | Cancel keeps the session; confirmation clears auth/caches and returns to login | Pending |
 | AUTH-02 | Complete logout and inspect the login address field | The previous service address is prefilled and can be reused without retyping | Pending |
 | NAV-11 | Authenticate on a phone with no selected conversation | The session drawer opens automatically after authentication and exposes the current sessions | Pending |

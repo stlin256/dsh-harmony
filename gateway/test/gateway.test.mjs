@@ -60,6 +60,16 @@ test('Host/Origin checks, authentication and launch-token isolation', async t =>
   assert.equal((await call('/pocket/api/events', { id: 'evt', sessionId: 'session', code: 'run.completed' })).status, 401);
 });
 
+test('gateway state reports only a bounded plugin version', async t => {
+  const valid = await fixture(t, { pluginVersion: '0.3.5' });
+  const state = await valid.call('/pocket/api/state');
+  assert.equal(state.status, 200);
+  assert.equal((await state.json()).pluginVersion, '0.3.5');
+
+  const invalid = await fixture(t, { pluginVersion: 'not a version\nheader' });
+  assert.equal((await (await invalid.call('/pocket/api/state')).json()).pluginVersion, '');
+});
+
 test('real ES256 Passkey registration, login, wrong origin and replay rejection', async t => {
   const { db, call } = await fixture(t);
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });

@@ -4,6 +4,7 @@ import https from 'node:https';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { writeFileSync, chmodSync, renameSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createApp } from '../../gateway/src/app.mjs';
 import { openStore } from '../../gateway/src/store.mjs';
 import { createPushSender, flushJobs } from '../../gateway/src/push.mjs';
@@ -11,6 +12,7 @@ import { routingEvent } from '../pocket-notify/index.mjs';
 
 export const name = 'dsh-harmony';
 export const inject = ['webServer', 'connection'];
+const pluginVersion = createRequire(import.meta.url)('./package.json').version;
 
 /** Native mode uses Harness's public signed-cookie and launch-token API. */
 export function hostIdentity(connection, req) {
@@ -65,7 +67,7 @@ export function apply(ctx, options = {}) {
     if (!apps.has(key)) {
       if (apps.size >= 32) throw Error('Too many deployment origins');
       apps.set(key, createApp({ db, origin, upstream, upstreamCookie: cookieFor, mode, eventSecret,
-        pushConfigured: !!send, proxySecret: process.env.DSH_HARMONY_PROXY_SECRET,
+        pushConfigured: !!send, pluginVersion, proxySecret: process.env.DSH_HARMONY_PROXY_SECRET,
         authOrigin: process.env.DSH_HARMONY_AUTH_ORIGIN || '', hostAuthenticate: req => hostIdentity(ctx.connection, req) }));
     }
     return apps.get(key);

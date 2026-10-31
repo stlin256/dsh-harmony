@@ -157,6 +157,16 @@ publishes the same serializable lightbox request as larger message images. The
 strip itself does not own a `bindContentCover`, so wrapping and nested process
 disclosures cannot trap the lightbox in a local presentation layer.
 
+Zoom state includes scale plus translation. Pinch scale is relative to the scale
+at pinch start, so a second pinch never restarts from one-times scale. The pinch
+focus adjusts translation around the focal point. A one-finger pan records the
+translation at drag start, applies the gesture's cumulative offset, and clamps
+the result to the scaled image bounds. Pinch and pan recognizers run in parallel.
+The lightbox suppresses the synthetic click that follows a pan or pinch, which
+prevents a drag release from being interpreted as an outside tap. Deliberate
+double-tap resets scale and translation together. An actual tap outside the
+translated, scaled image still closes the lightbox.
+
 Scrollable process bodies reserve a trailing content gutter for platform
 scrollbars. The gutter belongs to the inside of the detail surface, so text,
 images and action rows retain the card's visual left edge while ending before
@@ -273,6 +283,16 @@ caches. It then resets the in-memory client and surfaces to the login state.
 The normalized public origin is deliberately retained in both preferences and
 the login address field for the next connection attempt; credentials, access
 keys and scoped caches are still cleared.
+
+## DSH plugin version
+
+`createApp` owns the gateway state envelope. The plugin passes the version read
+from its own packaged `package.json`, and `/pocket/api/state` returns it as an
+optional, length-bounded `pluginVersion` string. The native `GatewayState`
+retains that field. `NativeSettings` refreshes it together with the DSH settings
+tree and renders a compact read-only `插件版本` row above the transcript
+settings. A missing field from an older plugin displays `未报告`; an ordinary
+connection failure does not fabricate a version.
 
 ## Empty-workspace drawer entry
 

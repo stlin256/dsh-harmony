@@ -17,6 +17,7 @@ export class GatewayState {
   authOrigin: string = '';
   authenticated: boolean = false;
   pushConfigured: boolean = false;
+  pluginVersion: string = '';
 }
 export class NativeImageDraft { id: string = ''; name: string = ''; mediaType: string = ''; data: string = ''; }
 export class NativeAttachmentDraft {

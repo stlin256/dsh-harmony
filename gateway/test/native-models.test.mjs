@@ -977,6 +977,27 @@ test('composer source contract uses intrinsic model width and native image/file 
   assert.match(clientSource,/profile=background/);
 });
 
+test('lightbox zoom keeps translation and does not treat drag release as a background tap', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeImageLightbox.ets', import.meta.url),'utf8');
+  assert.match(source,/GestureGroup\(GestureMode\.Parallel/);
+  assert.match(source,/this\.pinchStartZoom \* event\.scale/);
+  assert.match(source,/this\.panStartOffsetX \+ event\.offsetX/);
+  assert.match(source,/\.translate\(\{ x: this\.offsetX, y: this\.offsetY \}\)/);
+  assert.match(source,/Date\.now\(\) < this\.suppressClickUntil/);
+  assert.match(source,/this\.offsetX = 0;[\s\S]{0,80}this\.offsetY = 0;/);
+});
+
+test('DSH settings source consumes and displays the connected plugin version', () => {
+  const settings=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeSettings.ets', import.meta.url),'utf8');
+  const client=readFileSync(new URL('../../harmony/entry/src/main/ets/services/NativeHarnessClient.ets', import.meta.url),'utf8');
+  const plugin=readFileSync(new URL('../../plugins/dsh-harmony/index.mjs', import.meta.url),'utf8');
+  assert.match(client,/pluginVersion: string = ''/);
+  assert.match(settings,/this\.pluginVersion = state\.pluginVersion/);
+  assert.match(settings,/Text\('插件版本'\)/);
+  assert.match(settings,/this\.pluginVersion \? 'v' \+ this\.pluginVersion : '未报告'/);
+  assert.match(plugin,/createRequire\(import\.meta\.url\)\('\.\/package\.json'\)\.version/);
+});
+
 test('UI mode preference persists and JavaScript cannot switch it from another origin', async () => {
   const {preferences,disk}=storage();
   const state=new Map();
