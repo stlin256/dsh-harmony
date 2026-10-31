@@ -12,6 +12,13 @@ const storeCapabilities = readFileSync(
   join(root, 'harmony/entry/src/store/ProductCapabilities.ets'),
   'utf8',
 );
+const appConfig = readFileSync(join(root, 'harmony/AppScope/app.json5'), 'utf8');
+const layeredImage = JSON.parse(
+  readFileSync(
+    join(root, 'harmony/AppScope/resources/base/media/app_layered_image.json'),
+    'utf8',
+  ),
+);
 const fido = 'ohos.permission.ACCESS_FIDO2_ONLINEAUTH';
 const failures = [];
 
@@ -31,6 +38,20 @@ if (!/supportsPasskey:\s*boolean\s*=\s*true/.test(personalCapabilities)) {
 }
 if (!/supportsPasskey:\s*boolean\s*=\s*false/.test(storeCapabilities)) {
   failures.push('store product must not advertise Passkey support');
+}
+if (!appConfig.includes('"icon": "$media:app_layered_image"')) {
+  failures.push('app config must reference the layered launcher icon');
+}
+for (const manifest of [mainManifest, storeManifest]) {
+  if (!manifest.includes('"icon": "$media:app_layered_image"')) {
+    failures.push('entry Ability must reference the layered launcher icon');
+  }
+}
+if (
+  layeredImage['layered-image']?.foreground !== '$media:app_icon_foreground' ||
+  layeredImage['layered-image']?.background !== '$media:app_icon_background'
+) {
+  failures.push('layered icon must reference its foreground and background PNGs');
 }
 
 if (failures.length) {

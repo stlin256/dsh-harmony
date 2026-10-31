@@ -87,6 +87,12 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-store-acl-variant.md](docs/specs/2026-10-31-store-acl-variant.md)
 - AppGallery ACL-safe store variant E2E:
   [2026-10-31-store-acl-variant-e2e.md](docs/testing/2026-10-31-store-acl-variant-e2e.md)
+- AppGallery layered icon requirement:
+  [2026-10-31-store-layered-icon.md](docs/requirements/2026-10-31-store-layered-icon.md)
+- AppGallery layered icon implementation spec:
+  [2026-10-31-store-layered-icon.md](docs/specs/2026-10-31-store-layered-icon.md)
+- AppGallery layered icon E2E:
+  [2026-10-31-store-layered-icon-e2e.md](docs/testing/2026-10-31-store-layered-icon-e2e.md)
 - Chat controls and drawer requirement:
   [2026-10-31-chat-controls-refinement.md](docs/requirements/2026-10-31-chat-controls-refinement.md)
 - Chat controls and drawer implementation spec:
