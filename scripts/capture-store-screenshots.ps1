@@ -44,15 +44,9 @@ if (-not $Device) {
 
 $env:DEVECO_CLI_STUDIO_PATH = $DevEcoHome
 if (-not $SkipBuild) {
-  Push-Location (Join-Path $repo 'harmony')
-  try {
-    devecocli build --product store --build-mode release
-    if ($LASTEXITCODE -ne 0) {
-      throw "Store Release build failed: $LASTEXITCODE"
-    }
-  }
-  finally {
-    Pop-Location
+  & (Join-Path $PSScriptRoot 'build-harmony.ps1') -DevEcoHome $DevEcoHome -Product store -BuildMode release -AssembleApp
+  if ($LASTEXITCODE -ne 0) {
+    throw "Store Release build failed: $LASTEXITCODE"
   }
 }
 $hap = (Resolve-Path -LiteralPath $HapPath).Path

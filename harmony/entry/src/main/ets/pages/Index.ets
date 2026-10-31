@@ -18,6 +18,7 @@ import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
 import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 import { NativeMotion } from '../services/NativeMotion';
 import { StoreShowcaseClient } from '../services/StoreShowcaseClient';
+import { ProductCapabilities } from 'entry/ProductCapabilities';
 
 @Entry
 @Component
@@ -92,7 +93,12 @@ struct Index {
     const savedMode = this.store.getSync('uiMode', 'compatibility') as string;
     this.uiMode = savedMode === 'native' ? 'native' : 'compatibility';
     this.address = this.store.getSync('origin', '') as string;
-    this.mode = this.store.getSync('mode', 'native') === 'passkey' ? 'passkey' : 'native';
+    const savedLoginMode = this.store.getSync('mode', 'native') as string;
+    this.mode = ProductCapabilities.supportsPasskey && savedLoginMode === 'passkey' ? 'passkey' : 'native';
+    if (!ProductCapabilities.supportsPasskey && savedLoginMode === 'passkey') {
+      this.store.putSync('mode', 'native');
+      await this.store.flush();
+    }
     if (this.normalize(this.address)) await this.connect();
   }
 
@@ -107,6 +113,7 @@ struct Index {
   private async connect(): Promise<void> {
     const next = this.normalize(this.address);
     if (!next) { this.error = '请输入有效的服务地址'; return; }
+    if (!ProductCapabilities.supportsPasskey && this.mode === 'passkey') this.mode = 'native';
     if (this.mode === 'passkey' && !next.startsWith('https://')) { this.error = 'Passkey 登录需要 HTTPS'; return; }
     this.busy = true;
     try {
@@ -523,12 +530,14 @@ struct Index {
                 .height(48).borderRadius(12).backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
                 .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115').onChange((value: string) => { this.accessKey = value; })
             }
-            Button((this.mode === 'passkey' ? '✓  ' : '') + 'Pocket ID · Passkey', { type: ButtonType.Normal })
-              .height(48).borderRadius(12).fontSize(14)
-              .backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
-              .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-              .border({ width: 1, color: this.mode === 'passkey' ? '#ADB2B8' : Color.Transparent })
-              .width('100%').onClick(() => { this.mode = 'passkey'; this.accessKey = ''; })
+            if (ProductCapabilities.supportsPasskey) {
+              Button((this.mode === 'passkey' ? '✓  ' : '') + 'Pocket ID · Passkey', { type: ButtonType.Normal })
+                .height(48).borderRadius(12).fontSize(14)
+                .backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
+                .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
+                .border({ width: 1, color: this.mode === 'passkey' ? '#ADB2B8' : Color.Transparent })
+                .width('100%').onClick(() => { this.mode = 'passkey'; this.accessKey = ''; })
+            }
             Button(this.busy ? '正在连接…' : '连接工作空间', { type: ButtonType.Normal })
               .height(48).borderRadius(12).fontSize(14).width('100%').enabled(!this.busy)
               .backgroundColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
