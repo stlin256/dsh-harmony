@@ -263,6 +263,62 @@ test('native session reducer restores streams, deduplicates replay and replaces 
   assert.equal(model.messages.length,2);
 });
 
+test('latest DSH stream keeps dense revisions, durable gaps and committed settlement', () => {
+  const {NativeSessionModel}=load('NativeSessionModel',{});
+  const normalized=normalizeFollow({type:'assistant-stream',frame:{type:'start',attemptId:'attempt',
+    revision:1,startedAfterSeq:0,turn:2,step:3}});
+  assert.deepEqual(normalized,{type:'start',attemptId:'attempt',nextIndex:0,revision:1,
+    startedAfterSeq:0,turn:2,step:3});
+  const ended=normalizeFollow({type:'assistant-stream',frame:{type:'end',attemptId:'attempt',
+    revision:3,index:1,outcome:{kind:'committed',eventType:'assistant/message',seq:2}}});
+  assert.deepEqual(ended,{type:'end',attemptId:'attempt',revision:3,index:1,
+    outcomeKind:'committed',committedEventType:'assistant/message',committedSeq:2});
+
+  const model=new NativeSessionModel();
+  model.apply({type:'snapshot',cursor:0,messages:[],attemptId:'attempt',nextIndex:1,
+    revision:2,text:'partial',reasoning:''});
+  model.apply({type:'delta',attemptId:'attempt',revision:3,index:1,text:' answer',reasoning:''});
+  model.apply({type:'end',attemptId:'attempt',revision:4,index:2,outcomeKind:'committed',
+    committedEventType:'assistant/message',committedSeq:2});
+  assert.equal(model.streamText,'partial answer','committed end must retain partial until durable settlement');
+  assert.equal(model.settlementPending(),true);
+  model.apply({type:'event',seq:1,replaceStart:-1,replaceEnd:-1,
+    message:{id:'event-1',seq:1,role:'tool',eventType:'tool/result',text:'tool'}});
+  assert.equal(model.streamText,'partial answer');
+  model.apply({type:'event',seq:2,replaceStart:-1,replaceEnd:-1,
+    message:{id:'event-2',seq:2,role:'assistant',eventType:'assistant/message',text:'partial answer'}});
+  assert.equal(model.settlementPending(),false);
+  assert.equal(model.streamText,'');
+
+  const gap=new NativeSessionModel();
+  gap.apply({type:'snapshot',cursor:4,messages:[],attemptId:'',nextIndex:0,revision:0});
+  assert.throws(()=>gap.apply({type:'event',seq:6,replaceStart:-1,replaceEnd:-1,
+    message:{id:'event-6',seq:6,text:'gap'},journal:[{seq:6,raw:'{}'}]}),/Stream gap/);
+  assert.equal(gap.journal.has(6),false,'a rejected gap must not enter the durable journal');
+  gap.apply({type:'start',attemptId:'a',revision:1,nextIndex:0});
+  assert.throws(()=>gap.apply({type:'delta',attemptId:'a',revision:3,index:0,text:'gap'}),
+    /Stream gap/);
+});
+
+test('committed settlement survives cache restoration until the durable event arrives', () => {
+  const { NativeSessionModel } = load('NativeSessionModel', {});
+  const model = new NativeSessionModel();
+  model.apply({type:'snapshot',cursor:0,messages:[{id:'event-0',seq:0,text:'seed'}],
+    attemptId:'attempt',nextIndex:1,revision:2,text:'partial'});
+  model.apply({type:'end',attemptId:'attempt',revision:3,index:1,outcomeKind:'committed',
+    committedEventType:'assistant/message',committedSeq:1});
+  assert.equal(model.settlementPending(),true);
+  const restored = new NativeSessionModel();
+  restored.restore(model.capture());
+  assert.equal(restored.settlementPending(),true);
+  assert.equal(restored.streamText,'partial');
+  restored.apply({type:'event',seq:1,replaceStart:-1,replaceEnd:-1,
+    message:{id:'event-1',seq:1,role:'assistant',eventType:'assistant/message',text:'durable answer'}});
+  assert.equal(restored.settlementPending(),false);
+  assert.equal(restored.streamText,'');
+  assert.equal(restored.messages.at(-1).text,'durable answer');
+});
+
 test('file windows derive exact EOF when HarmonyOS omits the custom header', () => {
   const { nativeFileWindowMetadata } = load('NativeFileWindow', {});
   const small = nativeFileWindowMetadata('version-a', 280 * 1024, 0, 280 * 1024, 2 * 1024 * 1024);
@@ -838,7 +894,7 @@ test('native transport shares only gateway cookies, disables redirects and never
   const network = { http: { RequestMethod: { GET:'GET',POST:'POST' }, HttpDataType:{STRING:'string'}, createHttp:()=>({
     on(event, callback) { this[event] = callback; },
     async requestInStream(url, options) { calls.push({url,options}); const encoded = new TextEncoder().encode(streamBody); this.dataReceive(encoded.buffer); this.dataEnd(); return code; },
-    async request(url, options) { calls.push({url,options}); return {responseCode:code,header:{'set-cookie':'pocket='+'b'.repeat(43)+'; Path=/; Secure; HttpOnly'},result:'{}'}; }, destroy(){} }) },
+    async request(url, options) { calls.push({url,options}); return {responseCode:code,header:{'set-cookie':'pocket='+'b'.repeat(43)+'; Path=/; Secure; HttpOnly'},result:streamBody}; }, destroy(){} }) },
     webSocket:{createWebSocket:()=>{made++;return socket;}} };
   const {NativeHarnessClient}=load('NativeHarnessClient',{
     '@kit.NetworkKit':network,'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookie:()=>cookie,configCookie:async(...args)=>configured.push(args),saveCookieAsync:async()=>{}}}},
@@ -869,6 +925,24 @@ test('native transport shares only gateway cookies, disables redirects and never
   await assert.rejects(()=>client.prompt('session','hello'));
   assert.equal(client.uncertain.has('session'),false,'a gateway authentication rejection never admitted the prompt');
   await assert.rejects(()=>client.request('/pocket/api/../../other'));
+  code=200;
+  streamBody=JSON.stringify({ok:true,value:{receiptId:'receipt-one',file:{attachmentId:'a',name:'note.txt',bytes:4}}});
+  const uploaded=await client.uploadAttachment('session','note.txt',new Uint8Array([1,2,3,4]));
+  assert.equal(uploaded.receiptId,'receipt-one');
+  assert.match(calls.at(-1).url,/\/pocket\/api\/native\/upload\?sessionId=session&name=note\.txt$/);
+  assert.ok(calls.at(-1).options.extraData instanceof ArrayBuffer);
+  streamBody='{}';
+  const {NativeAttachmentDraft}=load('NativeHarnessClient',{
+    '@kit.NetworkKit':network,'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookie:()=>cookie,configCookie:async()=>{},saveCookieAsync:async()=>{}}}},
+    '@kit.ArkTS':{util:{generateRandomUUID:()=> 'request-id',TextDecoder:{create:()=>({decodeToString: buffer => new TextDecoder().decode(buffer)})}}},
+    '@kit.BasicServicesKit':{},'./NativeSessionModel':{}
+  });
+  const ready=new NativeAttachmentDraft();ready.status='ready';ready.receiptId='receipt-one';
+  const uploading=new NativeAttachmentDraft();uploading.status='uploading';
+  await client.prompt('session','hello','queue',[ready,uploading]);
+  const prompt=JSON.parse(calls.at(-1).options.extraData);
+  assert.deepEqual(prompt.attachments,[{type:'file',receiptId:'receipt-one'}],
+    'only ready receipts may reach prompt content');
   let release;
   cookie=new Promise(resolve=>{release=resolve;});
   const pending=client.follow('session',()=>{},()=>{});
@@ -880,6 +954,21 @@ test('native transport shares only gateway cookies, disables redirects and never
   const old=socketCallbacks.get('message');
   client.pause();old(null,JSON.stringify({type:'state',running:true}));
   assert.equal(delivered,0,'retired socket callbacks must not update the new interface');
+});
+
+test('composer source contract uses intrinsic model width and native image/file actions', () => {
+  const source=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeWorkspace.ets', import.meta.url),'utf8');
+  const clientSource=readFileSync(new URL('../../harmony/entry/src/main/ets/services/NativeHarnessClient.ets', import.meta.url),'utf8');
+  assert.match(source,/enableArrow:\s*false/);
+  assert.doesNotMatch(source,/Text\(this\.modelCaption\)[^\n]*layoutWeight\(1\)/);
+  assert.match(source,/accessibilityText\(this\.attaching \? '读取中' : '添加图片'\)/);
+  assert.match(source,/accessibilityText\('添加文件'\)[\s\S]{0,180}onClick\(\(\)\s*=>\s*\{\s*this\.attachFiles\(\);/);
+  assert.doesNotMatch(source,/accessibilityText\('更多附件'\)\s*[\s\S]{0,120}\.onClick\(this\.onCompatibility\)/);
+  assert.match(source,/symbol|glyph: 'image-outline'/);
+  assert.match(source,/glyph: 'file-outline'/);
+  assert.match(source,/const deadline = this\.active \? 15000 : 45000/);
+  assert.match(source,/background \? 45000 : 20000/);
+  assert.match(clientSource,/profile=background/);
 });
 
 test('UI mode preference persists and JavaScript cannot switch it from another origin', async () => {

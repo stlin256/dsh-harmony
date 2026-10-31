@@ -114,8 +114,12 @@ export function normalizeFollow(frame) {
     const history = normalizedHistory(frame.records);
     const active = frame.assistantStream?.activeAttempt;
     return { type: 'snapshot', ...history, cursor: frame.cursor, hasMore: frame.hasMore === true, beforeSeq: frame.records?.[0]?.event?.seq ?? 0,
-
-      attemptId: active?.attemptId || '', nextIndex: active?.nextIndex || 0, ...compactText(active?.stream) };
+      attemptId: active?.attemptId || '', nextIndex: active?.nextIndex || 0,
+      revision: Number.isSafeInteger(frame.assistantStream?.revision) ? frame.assistantStream.revision : 0,
+      startedAfterSeq: Number.isSafeInteger(active?.startedAfterSeq) ? active.startedAfterSeq : -1,
+      turn: Number.isSafeInteger(active?.turn) ? active.turn : -1,
+      step: Number.isSafeInteger(active?.step) ? active.step : -1,
+      ...compactText(active?.stream) };
   }
   if (frame?.type === 'event') {
     const op = frame.event?.surfaceOp;
@@ -125,12 +129,22 @@ export function normalizeFollow(frame) {
   }
   if (frame?.type === 'assistant-stream') {
     const item = frame.frame;
-    if (item?.type === 'start') return { type: 'start', attemptId: item.attemptId, nextIndex: 0 };
-    if (item?.type === 'chunk') return { type: 'delta', attemptId: item.attemptId, index: item.index,
+    if (item?.type === 'start') return { type: 'start', attemptId: item.attemptId, nextIndex: 0,
+      ...(Number.isSafeInteger(item.revision) ? { revision: item.revision } : {}),
+      ...(Number.isSafeInteger(item.startedAfterSeq) ? { startedAfterSeq: item.startedAfterSeq } : {}),
+      ...(Number.isSafeInteger(item.turn) ? { turn: item.turn } : {}),
+      ...(Number.isSafeInteger(item.step) ? { step: item.step } : {}) };
+    if (item?.type === 'chunk') return { type: 'delta', attemptId: item.attemptId,
+      ...(Number.isSafeInteger(item.revision) ? { revision: item.revision } : {}), index: item.index,
       text: item.chunk?.type === 'text-delta' ? fullText(item.chunk.text) : '',
       reasoning: item.chunk?.type === 'reasoning-delta' ? fullText(item.chunk.text) : '',
       ...(toolUpdate(item.chunk) ? { toolUpdates: [toolUpdate(item.chunk)] } : {}) };
-    if (item?.type === 'end') return { type: 'end', attemptId: item.attemptId };
+    if (item?.type === 'end') return { type: 'end', attemptId: item.attemptId,
+      ...(Number.isSafeInteger(item.revision) ? { revision: item.revision } : {}),
+      ...(Number.isSafeInteger(item.index) ? { index: item.index } : {}),
+      outcomeKind: item.outcome?.kind || '',
+      committedEventType: item.outcome?.eventType || '',
+      committedSeq: Number.isSafeInteger(item.outcome?.seq) ? item.outcome.seq : -1 };
   }
   return null;
 }

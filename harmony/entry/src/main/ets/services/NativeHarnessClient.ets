@@ -19,6 +19,13 @@ export class GatewayState {
   pushConfigured: boolean = false;
 }
 export class NativeImageDraft { id: string = ''; name: string = ''; mediaType: string = ''; data: string = ''; }
+export class NativeAttachmentDraft {
+  id: string = ''; kind: string = ''; name: string = ''; mediaType: string = '';
+  uri: string = ''; status: string = 'uploading'; receiptId: string = ''; error: string = '';
+  retryable: boolean = true; bytes: number = 0; data: Uint8Array = new Uint8Array();
+}
+export class NativeUploadResult { receiptId: string = ''; }
+export class NativePromptAttachment { type: string = 'file'; receiptId: string = ''; }
 export class NativeCreatedSession { id: string = ''; }
 export class NativeFilePage {
   absolutePath: string = ''; version: string = ''; text: string = '';
@@ -79,6 +86,7 @@ export class NativeHarnessClient {
   private browsePaths: Map<string, string> = new Map<string, string>();
   private fileLookups: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
+  readonly attachments: Map<string, NativeAttachmentDraft[]> = new Map<string, NativeAttachmentDraft[]>();
   readonly drafts: Map<string, string> = new Map<string, string>();
   readonly uncertain: Set<string> = new Set<string>();
   /** In-memory only: retain visible chat history across session switches and settings. */
@@ -109,7 +117,7 @@ export class NativeHarnessClient {
 
   async request(path: string, method: http.RequestMethod = http.RequestMethod.GET, body: string = ''): Promise<string> {
     // Fixed root-owned endpoints only; no credentials in URLs or redirect hops.
-    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|file(?:\/(?:stat|list|bytes))?|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
+    if (!/^\/pocket\/api\/(?:state|overview|logout|device|auth\/(?:none|native)|native\/(?:sessions|workspaces|create|page|upload|file(?:\/(?:stat|list|bytes))?|prompt|cancel|operation|answer))$/.test(path)) throw new Error('Unsupported endpoint');
     const task = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
@@ -356,11 +364,41 @@ export class NativeHarnessClient {
       return metadata;
     } finally { task.destroy(); }
   }
-  async prompt(id: string, text: string, mode: string = 'queue', images: NativeImageDraft[] = []): Promise<void> {
+  async uploadAttachment(id: string, name: string, data: Uint8Array, mediaType: string = ''): Promise<NativeUploadResult> {
+    if (!/^[A-Za-z0-9_-]{1,160}$/.test(id) || !name || name.length > 512) throw new Error('Invalid upload');
+    const query = '?sessionId=' + encodeURIComponent(id) + '&name=' + encodeURIComponent(name) +
+      (mediaType ? '&mediaType=' + encodeURIComponent(mediaType) : '');
+    const task = http.createHttp();
+    try {
+      const response = await task.request(this.origin + '/pocket/api/native/upload' + query, {
+        method: http.RequestMethod.POST,
+        header: { 'Content-Type': 'application/octet-stream', Origin: this.origin, Cookie: await this.cookie() },
+        extraData: data.buffer as ArrayBuffer,
+        expectDataType: http.HttpDataType.STRING, usingCache: false,
+        maxRedirects: 0, connectTimeout: 10000, readTimeout: 120000
+      });
+      if (response.responseCode < 200 || response.responseCode >= 300) throw new NativeHttpError(response.responseCode);
+      const envelope = JSON.parse(response.result as string) as Record<string, Object>;
+      if (envelope.ok !== true) throw new Error('附件上传失败');
+      const value = envelope.value as Record<string, Object> | undefined;
+      if (!value || typeof value.receiptId !== 'string' || !value.receiptId) throw new Error('附件上传失败');
+      const result = new NativeUploadResult();
+      result.receiptId = value.receiptId;
+      return result;
+    } finally { task.destroy(); }
+  }
+
+  async prompt(id: string, text: string, mode: string = 'queue', attachments: NativeAttachmentDraft[] = []): Promise<void> {
     this.uncertain.add(id);
+    const ready = attachments.filter((item: NativeAttachmentDraft): boolean =>
+      item.status === 'ready' && !!item.receiptId).map((item: NativeAttachmentDraft): NativePromptAttachment => {
+      const prompt = new NativePromptAttachment();
+      prompt.receiptId = item.receiptId;
+      return prompt;
+    });
     try {
       await this.request('/pocket/api/native/prompt', http.RequestMethod.POST,
-        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode, images: images }));
+        JSON.stringify({ sessionId: id, requestId: util.generateRandomUUID(), text: text, mode: mode, attachments: ready }));
     } catch (error) {
       if (error instanceof NativeHttpError && error.status >= 400 && error.status < 500) this.uncertain.delete(id);
       throw new Error(error instanceof Error ? error.message : String(error));
@@ -406,11 +444,12 @@ export class NativeHarnessClient {
   }
   clearLocalState(): void {
     this.modelDirectory.clear();
-    this.models.clear(); this.drafts.clear(); this.images.clear(); this.uncertain.clear();
+    this.models.clear(); this.drafts.clear(); this.images.clear(); this.attachments.clear(); this.uncertain.clear();
     this.pageReads.clear(); this.sessionCwds.clear(); this.browsePaths.clear();
     this.fileLookups.clear(); this.selectedId = '';
   }
-  async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void): Promise<void> {
+  async follow(id: string, receive: (frame: NativeFrame) => void, ended: (reason: string) => void,
+    background: boolean = false): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) throw new Error('Invalid session');
     this.pause();
     const generation = this.generation;
@@ -419,7 +458,7 @@ export class NativeHarnessClient {
     const socket = webSocket.createWebSocket(); this.socket = socket;
     let finished: boolean = false;
     let opened: boolean = false;
-    const openingTimer = setTimeout(() => { finish('open_timeout'); }, 20000);
+    const openingTimer = setTimeout(() => { finish('open_timeout'); }, background ? 45000 : 20000);
     const finish = (reason: string): void => {
       if (generation !== this.generation || finished) return;
       finished = true; clearTimeout(openingTimer); socket.close().catch(() => {}); ended(reason);
@@ -448,7 +487,9 @@ export class NativeHarnessClient {
     socket.on('error', (error: BusinessError): void => { finish('socket_error_' + error.code); });
     const socketOrigin = this.origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
     try {
-      const created = await socket.connect(socketOrigin + '/pocket/native/live?sessionId=' + encodeURIComponent(id),
+      const profile = background ? '&profile=background' : '';
+      const created = await socket.connect(socketOrigin + '/pocket/native/live?sessionId=' +
+        encodeURIComponent(id) + profile,
         { header: { cookie: cookie }, supportOriginPort: true });
       if (!created) finish('connect_rejected');
     } catch (_) { finish('connect_error'); }

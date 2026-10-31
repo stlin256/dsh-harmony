@@ -251,8 +251,15 @@ export class NativeFrame {
   beforeSeq: number = 0;
   hasMore: boolean = false;
   attemptId: string = '';
+  revision: number = 0;
+  startedAfterSeq: number = -1;
+  turn: number = -1;
+  step: number = -1;
   nextIndex: number = 0;
   index: number = 0;
+  outcomeKind: string = '';
+  committedEventType: string = '';
+  committedSeq: number = -1;
   text: string = '';
   reasoning: string = '';
   replaceStart: number = -1;
@@ -283,6 +290,10 @@ export class NativeSessionCacheRecord {
   streamText: string = '';
   streamReasoning: string = '';
   attemptId: string = '';
+  streamRevision: number = 0;
+  settlementAttemptId: string = '';
+  settlementSeq: number = -1;
+  settlementEventType: string = '';
   nextIndex: number = 0;
   cursor: number = -1;
   collapseThrough: number = -1;
@@ -306,9 +317,19 @@ export class NativeSessionModel {
   streamText: string = '';
   streamReasoning: string = '';
   private attemptId: string = '';
+  private streamRevision: number = 0;
   private nextIndex: number = 0;
   private cursor: number = -1;
+  private settlementAttemptId: string = '';
+  private settlementSeq: number = -1;
+  private settlementEventType: string = '';
   private replacements: NativeReplacement[] = [];
+
+  settlementPending(): boolean { return this.settlementAttemptId.length > 0; }
+  activityAttemptId(): string { return this.attemptId; }
+  activityRevision(): number { return this.streamRevision; }
+  activityNextIndex(): number { return this.nextIndex; }
+  activityCursor(): number { return this.cursor; }
 
   capture(): NativeSessionCacheRecord {
     const value = new NativeSessionCacheRecord();
@@ -342,6 +363,10 @@ export class NativeSessionModel {
     value.streamText = this.streamText;
     value.streamReasoning = this.streamReasoning;
     value.attemptId = this.attemptId;
+    value.streamRevision = this.streamRevision;
+    value.settlementAttemptId = this.settlementAttemptId;
+    value.settlementSeq = this.settlementSeq;
+    value.settlementEventType = this.settlementEventType;
     value.nextIndex = this.nextIndex;
     value.cursor = this.cursor;
     value.collapseThrough = this.collapseThrough;
@@ -381,6 +406,10 @@ export class NativeSessionModel {
     this.streamText = typeof value.streamText === 'string' ? value.streamText : '';
     this.streamReasoning = typeof value.streamReasoning === 'string' ? value.streamReasoning : '';
     this.attemptId = typeof value.attemptId === 'string' ? value.attemptId : '';
+    this.streamRevision = Number.isSafeInteger(value.streamRevision) ? value.streamRevision : 0;
+    this.settlementAttemptId = typeof value.settlementAttemptId === 'string' ? value.settlementAttemptId : '';
+    this.settlementSeq = Number.isSafeInteger(value.settlementSeq) ? value.settlementSeq : -1;
+    this.settlementEventType = typeof value.settlementEventType === 'string' ? value.settlementEventType : '';
     this.nextIndex = Number.isSafeInteger(value.nextIndex) ? value.nextIndex : 0;
     this.cursor = Number.isSafeInteger(value.cursor) ? value.cursor : -1;
     this.collapseThrough = Number.isSafeInteger(value.collapseThrough) ? value.collapseThrough : -1;
@@ -415,6 +444,10 @@ export class NativeSessionModel {
   }
 
   apply(frame: NativeFrame): void {
+    if (frame.type === 'event') {
+      if (!Number.isSafeInteger(frame.seq) || frame.seq <= this.cursor) return;
+      if (this.cursor >= 0 && frame.seq !== this.cursor + 1) throw new Error('Stream gap');
+    }
     (frame.journal || []).forEach((entry: NativeJournalEntry): void => { this.journal.set(entry.seq, entry.raw); });
     if (frame.type === 'snapshot') {
       // Retain loaded history on foreground/reconnect, applying replacement ranges.
@@ -427,7 +460,9 @@ export class NativeSessionModel {
       this.historyCut = frame.cursor;
       this.cursor = frame.cursor;
       this.attemptId = frame.attemptId || '';
+      this.streamRevision = frame.revision || 0;
       this.nextIndex = frame.nextIndex || 0;
+      this.settlementAttemptId = ''; this.settlementSeq = -1; this.settlementEventType = '';
       this.streamText = frame.text || '';
       this.streamReasoning = frame.reasoning || '';
       this.streamTools = []; this.updateTools(frame.toolUpdates);
@@ -435,7 +470,6 @@ export class NativeSessionModel {
       this.running = frame.running;
       this.waiting = frame.waiting;
     } else if (frame.type === 'event') {
-      if (!Number.isSafeInteger(frame.seq) || frame.seq <= this.cursor) return;
       this.cursor = frame.seq;
       if (frame.replaceStart >= 0 && frame.replaceEnd >= frame.replaceStart) {
         const range = new NativeReplacement(); range.start = frame.replaceStart; range.end = frame.replaceEnd;
@@ -445,22 +479,47 @@ export class NativeSessionModel {
       if (frame.message && this.visible(frame.message)) {
         this.messages = this.messages.concat([frame.message]);
       }
+      if (this.settlementAttemptId &&
+          (frame.seq > this.settlementSeq ||
+           (frame.seq === this.settlementSeq &&
+            (!this.settlementEventType || frame.message?.eventType === this.settlementEventType)))) {
+        this.settlementAttemptId = ''; this.settlementSeq = -1; this.settlementEventType = '';
+        this.streamText = ''; this.streamReasoning = ''; this.streamTools = [];
+      }
     } else if (frame.type === 'start') {
       this.attemptId = frame.attemptId;
+      this.streamRevision = frame.revision || 0;
       this.nextIndex = 0;
+      this.settlementAttemptId = ''; this.settlementSeq = -1; this.settlementEventType = '';
       this.streamText = ''; this.streamReasoning = '';
       this.streamTools = [];
     } else if (frame.type === 'delta') {
       if (frame.attemptId !== this.attemptId) throw new Error('Stream attempt changed');
+      if (frame.revision > 0 && this.streamRevision > 0 && frame.revision !== this.streamRevision + 1) {
+        throw new Error('Stream gap');
+      }
       if (frame.index < this.nextIndex) return;
       if (frame.index !== this.nextIndex) throw new Error('Stream gap');
+      if (frame.revision > 0) this.streamRevision = frame.revision;
       this.nextIndex++;
       this.streamText = this.streamText + (frame.text || '');
       this.streamReasoning = this.streamReasoning + (frame.reasoning || '');
       this.updateTools(frame.toolUpdates);
-    } else if (frame.type === 'end' && frame.attemptId === this.attemptId) {
-      this.attemptId = ''; this.streamText = ''; this.streamReasoning = '';
-      this.streamTools = [];
+    } else if (frame.type === 'end') {
+      if (frame.attemptId !== this.attemptId) throw new Error('Stream attempt changed');
+      if (Number.isSafeInteger(frame.index) && frame.index !== this.nextIndex) throw new Error('Stream gap');
+      if (frame.revision > 0 && this.streamRevision > 0 && frame.revision !== this.streamRevision + 1) {
+        throw new Error('Stream gap');
+      }
+      this.attemptId = '';
+      if (frame.outcomeKind === 'committed' && Number.isSafeInteger(frame.committedSeq) &&
+          frame.committedSeq >= 0 && frame.committedSeq > this.cursor) {
+        this.settlementAttemptId = frame.attemptId;
+        this.settlementSeq = frame.committedSeq;
+        this.settlementEventType = frame.committedEventType;
+      } else {
+        this.streamText = ''; this.streamReasoning = ''; this.streamTools = [];
+      }
     } else if (frame.type === 'error') throw new Error('Native stream unavailable');
   }
 

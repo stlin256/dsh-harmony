@@ -6,7 +6,7 @@ import {
   NativeFilePage,
   NativeFileStat,
   NativeHarnessClient,
-  NativeImageDraft
+  NativeAttachmentDraft
 } from './NativeHarnessClient';
 import {
   NativeFrame,
@@ -400,7 +400,7 @@ export class StoreShowcaseClient extends NativeHarnessClient {
   }
 
   async prompt(_id: string, _text: string, _mode: string = 'queue',
-    _images: NativeImageDraft[] = []): Promise<void> {
+    _attachments: NativeAttachmentDraft[] = []): Promise<void> {
   }
 
   async cancel(_id: string): Promise<void> {

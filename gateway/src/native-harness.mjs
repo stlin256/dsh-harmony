@@ -4,6 +4,12 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { normalizeFollow, normalizedHistory, sessionIdValid } from './native-protocol.mjs';
 
+export function nativeHeartbeatPolicy(profile = 'foreground') {
+  return profile === 'background' ?
+    { intervalMs: 15000, deadlineMs: 45000, openingMs: 45000 } :
+    { intervalMs: 5000, deadlineMs: 20000, openingMs: 30000 };
+}
+
 export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ownerOf }) {
   const credential = () => typeof upstreamCookie === 'function' ? upstreamCookie() : upstreamCookie;
   const connections = new Map();
@@ -254,14 +260,40 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       res.setHeader('X-DSH-File-Window', metadata);
       res.end(Buffer.from(value.data));
     }));
+    app.post('/pocket/api/native/upload', guarded(async (req, res, signal) => {
+      const id = req.query?.sessionId;
+      const name = req.query?.name;
+      const mediaType = req.query?.mediaType;
+      if (!sessionIdValid(id) || typeof name !== 'string' || !name || name.length > 512 ||
+          (mediaType !== undefined && typeof mediaType !== 'string')) return res.sendStatus(400);
+      const url = new URL('/api/session/uploadFileBinary', target);
+      url.searchParams.set('sessionId', id);
+      url.searchParams.set('name', name);
+      if (mediaType) url.searchParams.set('mediaType', mediaType);
+      const response = await fetch(url, {
+        method: 'POST', redirect: 'error', duplex: 'half',
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : AbortSignal.timeout(120000),
+        headers: { 'Content-Type': 'application/octet-stream', Origin: target.origin, Cookie: await credential() },
+        body: Readable.toWeb(req)
+      });
+      const body = await response.text();
+      res.status(response.status).type('application/json').send(body);
+    }));
     app.post('/pocket/api/native/prompt', guarded(async (req, res, signal) => {
       const { sessionId, requestId, text } = req.body || {};
-      if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' || (!text.trim() && !req.body.images?.length)) return res.sendStatus(400);
+      const files = req.body.attachments === undefined ? [] : req.body.attachments;
+      if (!sessionIdValid(sessionId) || !sessionIdValid(requestId) || typeof text !== 'string' ||
+          (!text.trim() && !files.length && !req.body.images?.length)) return res.sendStatus(400);
       if (req.body.mode !== undefined && !['queue', 'steer'].includes(req.body.mode)) return res.sendStatus(400);
+      if (!Array.isArray(files) || !files.every(file =>
+        file?.type === 'file' && typeof file.receiptId === 'string' && file.receiptId.length > 0 && file.receiptId.length <= 4096)) {
+        return res.sendStatus(400);
+      }
       if (req.body.images !== undefined && (!Array.isArray(req.body.images) || !req.body.images.every(image =>
         ['image/png','image/jpeg','image/webp','image/gif'].includes(image?.mediaType) && typeof image.data === 'string' && image.data.length > 0 &&
         (image.name === undefined || typeof image.name === 'string')))) return res.sendStatus(400);
-      const content = [...(text.trim() ? [{ type: 'text', text }] : []), ...(req.body.images || []).map(image => ({ type: 'image',
+      const content = [...files.map(file => ({ type: 'file', receiptId: file.receiptId })),
+        ...(text.trim() ? [{ type: 'text', text }] : []), ...(req.body.images || []).map(image => ({ type: 'image',
         mediaType: image.mediaType, data: image.data, ...(image.name ? { name: image.name } : {}) }))];
       await rpc('prompt', { sessionId, requestId, mode: req.body.mode || 'queue', content }, signal);
       res.json({ accepted: true });
@@ -402,8 +434,11 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
     }));
   }
   async function upgrade(req, socket, head) {
-    const id = new URL(req.url, publicOrigin).searchParams.get('sessionId');
-    if (!sessionIdValid(id)) { socket.destroy(); return; }
+    const query = new URL(req.url, publicOrigin).searchParams;
+    const id = query.get('sessionId');
+    const profile = query.get('profile') || 'foreground';
+    if (!sessionIdValid(id) || !['foreground', 'background'].includes(profile)) { socket.destroy(); return; }
+    const timing = nativeHeartbeatPolicy(profile);
     const cookie = await credential();
     wss.handleUpgrade(req, socket, head, client => {
       const url = new URL('/api/remote.mux', target); url.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -415,11 +450,24 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
       } };
       connections.set(connectionId, connection);
       let alive = true;
+      let upstreamAlive = true;
+      let upstreamSilentMs = 0;
+      const active = { cursor: -1, attemptId: '', nextIndex: 0, revision: 0 };
       client.on('pong', () => { alive = true; });
+      upstream.on('pong', () => { upstreamAlive = true; });
       const heartbeat = setInterval(() => {
         if (!alive) { client.terminate(); return; }
         alive = false; client.ping();
-      }, 30000);
+        if (upstream.readyState === WebSocket.OPEN) {
+          upstreamSilentMs = upstreamAlive ? 0 : upstreamSilentMs + timing.intervalMs;
+          if (upstreamSilentMs >= timing.deadlineMs) {
+            upstream.terminate(); client.close(1011, 'Upstream heartbeat timeout'); return;
+          }
+          upstreamAlive = false; upstream.ping();
+        }
+        if (upstream.readyState === WebSocket.OPEN) send({ type: 'heartbeat', generation: connectionId,
+          cursor: active.cursor, attemptId: active.attemptId, nextIndex: active.nextIndex, revision: active.revision });
+      }, timing.intervalMs);
       heartbeat.unref();
       let delivery = Promise.resolve();
       let queued = 0;
@@ -439,7 +487,7 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
         });
         return delivery;
       };
-      const opening = setTimeout(() => { send({ type: 'error', code: 'snapshot-timeout', retryable: true }).finally(() => client.close(1011)); }, 30000);
+      const opening = setTimeout(() => { send({ type: 'error', code: 'snapshot-timeout', retryable: true }).finally(() => client.close(1011)); }, timing.openingMs);
       opening.unref();
       client.once('close', () => clearTimeout(opening));
       upstream.once('open', () => {
@@ -545,7 +593,25 @@ export function createNativeHarness({ upstream, upstreamCookie, publicOrigin, ow
             waiting: Array.isArray(frame.value?.pendingInput) && frame.value.pendingInput.length > 0 });
           else if (frame.streamId === 'history') {
             if (frame.value?.type === 'snapshot') clearTimeout(opening);
-            const value = normalizeFollow(frame.value); if (value) send(value); }
+            const value = normalizeFollow(frame.value);
+            if (value) {
+              if (value.type === 'snapshot') {
+                active.cursor = value.cursor; active.attemptId = value.attemptId || '';
+                active.nextIndex = value.nextIndex || 0; active.revision = value.revision || 0;
+              } else if (value.type === 'event') active.cursor = value.seq;
+              else if (value.type === 'start') {
+                active.attemptId = value.attemptId || ''; active.nextIndex = 0;
+                active.revision = value.revision || 0;
+              } else if (value.type === 'delta') {
+                active.nextIndex = (value.index || 0) + 1;
+                active.revision = value.revision || active.revision;
+              } else if (value.type === 'end') {
+                active.attemptId = ''; active.nextIndex = 0;
+                active.revision = value.revision || active.revision;
+              }
+              send(value);
+            }
+          }
         } catch (error) {
           // Location-only diagnostics: never log frame data or exception messages.
           console.error(JSON.stringify({ event: 'native_stream_error', kind: error?.name || 'Error', at: error?.stack?.split('\n')[1]?.trim() || '' }));

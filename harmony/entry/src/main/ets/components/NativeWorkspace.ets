@@ -2,7 +2,7 @@ import { picker, fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
-import { NativeHarnessClient, NativeHttpError, NativeImageDraft } from '../services/NativeHarnessClient';
+import { NativeHarnessClient, NativeHttpError, NativeAttachmentDraft } from '../services/NativeHarnessClient';
 import { NativeFrame, NativeMessage, NativeSession, NativeSessionModel, NativePendingQuestion,
   NativeWorkspaceItem, NativeWorkspaceSnapshot, NativeWorkspaceRow, NativeImagePreviewRequest,
   NativeFileViewRequest, nativeWorkspaceRows, nativeToolsParent, nativeWorkspaceDragOrder,
@@ -92,7 +92,7 @@ export struct NativeWorkspace {
   @State @Watch('sessionsChanged') private sessions: NativeSession[] = [];
   @State private continued: NativeFrame[] = [];
   @State private interactions: NativeFrame[] = [];
-  @State private images: NativeImageDraft[] = [];
+  @State private attachments: NativeAttachmentDraft[] = [];
   @State private imagePreviewOpen: boolean = false;
   @State private imagePreview: NativeImagePreviewRequest = new NativeImagePreviewRequest();
   @State private fileViewOpen: boolean = false;
@@ -166,6 +166,9 @@ export struct NativeWorkspace {
   private generation: number = 0;
   private paintTimer: number = -1;
   private reconnectTimer: number = -1;
+  private followWatchdogTimer: number = -1;
+  private settlementTimer: number = -1;
+  private followActivityAt: number = 0;
   private retries: number = 0;
   private widgetTimer: number = -1;
   private widgetEventTimer: number = -1;
@@ -427,17 +430,50 @@ export struct NativeWorkspace {
   }
   private activityChanged(): void {
     clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);
+    clearTimeout(this.followWatchdogTimer); clearTimeout(this.settlementTimer);
     clearTimeout(this.widgetEventTimer);
     if (!this.active || this.fallbackActive) {
       this.persistCache();
-      this.interactions = []; this.client.pause(); this.connectionPhase = 'paused';
-      if (this.backgroundMonitor && !this.supportsPush && !this.fallbackActive) this.pollBackground(true);
-      else this.stopBackground();
+      const keepBackgroundLive = !this.active && !this.fallbackActive && this.backgroundMonitor &&
+        !this.supportsPush && this.selected.length > 0;
+      if (keepBackgroundLive) {
+        this.connectionPhase = 'syncing';
+        this.follow(true);
+        this.pollBackground(true);
+      } else {
+        this.interactions = []; this.client.pause(); this.connectionPhase = 'paused';
+        this.stopBackground();
+      }
       return;
     }
     this.stopBackground();
     this.updateWidget();
     if (this.selected) this.follow(); else this.reload();
+  }
+  private clearFollowTimers(): void {
+    clearTimeout(this.followWatchdogTimer); this.followWatchdogTimer = -1;
+    clearTimeout(this.settlementTimer); this.settlementTimer = -1;
+  }
+  private liveAllowed(id: string = ''): boolean {
+    if (!this.mounted || this.fallbackActive || (id && this.selected !== id)) return false;
+    return this.active || (this.backgroundMonitor && !this.supportsPush && this.selected.length > 0);
+  }
+  private touchFollow(id: string): void {
+    if (!this.liveAllowed(id)) return;
+    this.followActivityAt = Date.now();
+    clearTimeout(this.followWatchdogTimer);
+    const deadline = this.active ? 15000 : 45000;
+    this.followWatchdogTimer = setTimeout((): void => {
+      if (!this.liveAllowed(id)) return;
+      if (Date.now() - this.followActivityAt >= deadline) this.reconnect(id);
+    }, deadline);
+  }
+  private armSettlementWatchdog(id: string): void {
+    clearTimeout(this.settlementTimer);
+    if (!this.model.settlementPending()) return;
+    this.settlementTimer = setTimeout((): void => {
+      if (this.liveAllowed(id) && this.model.settlementPending()) this.reconnect(id);
+    }, 8000);
   }
   private animatePane(action: () => void): void {
     NativeMotion.animate(this.getUIContext(), 'surface', action);
@@ -1028,7 +1064,7 @@ export struct NativeWorkspace {
     this.backgroundBusy = true;
     try {
       if (initial && !this.backgroundActive) {
-        const known = this.knownActiveSession();
+        const known = this.knownActiveSession() || this.selected;
         if (known) {
           try { await BackgroundMonitor.start(this.context, known); this.backgroundActive = true; } catch (_) {}
         }
@@ -1110,7 +1146,7 @@ export struct NativeWorkspace {
     const session = this.sessions.find((item: NativeSession) => item.id === id);
     this.title = session ? session.title.trim() || '未命名会话' : '会话';
     this.draft = this.client.drafts.get(id) || '';
-    this.images = this.client.images.get(id) || [];
+    this.attachments = this.client.attachments.get(id) || [];
     this.uncertain = this.client.uncertain.has(id);
     this.connectionNotified = false;
     this.animatePane(() => { this.selected = id; this.setDrawerState(false); }); this.followTail = true;
@@ -1157,13 +1193,23 @@ export struct NativeWorkspace {
       this.follow();
     }
   }
-  private follow(): void {
-    if (!this.mounted || !this.active || this.fallbackActive || !this.selected) return;
+  private follow(background: boolean = false): void {
+    if (!this.liveAllowed() || !this.selected) return;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.followWatchdogTimer); clearTimeout(this.settlementTimer);
     const id = this.selected;
+    const openingDeadline = background ? 45000 : 20000;
+    this.followActivityAt = Date.now();
+    this.followWatchdogTimer = setTimeout((): void => {
+      if (this.liveAllowed(id) && Date.now() - this.followActivityAt >= openingDeadline) {
+        this.reconnect(id);
+      }
+    }, openingDeadline);
     this.connectionPhase = 'syncing';
     this.client.follow(id, (frame: NativeFrame): void => {
       if (!this.mounted || this.selected !== id) return;
+      this.touchFollow(id);
+      if (frame.type === 'heartbeat') return;
       if (frame.type === 'questions') {
         this.continued = frame.questions.map((question: NativePendingQuestion) => {
           const value = new NativeFrame(); value.eventId = 'continued-' + question.callId;
@@ -1188,6 +1234,13 @@ export struct NativeWorkspace {
       }
       const wasActive = this.running || this.waiting;
       this.model.apply(frame);
+      if (frame.type === 'snapshot') {
+        clearTimeout(this.settlementTimer); this.settlementTimer = -1;
+      } else if (frame.type === 'end' && this.model.settlementPending()) {
+        this.armSettlementWatchdog(id);
+      } else if (frame.type === 'event' && !this.model.settlementPending()) {
+        clearTimeout(this.settlementTimer); this.settlementTimer = -1;
+      }
       if (nativeBackToBottomHasNewContent(this.followTail, frame.type)) {
         this.backToBottomNew = true;
       }
@@ -1206,31 +1259,33 @@ export struct NativeWorkspace {
     }, (reason: string): void => {
       console.error('DSH Harmony live socket ended: ' + reason);
       this.reconnect(id);
-    }).catch((): void => { this.scheduleReconnect(id); });
+    }, background).catch((): void => { this.scheduleReconnect(id); });
   }
   private async reconnect(id: string): Promise<void> {
-    if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
+    if (!this.liveAllowed(id)) return;
     this.notifyConnectionFailure(id);
     this.connectionPhase = 'syncing';
     try {
       const state = await this.client.state();
-      if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
+      if (!this.liveAllowed(id)) return;
       if (!state.authenticated) { this.onLogin(); return; }
     } catch (_) {}
-    if (!this.mounted || !this.active || this.fallbackActive || this.selected !== id) return;
+    if (!this.liveAllowed(id)) return;
     this.scheduleReconnect(id);
   }
   private scheduleReconnect(id: string): void {
-    if (!this.mounted || !this.active || this.fallbackActive || (id && this.selected !== id)) return;
+    if (!this.liveAllowed(id) || (id && this.selected !== id)) return;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.followWatchdogTimer); clearTimeout(this.settlementTimer);
     this.interactions = [];
     this.notifyConnectionFailure(id);
     const exposeFailure = this.connectionPhase === 'live' || this.retries > 0;
     if (exposeFailure) this.connectionPhase = 'retrying';
     else this.connectionPhase = 'syncing';
     this.error = '';
+    const attempt = this.retries;
     this.retries++;
-    const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.retries, 5)));
+    const delay = attempt === 0 ? 250 : Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)));
     this.reconnectTimer = setTimeout(() => { if (id) this.follow(); else this.reload(); }, delay);
   }
   private notifyConnectionFailure(id: string): void {
@@ -1283,57 +1338,138 @@ export struct NativeWorkspace {
     finally { this.loading = false; }
   }
   private async send(): Promise<void> {
-    if (this.sending || (!this.draft.trim() && !this.images.length) || !this.selected || this.uncertain) return;
+    if (this.sending || (!this.draft.trim() && !this.attachments.length) || !this.selected ||
+        this.uncertain || !this.attachmentsReady()) return;
     const id = this.selected; const text = this.draft;
     if (!this.running && this.client.hostSettings.chat().collapseTiming === 'next-input') { this.model.collapseThrough = this.model.lastSeq(); this.renderTranscript(); }
     this.sending = true; this.error = '';
     this.client.drafts.set(id, text);
     try {
-      await this.client.prompt(id, text, this.steer ? 'steer' : 'queue', this.images);
+      await this.client.prompt(id, text, this.steer ? 'steer' : 'queue', this.attachments);
       this.interactionTimes = NativeMetadataCache.rememberInteraction(
         this.context, this.client.cacheKey(), id);
       this.sessionsChanged();
-      this.client.drafts.set(id, ''); this.client.images.delete(id);
-      if (this.selected === id) this.images = [];
+      this.client.drafts.set(id, ''); this.client.attachments.delete(id);
+      if (this.selected === id) this.attachments = [];
       if (this.selected === id) this.draft = '';
     } catch (error) { if (this.selected === id) { this.uncertain = this.client.uncertain.has(id); this.handleError(error as Error); } }
     finally { this.sending = false; }
   }
-  private async attach(): Promise<void> {
+  private attachmentsReady(): boolean {
+    return this.attachments.every((item: NativeAttachmentDraft): boolean => item.status === 'ready');
+  }
+  private publishAttachments(id: string, items: NativeAttachmentDraft[]): void {
+    this.client.attachments.set(id, items);
+    if (this.selected === id) this.attachments = items;
+  }
+  private updateAttachment(id: string, attachmentId: string, status: string,
+    receiptId: string = '', error: string = '', retryable: boolean = true): void {
+    const items = this.client.attachments.get(id) || [];
+    const updated = items.map((item: NativeAttachmentDraft): NativeAttachmentDraft => {
+      if (item.id !== attachmentId) return item;
+      const next = new NativeAttachmentDraft();
+      next.id = item.id; next.kind = item.kind; next.name = item.name; next.mediaType = item.mediaType;
+      next.uri = item.uri; next.bytes = item.bytes; next.data = item.data;
+      next.status = status; next.receiptId = receiptId; next.error = error; next.retryable = retryable;
+      return next;
+    });
+    this.publishAttachments(id, updated);
+  }
+  private fileName(uri: string): string {
+    const raw = uri.slice(uri.lastIndexOf('/') + 1);
+    try { return decodeURIComponent(raw); } catch (_) { return raw || '附件'; }
+  }
+  private imageMediaType(bytes: Uint8Array, name: string): string {
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png';
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8) return 'image/jpeg';
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+    if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[8] === 0x57 &&
+        bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    return '';
+  }
+  private async readAttachment(uri: string, kind: string): Promise<NativeAttachmentDraft> {
+    const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+    const chunks: Uint8Array[] = []; let size: number = 0;
+    try {
+      while (true) {
+        const buffer = new ArrayBuffer(65536);
+        const count = fileIo.readSync(file.fd, buffer);
+        if (count === 0) break;
+        chunks.push(new Uint8Array(buffer, 0, count)); size += count;
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 0); });
+      }
+    } finally { fileIo.closeSync(file); }
+    const bytes = new Uint8Array(size); let offset: number = 0;
+    chunks.forEach((part: Uint8Array): void => { bytes.set(part, offset); offset += part.byteLength; });
+    const draft = new NativeAttachmentDraft();
+    draft.id = util.generateRandomUUID(); draft.kind = kind; draft.name = this.fileName(uri);
+    draft.uri = uri; draft.bytes = size; draft.data = bytes; draft.status = 'uploading';
+    if (kind === 'image') {
+      draft.mediaType = this.imageMediaType(bytes, draft.name);
+      if (!draft.mediaType) throw new Error('不支持的图片格式');
+    }
+    return draft;
+  }
+  private async uploadAttachment(id: string, item: NativeAttachmentDraft): Promise<void> {
+    try {
+      const result = await this.client.uploadAttachment(id, item.name, item.data, item.mediaType);
+      if (this.selected === id) this.updateAttachment(id, item.id, 'ready', result.receiptId);
+    } catch (error) {
+      if (this.selected === id) this.updateAttachment(id, item.id, 'error',
+        '', error instanceof Error ? error.message : '附件上传失败', true);
+    }
+  }
+  private async addAttachments(uris: string[], kind: string): Promise<void> {
     if (this.attaching || !this.selected) return;
     const id = this.selected; this.attaching = true; this.error = '';
     try {
-      const options = new picker.DocumentSelectOptions(); options.maxSelectNumber = 1;
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const uris = await new picker.DocumentViewPicker(context).select(options);
       if (!uris.length || !this.mounted) return;
-      const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
-      const chunks: Uint8Array[] = []; let size: number = 0;
-      try {
-        while (true) {
-          const buffer = new ArrayBuffer(65536);
-          const count = fileIo.readSync(file.fd, buffer);
-          if (count === 0) break;
-          chunks.push(new Uint8Array(buffer, 0, count)); size += count;
-          // Yield between disk windows so the native UI can keep animating.
-          await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 0); });
-          if (!this.mounted) return;
-        }
-      } finally { fileIo.closeSync(file); }
-      const bytes = new Uint8Array(size); let offset: number = 0;
-      chunks.forEach((part: Uint8Array) => { bytes.set(part, offset); offset += part.length; });
-      const draft = new NativeImageDraft(); draft.id = util.generateRandomUUID();
-      if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) draft.mediaType = 'image/png';
-      else if (bytes[0] === 0xFF && bytes[1] === 0xD8) draft.mediaType = 'image/jpeg';
-      else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) draft.mediaType = 'image/gif';
-      else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) draft.mediaType = 'image/webp';
-      else throw new Error('请选择 PNG、JPEG、GIF 或 WebP 图片；其他附件请使用完整工作空间');
-      draft.data = new util.Base64Helper().encodeToStringSync(bytes);
-      draft.name = '图片 ' + ((this.client.images.get(id) || []).length + 1);
-      const images = (this.client.images.get(id) || []).concat([draft]);
-      this.client.images.set(id, images); if (this.selected === id) this.images = images;
+      const added: NativeAttachmentDraft[] = [];
+      for (const uri of uris) {
+        if (!this.mounted || this.selected !== id) return;
+        added.push(await this.readAttachment(uri, kind));
+      }
+      const items = (this.client.attachments.get(id) || []).concat(added);
+      this.publishAttachments(id, items);
+      for (const item of added) await this.uploadAttachment(id, item);
     } catch (error) { this.handleError(error as Error); }
     finally { this.attaching = false; }
+  }
+  private async attachImages(): Promise<void> {
+    if (this.attaching || !this.selected) return;
+    try {
+      const options = new picker.PhotoSelectOptions();
+      options.MIMEType = picker.PhotoViewMIMETypes.IMAGE_TYPE;
+      options.maxSelectNumber = 8;
+      const result = await new picker.PhotoViewPicker().select(options);
+      await this.addAttachments(result.photoUris, 'image');
+    } catch (error) {
+      if ((error as Error)?.message !== 'User cancelled') this.handleError(error as Error);
+    }
+  }
+  private async attachFiles(): Promise<void> {
+    if (this.attaching || !this.selected) return;
+    try {
+      const options = new picker.DocumentSelectOptions(); options.maxSelectNumber = 8;
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      const uris = await new picker.DocumentViewPicker(context).select(options);
+      await this.addAttachments(uris, 'file');
+    } catch (error) { this.handleError(error as Error); }
+  }
+  private removeAttachment(id: string): void {
+    if (this.sending) return;
+    this.publishAttachments(this.selected,
+      (this.client.attachments.get(this.selected) || []).filter((item: NativeAttachmentDraft): boolean => item.id !== id));
+  }
+  private retryAttachment(item: NativeAttachmentDraft): void {
+    if (!item.retryable || item.status !== 'error') return;
+    this.updateAttachment(this.selected, item.id, 'uploading');
+    this.uploadAttachment(this.selected, item);
   }
   private queuePrefetch(pages: number): void {
     this.prefetchQueue = Math.min(4, Math.max(this.prefetchQueue, pages));
@@ -1847,15 +1983,32 @@ export struct NativeWorkspace {
           .backgroundColor(Color.Transparent).fontColor(this.dark ? '#CFD3D6' : '#61666B')
           .onClick(() => { this.client.uncertain.delete(this.selected); this.uncertain = false; })
       }
-      if (this.images.length) {
+      if (this.attachments.length) {
         Scroll() {
           Row({ space: 8 }) {
-            ForEach(this.images, (image: NativeImageDraft) => {
-              Button(image.name + ' ×').height(32).fontSize(11).enabled(!this.sending).onClick(() => {
-                this.images = this.images.filter((item: NativeImageDraft) => item.id !== image.id);
-                this.client.images.set(this.selected, this.images);
-              })
-            }, (image: NativeImageDraft) => image.id)
+            ForEach(this.attachments, (item: NativeAttachmentDraft) => {
+              Row({ space: 6 }) {
+                if (item.kind === 'image') {
+                  Image(item.uri).width(32).height(32).borderRadius(7).objectFit(ImageFit.Cover)
+                } else {
+                  DSHIcon({ glyph: 'file-outline', glyphSize: 16, color: this.dark ? '#CFD3D6' : '#61666B' })
+                }
+                if (item.kind !== 'image') {
+                  Text(item.name).fontSize(11).maxLines(1).constraintSize({ maxWidth: 120 })
+                    .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor(this.dark ? '#F9FAFB' : '#17181B')
+                }
+                if (item.status === 'uploading') LoadingProgress().width(12).height(12)
+                else if (item.status === 'error') {
+                  Button(item.retryable ? '重试' : '失败', { type: ButtonType.Normal }).height(26).fontSize(10)
+                    .enabled(item.retryable).onClick(() => { this.retryAttachment(item); })
+                }
+                Button({ type: ButtonType.Circle }) {
+                  DSHIcon({ glyph: 'close-outline', glyphSize: 11, color: this.dark ? '#93969B' : '#8A8D91' })
+                }.width(24).height(24).backgroundColor(Color.Transparent)
+                  .accessibilityText('移除附件').onClick(() => { this.removeAttachment(item.id); })
+              }.height(38).padding({ left: 5, right: 2 }).borderRadius(10)
+                .backgroundColor(this.dark ? '#2C2C2E' : '#F1F3F5')
+            }, (item: NativeAttachmentDraft) => item.id)
           }
         }.scrollable(ScrollDirection.Horizontal).width('100%')
       }
@@ -1868,29 +2021,30 @@ export struct NativeWorkspace {
         Row({ space: 6 }) {
           Button({ type: ButtonType.Normal }) {
             Row({ space: 4 }) {
-              Text(this.modelCaption).fontSize(11).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-              DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 10, color: this.dark ? '#93969B' : '#8A8D91' }).rotate({ angle: -90 })
-            }.width('100%')
-          }.layoutWeight(1).height(32).padding({ left: 3, right: 3 }).backgroundColor(Color.Transparent)
+              Text(this.modelCaption).fontSize(11).maxLines(1).constraintSize({ maxWidth: 160 })
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }.constraintSize({ maxWidth: 168 })
+          }.height(32).padding({ left: 4, right: 4 }).backgroundColor(Color.Transparent)
             .fontColor(this.dark ? '#CFD3D6' : '#61666B').accessibilityText('模型与推理')
             .onClick(() => { this.utilityOpen = false; this.modelPickerOpen = true; })
             .bindPopup(this.modelPickerOpen, { builder: this.modelPicker, placement: Placement.Top,
-              enableArrow: true, targetSpace: 8, radius: 16, mask: false,
+              enableArrow: false, targetSpace: 8, radius: 16, mask: false,
               popupColor: this.dark ? '#242527' : '#FFFFFF', backgroundBlurStyle: BlurStyle.NONE,
               onStateChange: (event): void => { if (!event.isVisible) this.modelPickerOpen = false; } })
+          Blank()
           Button({ type: ButtonType.Normal }) {
             if (this.attaching) { LoadingProgress().width(14).height(14).color(this.dark ? '#F9FAFB' : '#0F1115') }
-            else { DSHIcon({ glyph: 'plus-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }
+            else { DSHIcon({ glyph: 'image-outline', color: this.dark ? '#F9FAFB' : '#0F1115' }) }
           }.width(32).height(32).borderRadius(16)
             .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
             .accessibilityText(this.attaching ? '读取中' : '添加图片')
-            .enabled(!this.attaching && !this.sending).onClick(() => { this.attach(); })
+            .enabled(!this.attaching && !this.sending).onClick(() => { this.attachImages(); })
           Button({ type: ButtonType.Normal }) {
-            DSHIcon({ glyph: 'paperclip-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
+            DSHIcon({ glyph: 'file-outline', color: this.dark ? '#CFD3D6' : '#61666B' })
           }.width(32).height(32).borderRadius(16)
             .backgroundColor(this.dark ? '#353638' : '#EBEEF2').fontColor(this.dark ? '#F9FAFB' : '#0F1115')
-            .accessibilityText('更多附件')
-            .onClick(this.onCompatibility)
+            .accessibilityText('添加文件')
+            .enabled(!this.attaching && !this.sending).onClick(() => { this.attachFiles(); })
           if (this.running) { Button({ type: ButtonType.Normal }) {
             Row({ space: 5 }) {
               DSHIcon({ glyph: this.steer ? 'paper-plane-outline' : 'queue-outline', color: this.dark ? '#CFD3D6' : '#61666B', glyphSize: 14 })
@@ -1900,7 +2054,7 @@ export struct NativeWorkspace {
             .accessibilityText(this.steer ? '发送模式：接管' : '发送模式：排队，点击切换')
             .onClick(() => { this.steer = !this.steer; })
           }
-          if (this.running && !this.sending && !this.draft.trim() && !this.images.length) {
+          if (this.running && !this.sending && !this.draft.trim() && !this.attachments.length) {
             Button({ type: ButtonType.Normal }) {
               DSHIcon({ glyph: 'stop-fill', color: '#FFFFFF' })
             }.width(34).height(34).borderRadius(17)
@@ -1912,8 +2066,10 @@ export struct NativeWorkspace {
               else { DSHIcon({ glyph: 'send-arrow', color: '#FFFFFF' }) }
             }.width(34).height(34).borderRadius(17)
               .backgroundColor(this.dark ? '#679EFE' : '#3964FE')
-              .enabled(this.connectionPhase === 'live' && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0))
-              .opacity(this.connectionPhase === 'live' && !this.sending && !this.uncertain && (this.draft.trim().length > 0 || this.images.length > 0) ? 1 : 0.4)
+              .enabled(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
+                (this.draft.trim().length > 0 || this.attachments.length > 0))
+              .opacity(this.connectionPhase === 'live' && !this.sending && !this.uncertain && this.attachmentsReady() &&
+                (this.draft.trim().length > 0 || this.attachments.length > 0) ? 1 : 0.4)
               .accessibilityText(this.sending ? '发送中' : '发送').onClick(() => { this.followTail = true; this.send(); })
           }
         }.width('100%')

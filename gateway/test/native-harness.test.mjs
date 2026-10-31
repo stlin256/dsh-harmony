@@ -7,10 +7,19 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { openStore } from '../src/store.mjs';
 import { createApp } from '../src/app.mjs';
 import { normalizeFollow, normalizedHistory, richBlocks, normalizeRecord } from '../src/native-protocol.mjs';
+import { nativeHeartbeatPolicy } from '../src/native-harness.mjs';
 
 const origin = 'https://dsh.example.com';
+
+test('native heartbeat policy keeps foreground and background deadlines bounded', () => {
+  assert.deepEqual(nativeHeartbeatPolicy(), { intervalMs: 5000, deadlineMs: 20000, openingMs: 30000 });
+  assert.deepEqual(nativeHeartbeatPolicy('foreground'), { intervalMs: 5000, deadlineMs: 20000, openingMs: 30000 });
+  assert.deepEqual(nativeHeartbeatPolicy('background'), { intervalMs: 15000, deadlineMs: 45000, openingMs: 45000 });
+});
+
 async function setup(t, options = {}) {
   const calls = [];
+  const uploads = [];
   const backend = createServer(async (req, res) => {
     if (req.method === 'GET' || req.method === 'HEAD') {
       assert.equal(req.headers.cookie, 'harness=server-only');
@@ -22,7 +31,18 @@ async function setup(t, options = {}) {
       if (route.pathname === '/api/session.export') { assert.equal(route.searchParams.get('includeDescendants'),'true'); res.setHeader('Content-Type','application/zip'); res.end(Buffer.from([0x50,0x4b,3,4,0,255])); return; }
       res.writeHead(404).end(); return;
     }
+    const route = new URL(req.url, 'http://localhost');
     const chunks = []; for await (const part of req) chunks.push(part);
+    if (route.pathname === '/api/session/uploadFileBinary') {
+      assert.equal(req.headers.cookie, 'harness=server-only');
+      assert.equal(req.headers['content-type'], 'application/octet-stream');
+      const bytes = Buffer.concat(chunks);
+      uploads.push({ query: Object.fromEntries(route.searchParams), bytes });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true, value: { receiptId: 'receipt-1',
+        file: { attachmentId: 'attachment-1', name: route.searchParams.get('name'), bytes: bytes.length } } }));
+      return;
+    }
     const value = JSON.parse(Buffer.concat(chunks).toString());
     calls.push({ headers: req.headers, value });
     if (options.workspaceFileError && value.method === 'workspaceFiles/stat') {
@@ -138,8 +158,16 @@ async function setup(t, options = {}) {
       });
     });req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));
   });
+  const upload=(path,bytes)=>new Promise((resolve,reject)=>{
+    const req=request({hostname:'127.0.0.1',port:server.address().port,path,method:'POST',
+      headers:{host:'dsh.example.com',origin,'content-type':'application/octet-stream',cookie}},res=>{
+      const chunks=[];res.on('data',part=>chunks.push(part));res.on('end',()=>{
+        const buffer=Buffer.concat(chunks);resolve({status:res.statusCode,text:buffer.toString()});
+      });
+    });req.on('error',reject);req.end(bytes);
+  });
   const connect=(headers={})=>new WebSocket(`ws://127.0.0.1:${server.address().port}/pocket/native/live?sessionId=session`,{headers:{Host:'dsh.example.com',Origin:origin,Cookie:cookie,...headers}});
-  return {call,calls,connect,openings,db,emit: value => { for (const ws of upstreamWS.clients) ws.send(JSON.stringify({type:'item',streamId:'interactions',value})); }};
+  return {call,upload,calls,uploads,connect,openings,db,emit: value => { for (const ws of upstreamWS.clients) ws.send(JSON.stringify({type:'item',streamId:'interactions',value})); }};
 }
 
 test('modern Harness control stream replaces removed per-session observers without dropping history', async t => {
@@ -532,6 +560,23 @@ test('native images keep typed references and admit image-only prompts without t
   assert.deepEqual(calls.at(-1).value.payload.args.request.content,[{type:'image',mediaType:'image/png',data:'AA==',name:'image.png'}]);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'invalid',text:'',images:[{mediaType:'text/html',data:'AA=='}]})).status,400);
   assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'empty',text:''})).status,400);
+});
+
+test('latest DSH raw uploads stay byte-exact and prompt emits staged file receipts', async t => {
+  const {call,calls,upload,uploads}=await setup(t);
+  const bytes=Buffer.from([0,1,2,3,255,65]);
+  const response=await upload('/pocket/api/native/upload?sessionId=session&name=report.pdf',bytes);
+  assert.equal(response.status,200);
+  assert.equal(JSON.parse(response.text).value.receiptId,'receipt-1');
+  assert.deepEqual(uploads[0].bytes,bytes);
+  assert.deepEqual(uploads[0].query,{sessionId:'session',name:'report.pdf'});
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'receipt-prompt',
+    text:'inspect',attachments:[{type:'file',receiptId:'receipt-1'}]})).status,200);
+  assert.deepEqual(calls.at(-1).value.payload.args.request.content,[
+    {type:'file',receiptId:'receipt-1'},{type:'text',text:'inspect'}
+  ]);
+  assert.equal((await call('/pocket/api/native/prompt',{sessionId:'session',requestId:'bad-receipt',
+    text:'',attachments:[{type:'file',receiptId:''}]})).status,400);
 });
 test('continued question RPC uses agent scope rather than an invented request wrapper', async t => {
   const {call,calls} = await setup(t);
