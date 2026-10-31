@@ -17,6 +17,14 @@ const packagePath = temporary ? resolve(temporary, 'package') : input;
 const root = pathToFileURL(packagePath + '/');
 try {
 const pkg = JSON.parse(await readFile(new URL('package.json', root)));
+const patchPath = pkg.dsh?.bundle?.patch;
+if (typeof patchPath !== 'string') throw Error('Packed plugin does not declare dsh.bundle.patch');
+const patch = await readFile(new URL(patchPath.replace(/^\.\//, ''), root), 'utf8');
+if (!patch.includes("name: '@dsh-harmony/plugin'")) throw Error('Packed bundle patch does not register @dsh-harmony/plugin');
+for (const locale of ['locale/en.json', 'locale/zh.json']) {
+  const value = JSON.parse(await readFile(new URL(locale, root), 'utf8'));
+  if (value.meta?.title !== 'DSH Harmony') throw Error('Packed locale metadata failed: ' + locale);
+}
 const plugin = await import(new URL('index.mjs', root));
 const browser = await readFile(new URL(pkg.exports['./client'], root), 'utf8');
 let registration;

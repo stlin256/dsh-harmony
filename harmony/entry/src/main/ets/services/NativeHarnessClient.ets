@@ -85,6 +85,7 @@ export class NativeHarnessClient {
   private pageReads: Map<string, Promise<NativeFrame>> = new Map<string, Promise<NativeFrame>>();
   private sessionCwds: Map<string, string> = new Map<string, string>();
   private browsePaths: Map<string, string> = new Map<string, string>();
+  private fileStats: Map<string, Promise<NativeFileStat>> = new Map<string, Promise<NativeFileStat>>();
   private fileLookups: Map<string, Promise<string>> = new Map<string, Promise<string>>();
   readonly images: Map<string, NativeImageDraft[]> = new Map<string, NativeImageDraft[]>();
   readonly attachments: Map<string, NativeAttachmentDraft[]> = new Map<string, NativeAttachmentDraft[]>();
@@ -249,8 +250,15 @@ export class NativeHarnessClient {
       JSON.stringify({ sessionId: id, path: path, offset: offset, limit: limit }))) as NativeFilePage;
   }
   async statFile(id: string, path: string): Promise<NativeFileStat> {
-    return JSON.parse(await this.request('/pocket/api/native/file/stat', http.RequestMethod.POST,
-      JSON.stringify({ sessionId: id, path: path }))) as NativeFileStat;
+    const key = id + '\n' + path;
+    const existing = this.fileStats.get(key);
+    if (existing) return existing;
+    const pending = this.request('/pocket/api/native/file/stat', http.RequestMethod.POST,
+      JSON.stringify({ sessionId: id, path: path }))
+      .then((value: string): NativeFileStat => JSON.parse(value) as NativeFileStat)
+      .finally((): void => { this.fileStats.delete(key); });
+    this.fileStats.set(key, pending);
+    return pending;
   }
   async listFiles(id: string, path: string): Promise<NativeDirectoryListing> {
     return JSON.parse(await this.request('/pocket/api/native/file/list', http.RequestMethod.POST,
@@ -348,7 +356,17 @@ export class NativeHarnessClient {
           throw new Error('Invalid file window');
         }
       } else {
-        const fallback = nativeFileWindowMetadata(expectedVersion, expectedBytes, offset, total, length);
+        let resolvedVersion = expectedVersion;
+        let resolvedBytes = expectedBytes;
+        // HarmonyOS can omit custom response headers from streamed requests.
+        // Recover the missing window identity from the shared in-flight stat
+        // instead of surfacing a false preview error that a manual retry hides.
+        if (!resolvedVersion) {
+          const stat: NativeFileStat = await this.statFile(id, path);
+          resolvedVersion = stat.version;
+          resolvedBytes = stat.bytes;
+        }
+        const fallback = nativeFileWindowMetadata(resolvedVersion, resolvedBytes, offset, total, length);
         if (!fallback.version) throw new Error('Missing file window metadata');
         metadata = new NativeFileBytes();
         metadata.protocol = 1;

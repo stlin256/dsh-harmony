@@ -27,9 +27,9 @@ export struct NativeInlineText {
   @State private remoteUrl: string = '';
   @State private remoteTitle: string = '';
   @State private remoteError: string = '';
-  @State private resolvingFile: boolean = false;
   private lastOpenHref: string = '';
   private lastOpenAt: number = 0;
+  private fileRequestSequence: number = 0;
 
   aboutToAppear(): void { this.changed(); }
   private changed(): void { this.runs = nativeInlineMarkdown(this.text); }
@@ -58,7 +58,7 @@ export struct NativeInlineText {
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
         await context.startAbility({ action: 'ohos.want.action.viewData', uri: run.href });
       } else {
-        await this.openFile(run.href);
+        this.openFile(run.href);
       }
     } catch (_) {
       this.getUIContext().getPromptAction().showToast({ message: '无法打开此链接', duration: 1500 });
@@ -67,46 +67,65 @@ export struct NativeInlineText {
   private fileTarget(href: string): string {
     return nativeFileTarget(href, this.client.sessionCwd(this.sessionId));
   }
-  private openFileView(kind: string, path: string): void {
+  private fileRequestId(): string {
+    this.fileRequestSequence++;
+    return Date.now().toString(36) + ':' + this.fileRequestSequence;
+  }
+  private openFileView(kind: string, path: string, requestId: string): void {
     const request = new NativeFileViewRequest();
     request.kind = kind;
     request.sessionId = this.sessionId;
     request.path = path;
+    request.requestId = requestId;
     AppStorage.setOrCreate<string>('nativeFileViewPayload', JSON.stringify(request));
     AppStorage.setOrCreate<number>('nativeFileViewRevision',
       (AppStorage.get<number>('nativeFileViewRevision') || 0) + 1);
   }
-  private async openFile(href: string): Promise<void> {
+  private fileRequestActive(requestId: string): boolean {
+    try {
+      const raw = AppStorage.get<string>('nativeFileViewPayload') || '';
+      if (!raw) return false;
+      const current = JSON.parse(raw) as NativeFileViewRequest;
+      return current.requestId === requestId;
+    } catch (_) {
+      return false;
+    }
+  }
+  private openFile(href: string): void {
     if (!this.sessionId) {
       this.getUIContext().getPromptAction().showToast({ message: '请先在会话中打开此链接', duration: 1500 });
       return;
     }
     const path = this.fileTarget(href);
     if (!path) return;
-    this.resolvingFile = true;
+    const requestId = this.fileRequestId();
+    // Mount the reader before network validation so a slow stat or directory
+    // search never looks like an ignored tap.
+    this.openFileView('file', path, requestId);
+    this.resolveFile(path, requestId);
+  }
+  private async resolveFile(path: string, requestId: string): Promise<void> {
     try {
       const stat: NativeFileStat = await this.client.statFile(this.sessionId, path);
-      if (!stat.version) throw new Error('Invalid file');
-      this.resolvingFile = false;
-      this.openFileView('file', path);
+      if (stat.version) return;
     } catch (_) {
-      const basename = nativeBareFileName(href);
-      if (basename) {
-        const resolved = await this.client.findWorkspaceFile(this.sessionId, basename);
-        if (resolved) {
-          this.resolvingFile = false;
-          this.openFileView('file', resolved);
-          return;
-        }
+      // The immediate file shell remains responsible for the final error.
+    }
+    if (!this.fileRequestActive(requestId)) return;
+    const basename = nativeBareFileName(path);
+    if (basename) {
+      const resolved = await this.client.findWorkspaceFile(this.sessionId, basename);
+      if (resolved && this.fileRequestActive(requestId)) {
+        this.openFileView('file', resolved, requestId);
+        return;
       }
-      try {
-        const listing: NativeDirectoryListing = await this.client.listFiles(this.sessionId, path);
-        this.resolvingFile = false;
-        this.openFileView('browser', path);
-      } catch (_) {
-        this.getUIContext().getPromptAction().showToast({ message: '文件或文件夹不可用', duration: 1500 });
-      }
-    } finally { this.resolvingFile = false; }
+    }
+    try {
+      const listing: NativeDirectoryListing = await this.client.listFiles(this.sessionId, path);
+      if (listing && this.fileRequestActive(requestId)) this.openFileView('browser', path, requestId);
+    } catch (_) {
+      // The mounted preview displays the concise unavailable-file state.
+    }
   }
   @Builder
   private remoteImagePreview() {

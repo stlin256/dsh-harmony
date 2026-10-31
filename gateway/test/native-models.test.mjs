@@ -179,6 +179,7 @@ test('semantic motion tokens resolve directly when motion is disabled', () => {
   state.set('nativeAppActive', true);
   assert.equal(NativeMotion.duration('press'), 90);
   assert.equal(NativeMotion.duration('overlay'), 190);
+  assert.equal(NativeMotion.duration('brand'), 560);
   let actions = 0;
   NativeMotion.animate(ui, 'navigation', () => { actions++; });
   assert.equal(calls[0].duration, 220);
@@ -208,6 +209,50 @@ test('About reads the installed bundle version instead of a source constant', ()
   } } };
   const { BuildInfo } = load('BuildInfo', kits);
   assert.equal(BuildInfo.version, '9.8.7');
+  assert.equal(BuildInfo.pluginReleaseTag, 'plugin-v0.3.6');
+  assert.match(BuildInfo.pluginArtifact,
+    /releases\/download\/plugin-v0\.3\.6\/dsh-harmony-plugin-0\.3\.6\.tgz$/);
+  assert.match(BuildInfo.pluginInstallPrompt, /@dsh-harmony\/plugin/);
+  assert.match(BuildInfo.pluginInstallPrompt, /PLUGIN-INSTALL\.md/);
+  assert.match(BuildInfo.pluginInstallPrompt, /plugin-v0\.3\.6/);
+  const guide = readFileSync(new URL('../../docs/PLUGIN-INSTALL.md', import.meta.url), 'utf8');
+  assert.match(guide, /plugin-v0\.3\.6/);
+  assert.match(guide, /dsh-harmony-plugin-0\.3\.6\.tgz/);
+});
+
+test('launch flow separates restoration, onboarding, guided setup and workspace', () => {
+  const { NativeLaunchFlow, NativeLaunchPhase } = load('NativeLaunchFlow', {});
+  assert.equal(NativeLaunchFlow.afterPreferences(false, false), NativeLaunchPhase.intro);
+  assert.equal(NativeLaunchFlow.afterPreferences(true, false), NativeLaunchPhase.intro);
+  assert.equal(NativeLaunchFlow.afterPreferences(true, true), NativeLaunchPhase.restoring);
+  assert.equal(NativeLaunchPhase.install, 'install');
+  assert.equal(NativeLaunchFlow.needsLogin('请输入访问密钥'), true);
+  assert.equal(NativeLaunchFlow.needsLogin('登录失败，请检查访问密钥'), true);
+  assert.equal(NativeLaunchFlow.needsLogin('网络请求超时'), false);
+  assert.equal(NativeLaunchFlow.safeMessage(new Error('x'.repeat(700)), 'fallback').length, 500);
+
+  const source = readFileSync(new URL(
+    '../../harmony/entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  assert.match(source, /launchPhase: string = NativeLaunchPhase\.booting/);
+  assert.match(source, /this\.launchPhase !== NativeLaunchPhase\.hidden/);
+  assert.match(source, /this\.launchPhase === NativeLaunchPhase\.entering/);
+  assert.match(source, /NativeLaunchSurface\(\{/);
+  assert.match(source, /putSync\('onboardingSeen', false\)/);
+  assert.match(source, /onCloseGuide/);
+  assert.doesNotMatch(source, /Column\(\{ space: 16 \}\) \{\s*Text\('DSH Harmony'\)/s);
+  const surface = readFileSync(new URL(
+    '../../harmony/entry/src/main/ets/components/NativeLaunchSurface.ets', import.meta.url), 'utf8');
+  assert.match(surface, /phase === NativeLaunchPhase\.guide/);
+  assert.doesNotMatch(surface, /\.scale\(\{ x: this\.logoScale\(\)/);
+  assert.match(surface, /private installDetails\(\)/);
+  assert.match(surface, /private connectionProgressSurface\(\)/);
+  assert.doesNotMatch(surface, /正在恢复连接/);
+  assert.match(surface, /\.onClick\(this\.onOpenInstall\)/);
+  assert.doesNotMatch(surface, /this\.status = '已复制'/);
+  assert.doesNotMatch(surface, /this\.open\(BuildInfo\.pluginInstallGuide\)/);
+  assert.match(surface, /BuildInfo\.pluginInstallPrompt/);
+  assert.match(surface, /复制错误/);
+  assert.match(surface, /Pocket ID · Passkey/);
 });
 
 test('workspace interaction recency is account scoped and cleared on logout', () => {
@@ -526,6 +571,140 @@ test('native diff renders only explicit or applied edits and honors null old tex
   assert.equal(nativeDiff(message({ output: 'old\n+new' })).matched, false);
 });
 
+test('non-edit tools never enter diff projection and malformed diff data is inert', () => {
+  const { nativeDiff } = load('NativeDiff', {});
+  const plan = Object.assign({
+    args: 'null', metaRaw: 'null', output: '{"ok":true}', error: '',
+    failed: false, status: 'success', outcome: ''
+  });
+  const inert = nativeDiff(plan);
+  assert.equal(inert.matched, false);
+  assert.deepEqual(Array.from(inert.rows), []);
+  plan.args = JSON.stringify({ diffs: [null, 42, { path: 'x', oldText: 'a', newText: 'b' }] });
+  const mixed = nativeDiff(plan);
+  assert.equal(mixed.matched, true);
+  assert.equal(mixed.added, 1);
+  const view = readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeToolCallView.ets', import.meta.url), 'utf8');
+  assert.match(view, /const category = nativeToolCategory\(this\.message\.toolName\);/);
+  assert.match(view, /\['edit', 'write'\]\.includes\(category\) \? nativeDiff\(this\.message\)/);
+});
+
+test('todo_write projects structured status rows and the newest replacement plan', () => {
+  const types=load('NativeSessionModel',{});
+  const {NativePlanDocument,nativePlanDocument,nativeLatestPlan,nativePlanProgress,nativePlanDiff}=load(
+    'NativePlan',{'./NativeSessionModel':types});
+  const tool=Object.assign(new types.NativeMessage(),{
+    role:'tool',toolName:'todo_write',
+    args:JSON.stringify({todos:[
+      {content:'完成协议解析',status:'completed'},
+      {content:'补齐移动端界面',status:'in_progress'},
+      {content:'执行真机验收',status:'pending'},
+      {content:'保留旧状态',status:'unknown'},
+      {content:'',status:'pending'},
+      42
+    ]})
+  });
+  const plan=nativePlanDocument(tool);
+  assert.equal(plan.parsed,true);
+  assert.deepEqual(Array.from(plan.items,item=>item.content),
+    ['完成协议解析','补齐移动端界面','执行真机验收','保留旧状态']);
+  assert.equal(plan.items[3].status,'pending');
+  assert.equal(nativePlanProgress(plan),'已完成 1 · 进行中 1 · 待处理 2');
+
+  const repeated=Object.assign(new types.NativeMessage(),{
+    role:'tool',toolName:'todo_write',args:'',
+    output:JSON.stringify({items:[{title:'从结果回退解析',status:'completed'}]})
+  });
+  assert.equal(nativePlanDocument(repeated).items[0].content,'从结果回退解析');
+  const empty=Object.assign(new types.NativeMessage(),{
+    role:'tool',toolName:'todo_write',args:'{"todos":[]}'
+  });
+  const malformed=Object.assign(new types.NativeMessage(),{
+    role:'tool',toolName:'todo_write',args:'{"todos":['
+  });
+  assert.equal(nativeLatestPlan([tool,malformed]).items.length,4,
+    'partial JSON cannot replace the last complete plan');
+  assert.equal(nativeLatestPlan([tool,empty]).items.length,0,
+    'an explicit empty replacement clears the current plan');
+
+  const planFrom=todos=>nativePlanDocument(Object.assign(new types.NativeMessage(),{
+    role:'tool',toolName:'todo_write',args:JSON.stringify({todos})
+  }));
+  const initial=planFrom([
+    {content:'保留',status:'pending'},
+    {content:'将要完成',status:'pending'}
+  ]);
+  const emptyBaseline=Object.assign(new NativePlanDocument(),{parsed:false,items:[]});
+  assert.equal(nativePlanDiff(initial,emptyBaseline),'创建 2');
+  assert.equal(nativePlanDiff(planFrom([
+    {content:'保留',status:'pending'},
+    {content:'新完成',status:'completed'}
+  ]),emptyBaseline),'创建 2',
+    'a newly-created completed item is created rather than double-counted as completed');
+  const changed=planFrom([
+    {content:'保留',status:'in_progress'},
+    {content:'将要完成',status:'completed'},
+    {content:'新增一',status:'pending'},
+    {content:'新增二',status:'completed'}
+  ]);
+  assert.equal(nativePlanDiff(changed,initial),'创建 2 · 完成 1 · 更新 1');
+  assert.equal(nativePlanDiff(planFrom([{content:'保留',status:'in_progress'}]),changed),
+    '移除 3');
+  assert.equal(nativePlanDiff(changed,changed),'无变化');
+
+  const {nativeToolDetail}=load('NativeTranscript',{
+    './NativeSessionModel':types,'./NativeHostSettings':{NativeChatPreferences:class {}},
+    './NativePlan':{NativePlanDocument:class {
+      parsed=false;items=[];
+    },nativePlanDiff,nativePlanDocument,nativePlanProgress}
+  });
+  assert.equal(nativeToolDetail(tool),'已完成 1 · 进行中 1 · 待处理 2');
+  const planTool=(callId,args)=>Object.assign(new types.NativeMessage(),{
+    id:callId,seq:callId==='plan-a'?10:20,role:'tool',callId,toolName:'todo_write',
+    phase:'start',turn:1,step:1,text:args
+  });
+  const {nativeTranscript}=load('NativeTranscript',{
+    './NativeSessionModel':types,'./NativeHostSettings':{NativeChatPreferences:class {}},
+    './NativePlan':{NativePlanDocument:class {
+      parsed=false;items=[];
+    },nativePlanDiff,nativePlanDocument,nativePlanProgress}
+  });
+  const projected=nativeTranscript([
+    planTool('plan-a',JSON.stringify({todos:[{content:'A',status:'pending'}]})),
+    planTool('plan-b',JSON.stringify({todos:[
+      {content:'A',status:'completed'},{content:'B',status:'pending'}
+    ]})),
+    planTool('plan-c','{"todos":[')
+  ],false);
+  const projectedTools=projected.find(row=>row.role==='process').children;
+  assert.deepEqual(Array.from(projectedTools,row=>row.planDiff),
+    ['创建 1','创建 1 · 完成 1',''],
+    'malformed streaming JSON neither receives nor replaces the diff baseline');
+  assert.equal(nativeToolDetail(projectedTools[1]),'创建 1 · 完成 1');
+  const toolView=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeToolCallView.ets',
+    import.meta.url),'utf8');
+  assert.match(toolView,/this\.message\.toolName === 'todo_write'[\s\S]{0,180}NativePlanView/);
+  assert.match(toolView,/this\.message\.toolName !== 'todo_write'/);
+  const workspaceView=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeWorkspace.ets',
+    import.meta.url),'utf8');
+  assert.match(workspaceView,/NativeConversationDock\(\) \{[\s\S]{0,100}NativeTaskDock/);
+  assert.match(workspaceView,/Stack\(\{ alignContent: Alignment\.BottomEnd \}\)/);
+  assert.match(workspaceView,/hitTestBehavior\(HitTestMode\.Transparent\)\.zIndex\(6\)/);
+  const dockGroup=readFileSync(new URL(
+    '../../harmony/entry/src/main/ets/components/NativeConversationDock.ets', import.meta.url),'utf8');
+  assert.match(dockGroup,/@BuilderParam content: \(\) => void;/);
+  const taskDock=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeTaskDock.ets',
+    import.meta.url),'utf8');
+  assert.match(taskDock,/constraintSize\(\{ maxHeight: 180 \}\)/);
+  assert.match(taskDock,/NativeMotion\.animate\(this\.getUIContext\(\), 'surface'/);
+  assert.match(taskDock,/\.height\(32\)/);
+  assert.match(taskDock,/this\.dark \? '#242527' : '#FFFFFF'/);
+  const showcase=readFileSync(new URL('../../harmony/entry/src/main/ets/services/StoreShowcaseClient.ets',
+    import.meta.url),'utf8');
+  assert.match(showcase,/release-plan-refresh/);
+  assert.match(showcase,/'todo_write'/);
+});
+
 test('model directory paints per-session cache before refresh and updates the shared caption', async () => {
   const { NativeModelDirectory } = load('NativeModelDirectory', {});
   const calls = [];
@@ -798,6 +977,54 @@ test('native Chat groups contiguous operations and keeps nested PTC calls in a b
     event(12,'assistant/message',{message:{content:[{type:'text',text:'first'},{type:'reasoning',text:'thought'},{type:'text',text:'second'}]}})
   ]).messages,false);
   assert.equal(mixed.map(x=>x.role).join(','),'assistant,process,assistant','finalized assistant blocks retain their source order');
+});
+
+test('process operations receive unique stable render keys and preview requests publish before network probes', () => {
+  const types = load('NativeSessionModel', {});
+  const { nativeTranscript } = load('NativeTranscript', {'./NativeSessionModel':types});
+  const operation = (seq,callId) => Object.assign(new types.NativeMessage(), {
+    id:'repeated-id', seq, role:'tool', turn:1, step:1, callId, toolName:'todo_write',
+    phase:'start', text:'{"todos":[]}'
+  });
+  const base = [
+    Object.assign(new types.NativeMessage(), {id:'user',seq:0,role:'user',turn:1,step:1,text:'plan'}),
+    operation(1,'plan-a'),
+    operation(2,'plan-b')
+  ];
+  const before = nativeTranscript(base,true).find(row=>row.role==='process');
+  assert.equal(before.children.length,2);
+  assert.equal(new Set(before.children.map(row=>row.renderKey)).size,2);
+  assert.ok(before.children.every(row=>row.renderKey.startsWith(before.id + ':')));
+  const after = nativeTranscript(base.concat(operation(3,'plan-c')),true).find(row=>row.role==='process');
+  assert.deepEqual(Array.from(after.children.slice(0,2),row=>row.renderKey),
+    Array.from(before.children,row=>row.renderKey),
+    'appending another operation cannot move an existing disclosure');
+
+  const processSource=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeProcessView.ets', import.meta.url),'utf8');
+  assert.match(processSource,/child\.renderKey \|\| child\.id/);
+  const sourceModel=readFileSync(new URL('../../harmony/entry/src/main/ets/services/NativeListSource.ets', import.meta.url),'utf8');
+  assert.match(sourceModel,/base \+ '#' \+ occurrence/);
+
+  const inlineSource=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeInlineText.ets', import.meta.url),'utf8');
+  const openBody=inlineSource.slice(inlineSource.indexOf('private openFile('),inlineSource.indexOf('private async resolveFile('));
+  assert.match(openBody,/this\.openFileView\('file', path, requestId\);/);
+  assert.doesNotMatch(openBody,/statFile|findWorkspaceFile|listFiles/);
+
+  const previewSource=readFileSync(new URL('../../harmony/entry/src/main/ets/components/NativeFilePreview.ets', import.meta.url),'utf8');
+  const loadBody=previewSource.slice(previewSource.indexOf('private async load('),previewSource.indexOf('private async loadMetadata('));
+  assert.match(loadBody,/this\.loadMetadata\(generation\)/);
+  assert.match(loadBody,/loadImageWithRetry\(generation\)/);
+  assert.doesNotMatch(loadBody,/await this\.client\.statFile/);
+  assert.match(previewSource,/setTimeout\(resolve, 120\)/);
+  const clientSource=readFileSync(new URL('../../harmony/entry/src/main/ets/services/NativeHarnessClient.ets', import.meta.url),'utf8');
+  assert.match(clientSource,/private fileStats: Map<string, Promise<NativeFileStat>>/);
+  const byteBody=clientSource.slice(clientSource.indexOf('async readFileBytes('),clientSource.indexOf('async uploadAttachment('));
+  assert.match(byteBody,/if \(!resolvedVersion\) \{[\s\S]{0,160}this\.statFile\(id, path\)/);
+  assert.match(byteBody,/nativeFileWindowMetadata\(resolvedVersion, resolvedBytes/);
+
+  const listKeys=(length)=>Array.from({length},(_,index)=>'same'+(index===1?'#1':''));
+  assert.deepEqual(listKeys(2),['same','same#1'],
+    'duplicate caller keys receive the same deterministic suffix used by NativeListSource');
 });
 
 test('running activity uses latest still-running start time and exact upstream tool-name categories', () => {

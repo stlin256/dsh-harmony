@@ -254,14 +254,12 @@ export struct NativeFilePreview {
       this.loading = false;
       return;
     }
+    // Size metadata is non-blocking. Content carries its own version and starts
+    // on the same frame as this call.
+    this.loadMetadata(generation);
     try {
-      const stat: NativeFileStat = await this.client.statFile(this.sessionId, this.path);
-      if (!this.mounted || generation !== this.generation) return;
-      this.version = stat.version;
-      this.expectedBytes = stat.bytes;
-      this.bytesLabel = stat.bytes >= 0 ? this.formatBytes(stat.bytes) : '';
       if (this.documentKind === 'image' || (this.documentKind === 'svg' && this.mode === 'preview')) {
-        if (!await this.loadImage(generation, stat.version, stat.bytes)) this.error = '无法预览此图片';
+        if (!await this.loadImageWithRetry(generation)) this.error = '无法预览此图片';
       } else {
         try {
           await this.loadText(true, generation);
@@ -279,7 +277,19 @@ export struct NativeFilePreview {
       if (this.mounted && generation === this.generation) this.loading = false;
     }
   }
-  private async loadImage(generation: number, expectedVersion: string, expectedBytes: number): Promise<boolean> {
+  private async loadMetadata(generation: number): Promise<void> {
+    try {
+      const stat: NativeFileStat = await this.client.statFile(this.sessionId, this.path);
+      if (!this.mounted || generation !== this.generation) return;
+      this.expectedBytes = stat.bytes;
+      if (!this.version) this.version = stat.version;
+      this.bytesLabel = stat.bytes >= 0 ? this.formatBytes(stat.bytes) : '';
+    } catch (_) {
+      // Content loading owns the user-visible success or failure state.
+    }
+  }
+  private async loadImage(generation: number, expectedVersion: string = this.version,
+    expectedBytes: number = this.expectedBytes): Promise<boolean> {
     let pending: image.ImageSource | null = null;
     let stage = 'read';
     try {
@@ -324,6 +334,15 @@ export struct NativeFilePreview {
       return false;
     }
   }
+  private async loadImageWithRetry(generation: number): Promise<boolean> {
+    if (await this.loadImage(generation)) return true;
+    if (!this.mounted || generation !== this.generation) return false;
+    await new Promise<void>((resolve: () => void): void => {
+      setTimeout(resolve, 120);
+    });
+    if (!this.mounted || generation !== this.generation) return false;
+    return this.loadImage(generation);
+  }
   private async loadText(reset: boolean, generation: number = this.generation): Promise<NativeFilePage> {
     const page: NativeFilePage = await this.client.file(this.sessionId, this.path,
       reset ? 1 : this.nextOffset, 500);
@@ -365,7 +384,7 @@ export struct NativeFilePreview {
         .finally((): void => { if (this.mounted && generation === this.generation) this.loading = false; });
     } else if (next === 'preview' && (this.documentKind === 'svg') && !this.imageMap) {
       this.loading = true;
-      this.loadImage(generation, this.version, this.expectedBytes)
+      this.loadImageWithRetry(generation)
         .then((ok: boolean): void => { if (!ok && generation === this.generation) this.error = '无法预览此图片'; })
         .finally((): void => { if (this.mounted && generation === this.generation) this.loading = false; });
     }

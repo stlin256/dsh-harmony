@@ -1,5 +1,6 @@
 import { NativeMessage, NativeAssistantSegment } from './NativeSessionModel';
 import { NativeChatPreferences } from './NativeHostSettings';
+import { NativePlanDocument, nativePlanDiff, nativePlanDocument, nativePlanProgress } from './NativePlan';
 
 /** Flatten editor, terminal and reasoning text into one width-fillable preview. */
 export function nativeOneLinePreview(value: string, limit: number = 160): string {
@@ -43,6 +44,10 @@ export function nativeProcessIcon(category: string): string {
   return category === 'tools' ? 'sparkle' : 'think-outline';
 }
 export function nativeToolDetail(tool: NativeMessage): string {
+  if (tool.toolName === 'todo_write') {
+    const plan = nativePlanDocument(tool);
+    if (plan.parsed) return tool.planDiff || nativePlanProgress(plan);
+  }
   const fields = ['title', 'description', 'objective', 'task', 'task_name', 'name', 'question', 'questions', 'prompt', 'message', 'command', 'cmd', 'queries', 'query', 'pattern', 'url', 'uri', 'file_path', 'path', 'target', 'action', 'status'];
   let values: Record<string, Object> = {};
   try { values = JSON.parse(tool.args) as Record<string, Object>; } catch (_) {}
@@ -79,6 +84,8 @@ function copy(value: NativeMessage): NativeMessage {
   row.toolName = value.toolName || ''; row.phase = value.phase || ''; row.failed = value.failed === true;
   row.outcome = value.outcome || ''; row.error = value.error || ''; row.sourceKind = value.sourceKind || '';
   row.turnKey = value.turnKey || '';
+  row.planDiff = value.planDiff || '';
+  row.renderKey = value.renderKey || '';
   row.metaRaw = value.metaRaw || ''; row.contentRaw = value.contentRaw || ''; row.errorRaw = value.errorRaw || '';
   return row;
 }
@@ -119,6 +126,10 @@ export function nativeOperationLead(operation: NativeMessage): string {
     operation.status === 'running' || operation.status === 'preparing');
 }
 export function nativeOperationPreview(operation: NativeMessage): string {
+  if (operation.role === 'tool' && operation.toolName === 'todo_write') {
+    const plan = nativePlanDocument(operation);
+    if (plan.parsed) return operation.planDiff || nativePlanProgress(plan);
+  }
   if (operation.role === 'tool') return nativeOneLinePreview(nativeToolDetail(operation));
   if (operation.role === 'reasoning') {
     return nativeOneLinePreview(nativeReasoningPreview(operation.reasoning || operation.text, false));
@@ -206,6 +217,14 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
     const reply = new NativeMessage(); reply.id = 'live-assistant'; reply.role = 'assistant'; reply.text = text; reply.turnKey = turnKey;
     ordered.push(reply);
   }
+  let previousPlan = new NativePlanDocument();
+  for (const planned of ordered) {
+    if (planned.role !== 'tool' || planned.toolName !== 'todo_write') continue;
+    const currentPlan = nativePlanDocument(planned);
+    if (!currentPlan.parsed) continue;
+    planned.planDiff = nativePlanDiff(currentPlan, previousPlan);
+    previousPlan = currentPlan;
+  }
   for (const tool of calls.values()) {
     if (tool.status === 'running' && (ends.has(tool.turnKey) || closedSteps.has(tool.turnKey + ':' + tool.step))) tool.status = 'interrupted';
     if (tool.parentCallId) {
@@ -223,14 +242,16 @@ export function nativeTranscript(records: NativeMessage[], running: boolean, str
   let processGroup: NativeMessage | null = null;
   const flushProcess = (closed: boolean): void => {
     if (!processGroup) return;
-    processGroup.closed = closed;
-    processGroup.label = '工作过程';
-    processGroup.detail = nativeProcessGroupPreview(processGroup);
-    processGroup.children.forEach((operation: NativeMessage): void => {
+    const group: NativeMessage = processGroup;
+    group.closed = closed;
+    group.label = '工作过程';
+    group.detail = nativeProcessGroupPreview(group);
+    group.children.forEach((operation: NativeMessage, index: number): void => {
+      operation.renderKey = group.id + ':' + operation.seq + ':' + index;
       operation.label = nativeOperationLead(operation);
       operation.detail = nativeOperationPreview(operation);
     });
-    rows.push(processGroup);
+    rows.push(group);
     processGroup = null;
   };
   for (const row of ordered) {

@@ -83,13 +83,17 @@ DSH Harmony 将 DeepSeek Harness 的工作空间、会话、工具调用和实�
 
 ## 开始使用
 
-1. 在 DeepSeek Harness 中安装本仓库发布的 DSH 插件。
-2. 安装 DSH Harmony，填写 Harness 服务地址。
-3. 选择原生登录或 Passkey，然后选用兼容模式或原生模式。
+把下面这一句发给 DSH，支持 `plugin_manager` 的 Agent 会完成插件安装并核对版本：
 
-插件安装、服务部署与 Passkey 配置都在仓库文档中：
+```text
+请按 https://github.com/stlin256/DSH-Harmony/blob/main/docs/PLUGIN-INSTALL.md 安装并启用 DSH Harmony 插件，使用与 App 匹配的 plugin-v0.3.6 Release 中的 dsh-harmony-plugin-0.3.6.tgz，安装后确认 @dsh-harmony/plugin 正常运行并报告版本。
+```
 
-[插件指南](plugins/dsh-harmony/README.md) · [部署](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [界面模式](docs/UI-MODES.md)
+也可以打开 DSH 的 **插件 → Add plugin**，粘贴同一版本化 tarball 地址。随后打开 DSH Harmony，填写服务地址并选择原生登录或 Passkey。
+
+完整说明：
+
+[插件安装](docs/PLUGIN-INSTALL.md) · [部署](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [界面模式](docs/UI-MODES.md)
 
 ## 连接状态，随时知道
 

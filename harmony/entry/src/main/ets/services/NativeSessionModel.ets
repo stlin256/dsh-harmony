@@ -15,6 +15,7 @@ export class NativeFileViewRequest {
   kind: string = 'file';
   sessionId: string = '';
   path: string = '';
+  requestId: string = '';
 }
 export class NativeAssistantSegment {
   kind: string = ''; text: string = ''; blocks: NativeTextBlock[] = []; images: NativeImageAttachment[] = [];
@@ -29,8 +30,12 @@ export class NativeMessage {
   callId: string = ''; parentCallId: string = ''; rootCallId: string = ''; toolName: string = '';
   phase: string = ''; failed: boolean = false; outcome: string = ''; error: string = '';
   args: string = ''; output: string = ''; status: string = ''; turnKey: string = '';
+  /** View-only summary of this todo_write relative to the preceding complete plan. */
+  planDiff: string = '';
   children: NativeMessage[] = []; foldable: boolean = false; closed: boolean = true;
   images: NativeImageAttachment[] = [];
+  /** View-only identity for repeated source ids inside a projected process group. */
+  renderKey: string = '';
   id: string = '';
   seq: number = 0;
   role: string = '';

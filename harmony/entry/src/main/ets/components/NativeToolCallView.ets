@@ -9,6 +9,8 @@ import { NativeRichContent } from './NativeRichContent';
 import { NativeDiffBlock } from './NativeDiffBlock';
 import { NativeDiffDocument, nativeDiff } from '../services/NativeDiff';
 import { NativeMotion } from '../services/NativeMotion';
+import { NativePlanDocument, nativePlanDocument } from '../services/NativePlan';
+import { NativePlanView } from './NativePlanView';
 
 @Component
 export struct NativeToolCallView {
@@ -23,13 +25,20 @@ export struct NativeToolCallView {
   @StorageLink('nativeDark') private dark: boolean = false;
   @State private expanded: boolean = false;
   @State private diff: NativeDiffDocument = new NativeDiffDocument();
+  @State private plan: NativePlanDocument = new NativePlanDocument();
   @State private detail: string = '';
   aboutToAppear(): void {
     const saved = this.disclosures.get(this.message.turnKey + '|' + this.message.id);
     this.expanded = this.forceExpanded || saved === true;
     this.changed();
   }
-  private changed(): void { this.diff = nativeDiff(this.message); this.detail = nativeToolDetail(this.message); }
+  private changed(): void {
+    const category = nativeToolCategory(this.message.toolName);
+    this.diff = ['edit', 'write'].includes(category) ? nativeDiff(this.message) : new NativeDiffDocument();
+    this.plan = this.message.toolName === 'todo_write' ?
+      nativePlanDocument(this.message) : new NativePlanDocument();
+    this.detail = nativeToolDetail(this.message);
+  }
   private toggle(): void {
     if (this.message.phase === 'preparing') return;
     this.expanded = !this.expanded;
@@ -77,6 +86,13 @@ export struct NativeToolCallView {
           Column({ space: 6 }) {
             if (this.diff.matched) {
               NativeDiffBlock({ document: this.diff })
+            } else if (this.message.toolName === 'todo_write') {
+              if (this.plan.parsed) {
+                NativePlanView({ document: this.plan })
+              } else {
+                Text(this.message.phase === 'preparing' ? '正在更新计划' : '计划内容不可用')
+                  .fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91')
+              }
             } else if (this.message.args && nativeToolArgumentsVisible(this.message)) {
               NativeTextContent({ text: this.message.args, monospace: true, client: this.client, sessionId: this.sessionId })
             }
@@ -87,7 +103,8 @@ export struct NativeToolCallView {
                 attachments: this.message.images
               })
             }
-            if (!this.diff.matched && this.message.output && nativeToolOutputVisible(this.message)) {
+            if (!this.diff.matched && this.message.toolName !== 'todo_write' &&
+              this.message.output && nativeToolOutputVisible(this.message)) {
               Divider().color(this.dark ? '#3B3B3E' : '#E4E5E8')
               if (this.message.blocks.length) {
                 NativeRichContent({

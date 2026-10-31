@@ -30,6 +30,9 @@ import { NativeImageLightbox } from './NativeImageLightbox';
 import { NativeFilePreview } from './NativeFilePreview';
 import { NativeFileBrowser } from './NativeFileBrowser';
 import { NativeHistoryRetryPolicy, nativeHistoryPageAdvanced } from '../services/NativeHistoryPrefetch';
+import { NativePlanDocument, nativeLatestPlan, nativePlanSignature } from '../services/NativePlan';
+import { NativeTaskDock } from './NativeTaskDock';
+import { NativeConversationDock } from './NativeConversationDock';
 
 class NativeExportCapabilities { copyMarkdown: boolean = false; downloadLog: boolean = false; }
 class NativeWorkspaceOrderRequest {
@@ -158,11 +161,13 @@ export struct NativeWorkspace {
   @State private streamText: string = '';
   @State private streamReasoning: string = '';
   @State private footerCopiedId: string = '';
+  @State private taskPlan: NativePlanDocument = new NativePlanDocument();
   private sessionSource: NativeListSource<NativeWorkspaceRow> = new NativeListSource<NativeWorkspaceRow>();
   private source: NativeListSource<NativeMessage> = new NativeListSource<NativeMessage>();
   private scroller: Scroller = new Scroller();
   private model: NativeSessionModel = new NativeSessionModel();
   private previousRows: NativeMessage[] = [];
+  private taskPlanSignature: string = '';
   private followTail: boolean = true;
   private mounted: boolean = false;
   private generation: number = 0;
@@ -1316,6 +1321,12 @@ export struct NativeWorkspace {
   }
   private renderTranscript(): void {
     const rows = nativeTranscript(this.model.messages, this.model.running, this.model.streamTools, this.model.streamReasoning, this.model.streamText);
+    const plan = nativeLatestPlan(rows);
+    const planSignature = nativePlanSignature(plan);
+    if (planSignature !== this.taskPlanSignature || plan.parsed !== this.taskPlan.parsed) {
+      this.taskPlanSignature = planSignature;
+      this.taskPlan = plan;
+    }
     const visible = nativePresentTranscript(rows, this.client.hostSettings.chat(), this.model.turnDisclosure, this.model.collapseThrough);
     this.visibleRows = visible;
     this.source.set(visible, (row: NativeMessage): string => row.id);
@@ -1923,7 +1934,7 @@ export struct NativeWorkspace {
         Row({ space: 8 }) { LoadingProgress().width(14).height(14); Text('正在加载会话…').fontSize(12).fontColor(this.dark ? '#93969B' : '#8A8D91') }
           .width('100%').padding({ left: 4, top: 4, bottom: 4 })
       }
-      Stack({ alignContent: Alignment.BottomEnd }) {
+      Stack({ alignContent: Alignment.TopStart }) {
         List({ space: 12, scroller: this.scroller }) {
           if (this.hasMore) {
             ListItem() {
@@ -1993,26 +2004,36 @@ export struct NativeWorkspace {
             }
           })
           .onScroll(() => { this.updateScrollTail(); })
+        if (this.taskPlan.items.length) {
+          Column() {
+            NativeConversationDock() {
+              NativeTaskDock({ document: this.taskPlan, sessionId: this.selected })
+            }
+          }.width('100%').zIndex(4)
+        }
         if (this.backToBottomVisible && !this.menuId && !this.utilityOpen &&
           !this.modelPickerOpen && !this.toolsOpen && !this.workspacePickerOpen &&
           !this.showSessions) {
-          Button({ type: ButtonType.Normal }) {
-            Stack({ alignContent: Alignment.Center }) {
-              DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 16,
-                color: this.dark ? '#F9FAFB' : '#17181B' }).rotate({ angle: -90 })
-              if (this.backToBottomNew) {
-                Text('').position({ x: 15, y: -15 }).width(6).height(6).borderRadius(6)
-                  .backgroundColor(this.dark ? '#8AB4FF' : '#3964FE')
+          Stack({ alignContent: Alignment.BottomEnd }) {
+            Button({ type: ButtonType.Normal }) {
+              Stack({ alignContent: Alignment.Center }) {
+                DSHIcon({ glyph: 'chevron-left-outline', glyphSize: 16,
+                  color: this.dark ? '#F9FAFB' : '#17181B' }).rotate({ angle: -90 })
+                if (this.backToBottomNew) {
+                  Text('').position({ x: 15, y: -15 }).width(6).height(6).borderRadius(6)
+                    .backgroundColor(this.dark ? '#8AB4FF' : '#3964FE')
                 }
-            }.width('100%').height('100%')
-          }.width(44).height(44).padding(0).borderRadius(22).clip(true)
-            .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
-            .border({ width: 0.5, color: this.dark ? '#4A4B4F' : '#D8DADF' })
-            .shadow({ radius: 10, color: this.dark ? '#66000000' : '#22000000', offsetY: 3 })
-            .margin({ right: 4, bottom: 8 })
-            .accessibilityText(this.backToBottomNew ? '回到底部，有新内容' : '回到底部')
-            .onClick((): void => { this.returnToBottom(); })
-            .transition(NativeMotion.rowTransition())
+              }.width('100%').height('100%')
+            }.width(44).height(44).padding(0).borderRadius(22).clip(true)
+              .backgroundColor(this.dark ? '#2C2C2E' : '#FFFFFF')
+              .border({ width: 0.5, color: this.dark ? '#4A4B4F' : '#D8DADF' })
+              .shadow({ radius: 10, color: this.dark ? '#66000000' : '#22000000', offsetY: 3 })
+              .margin({ right: 4, bottom: 8 })
+              .accessibilityText(this.backToBottomNew ? '回到底部，有新内容' : '回到底部')
+              .onClick((): void => { this.returnToBottom(); })
+              .transition(NativeMotion.rowTransition())
+          }.width('100%').height('100%')
+            .hitTestBehavior(HitTestMode.Transparent).zIndex(6)
         }
       }.layoutWeight(1).width('100%')
         .onAreaChange((_old: Area, area: Area): void => {

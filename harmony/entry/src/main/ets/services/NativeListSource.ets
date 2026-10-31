@@ -11,7 +11,13 @@ export class NativeListSource<T> implements IDataSource {
     const previous = this.rows;
     const previousKeys = this.keys;
     const key = (item: T): string => keyOf ? keyOf(item) : JSON.stringify(item);
-    const nextKeys = rows.map((item: T): string => key(item));
+    const occurrences: Map<string, number> = new Map<string, number>();
+    const nextKeys = rows.map((item: T): string => {
+      const base = key(item);
+      const occurrence = occurrences.get(base) || 0;
+      occurrences.set(base, occurrence + 1);
+      return occurrence === 0 ? base : base + '#' + occurrence;
+    });
     // Retain an immutable snapshot: callers frequently append to the same
     // array instance, and a live reference would hide the structural delta.
     this.rows = rows.slice();

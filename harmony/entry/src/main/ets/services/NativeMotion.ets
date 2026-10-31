@@ -1,7 +1,7 @@
 import { curves, UIContext } from '@kit.ArkUI';
 import { NativeExperience } from './NativeExperience';
 
-export type NativeMotionToken = 'press' | 'micro' | 'overlay' | 'navigation' | 'surface';
+export type NativeMotionToken = 'press' | 'micro' | 'overlay' | 'navigation' | 'surface' | 'brand';
 
 /**
  * Semantic motion entry point for the native shell.
@@ -24,6 +24,7 @@ export class NativeMotion {
       case 'overlay': return 190;
       case 'navigation': return 220;
       case 'surface': return 260;
+      case 'brand': return 560;
       default: return 190;
     }
   }

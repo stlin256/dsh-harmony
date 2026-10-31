@@ -118,6 +118,12 @@ or real transcript content in source, tests, docs, logs or commits.
 - Stability, settings feedback, notification prominence and composer inset
   E2E:
   [2026-10-31-stability-settings-notification-composer-e2e.md](docs/testing/2026-10-31-stability-settings-notification-composer-e2e.md)
+- Plugin installation, onboarding and branded launch requirement:
+  [2026-10-31-plugin-install-onboarding-launch.md](docs/requirements/2026-10-31-plugin-install-onboarding-launch.md)
+- Plugin installation, onboarding and branded launch implementation spec:
+  [2026-10-31-plugin-install-onboarding-launch.md](docs/specs/2026-10-31-plugin-install-onboarding-launch.md)
+- Plugin installation, onboarding and branded launch E2E:
+  [2026-10-31-plugin-install-onboarding-launch-e2e.md](docs/testing/2026-10-31-plugin-install-onboarding-launch-e2e.md)
 - Latest DSH stream recovery and native composer attachment requirement:
   [2026-10-31-stream-recovery-composer-attachments.md](docs/requirements/2026-10-31-stream-recovery-composer-attachments.md)
 - Latest DSH stream recovery and native composer attachment implementation
@@ -131,6 +137,18 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-history-continuous-prefetch.md](docs/specs/2026-10-31-history-continuous-prefetch.md)
 - Continuous history prefetch E2E:
   [2026-10-31-history-continuous-prefetch-e2e.md](docs/testing/2026-10-31-history-continuous-prefetch-e2e.md)
+- Plan expansion stability and immediate file preview requirement:
+  [2026-10-31-plan-expand-file-open-latency.md](docs/requirements/2026-10-31-plan-expand-file-open-latency.md)
+- Plan expansion stability and immediate file preview implementation spec:
+  [2026-10-31-plan-expand-file-open-latency.md](docs/specs/2026-10-31-plan-expand-file-open-latency.md)
+- Plan expansion stability and immediate file preview E2E:
+  [2026-10-31-plan-expand-file-open-latency-e2e.md](docs/testing/2026-10-31-plan-expand-file-open-latency-e2e.md)
+- Structured plan update and floating task list requirement:
+  [2026-10-31-structured-plan-update.md](docs/requirements/2026-10-31-structured-plan-update.md)
+- Structured plan update and floating task list implementation spec:
+  [2026-10-31-structured-plan-update.md](docs/specs/2026-10-31-structured-plan-update.md)
+- Structured plan update and floating task list E2E:
+  [2026-10-31-structured-plan-update-e2e.md](docs/testing/2026-10-31-structured-plan-update-e2e.md)
 - Native interaction baseline:
   [NATIVE-INTERACTION-SPEC.md](docs/NATIVE-INTERACTION-SPEC.md)
 - Existing shell/performance E2E:

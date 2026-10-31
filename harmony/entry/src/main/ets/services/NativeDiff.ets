@@ -158,6 +158,7 @@ function explicitDiffs(value: Object, fallbackPath: string): NativeDiffDocument 
   const combined = new NativeDiffDocument();
   if (!Array.isArray(value)) return combined;
   value.forEach((raw: Object): void => {
+    if (!raw || typeof raw !== 'object') return;
     const item = raw as Record<string, Object>;
     const path = typeof item['path'] === 'string' && item['path'] ?
       item['path'] as string : fallbackPath;
@@ -175,20 +176,28 @@ function explicitDiffs(value: Object, fallbackPath: string): NativeDiffDocument 
 }
 
 function failedTool(tool: NativeMessage): boolean {
+  if (!tool) return false;
   if (tool.failed || tool.status === 'error' || tool.status === 'interrupted') return true;
   if (tool.outcome === 'failed' || tool.outcome === 'error' ||
       tool.outcome === 'interrupted' || tool.outcome === 'cancelled') return true;
-  const result = tool.output || tool.error;
+  const result = tool.output || tool.error || '';
   return result.includes('AUTO_REVIEW_DENIED');
 }
 
 /** Extract only explicit patch/edit fields; arbitrary output wording is never enough. */
 export function nativeDiff(tool: NativeMessage): NativeDiffDocument {
+  if (!tool) return new NativeDiffDocument();
   if (failedTool(tool)) return new NativeDiffDocument();
   let args: Record<string, Object> = {};
   let meta: Record<string, Object> = {};
-  try { args = JSON.parse(tool.args || '{}') as Record<string, Object>; } catch (_) {}
-  try { meta = JSON.parse(tool.metaRaw || '{}') as Record<string, Object>; } catch (_) {}
+  try {
+    const parsed = JSON.parse(tool.args || '{}') as Record<string, Object>;
+    if (parsed && !Array.isArray(parsed)) args = parsed;
+  } catch (_) {}
+  try {
+    const parsed = JSON.parse(tool.metaRaw || '{}') as Record<string, Object>;
+    if (parsed && !Array.isArray(parsed)) meta = parsed;
+  } catch (_) {}
   const fallbackPath = typeof args['file_path'] === 'string' ? args['file_path'] as string :
     typeof args['path'] === 'string' ? args['path'] as string : '';
   if (args['diffs'] !== undefined) {

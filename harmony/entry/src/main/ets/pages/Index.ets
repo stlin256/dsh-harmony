@@ -19,6 +19,8 @@ import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 import { NativeMotion } from '../services/NativeMotion';
 import { StoreShowcaseClient } from '../services/StoreShowcaseClient';
 import { ProductCapabilities } from 'entry/ProductCapabilities';
+import { NativeLaunchFlow, NativeLaunchPhase } from '../services/NativeLaunchFlow';
+import { NativeLaunchSurface } from '../components/NativeLaunchSurface';
 
 @Entry
 @Component
@@ -59,16 +61,27 @@ struct Index {
   @State private busy: boolean = false;
   @State private error: string = '';
   @State private progress: number = 0;
+  @State private launchPhase: string = NativeLaunchPhase.booting;
+  @State private launchOpacity: number = 1;
+  @State private launchError: string = '';
+  @State private onboardingSeen: boolean = false;
+  private launchStartedAt: number = 0;
   private settingsExitTimer: number = -1;
+  private launchFinishTimer: number = -1;
   private exitGestureArmedAt: number = 0;
   @StorageLink('requestedSession') @Watch('openNotification') private requestedSession: string = '';
 
   aboutToAppear(): void {
-    this.initialize().catch((error: Error) => { this.error = error.message || '连接失败'; });
+    this.launchStartedAt = Date.now();
+    this.launchPhase = NativeLaunchPhase.booting;
+    this.initialize().catch((error: Error) => {
+      this.failLaunch(error.message || '启动失败');
+    });
   }
 
   aboutToDisappear(): void {
     clearTimeout(this.settingsExitTimer);
+    clearTimeout(this.launchFinishTimer);
   }
 
   private async initialize(): Promise<void> {
@@ -86,6 +99,8 @@ struct Index {
       this.error = '';
       this.ready = true;
       this.settingsCached = true;
+      this.launchOpacity = 0;
+      this.launchPhase = NativeLaunchPhase.hidden;
       this.applyNativeTheme();
       if (AppStorage.get<string>('storeShowcaseScreen') === 'settings') this.openSettings();
       return;
@@ -93,13 +108,123 @@ struct Index {
     const savedMode = this.store.getSync('uiMode', 'compatibility') as string;
     this.uiMode = savedMode === 'native' ? 'native' : 'compatibility';
     this.address = this.store.getSync('origin', '') as string;
+    this.onboardingSeen = this.store.getSync('onboardingSeen', false) === true;
     const savedLoginMode = this.store.getSync('mode', 'native') as string;
     this.mode = ProductCapabilities.supportsPasskey && savedLoginMode === 'passkey' ? 'passkey' : 'native';
     if (!ProductCapabilities.supportsPasskey && savedLoginMode === 'passkey') {
       this.store.putSync('mode', 'native');
       await this.store.flush();
     }
-    if (this.normalize(this.address)) await this.connect();
+    const next = this.normalize(this.address);
+    const phase = NativeLaunchFlow.afterPreferences(next.length > 0, this.onboardingSeen);
+    if (phase === NativeLaunchPhase.intro) {
+      await this.revealLaunch();
+      this.launchPhase = NativeLaunchPhase.intro;
+      return;
+    }
+    this.launchPhase = NativeLaunchPhase.restoring;
+    try {
+      await this.connect(true);
+      await this.revealLaunch();
+      this.finishLaunch();
+    } catch (error) {
+      await this.revealLaunch();
+      this.failLaunch(NativeLaunchFlow.safeMessage(
+        error instanceof Error ? error : null, '无法恢复上次连接'));
+    }
+  }
+
+  private async revealLaunch(): Promise<void> {
+    const minimum = NativeExperience.reducedMotion() ? 80 : 520;
+    const remaining = minimum - (Date.now() - this.launchStartedAt);
+    if (remaining > 0) {
+      await new Promise<void>((resolve: () => void): void => {
+        setTimeout(resolve, remaining);
+      });
+    }
+  }
+
+  private failLaunch(message: string): void {
+    this.ready = false;
+    this.busy = false;
+    this.error = '';
+    this.launchError = NativeLaunchFlow.safeMessage(null, message);
+    this.launchPhase = NativeLaunchFlow.needsLogin(this.launchError)
+      ? NativeLaunchPhase.login : NativeLaunchPhase.error;
+    this.applyNativeTheme();
+  }
+
+  private attemptConnect(): void {
+    if (this.busy) return;
+    const failurePhase = this.launchPhase === NativeLaunchPhase.error
+      ? NativeLaunchPhase.error : NativeLaunchPhase.login;
+    this.launchError = '';
+    this.connect(false).then((): void => {
+      this.finishLaunch();
+    }).catch((error: Error): void => {
+      this.launchError = NativeLaunchFlow.safeMessage(error, '连接失败');
+      this.launchPhase = NativeLaunchFlow.needsLogin(this.launchError)
+        ? NativeLaunchPhase.login : failurePhase;
+    });
+  }
+
+  private async setOnboardingSeen(value: boolean): Promise<void> {
+    this.onboardingSeen = value;
+    this.store?.putSync('onboardingSeen', value);
+    try { await this.store?.flush(); } catch (_) {}
+  }
+
+  private skipOnboarding(): void {
+    this.setOnboardingSeen(true).catch((): void => {});
+    NativeMotion.animate(this.getUIContext(), 'brand', (): void => {
+      this.launchError = '';
+      this.launchPhase = NativeLaunchPhase.login;
+    });
+  }
+
+  private openGuide(): void {
+    NativeMotion.animate(this.getUIContext(), 'brand', (): void => {
+      this.launchPhase = NativeLaunchPhase.guide;
+    });
+  }
+
+  private backGuide(): void {
+    NativeMotion.animate(this.getUIContext(), 'brand', (): void => {
+      this.launchPhase = NativeLaunchPhase.intro;
+    });
+  }
+
+  private openInstallDetails(): void {
+    NativeMotion.animate(this.getUIContext(), 'navigation', (): void => {
+      this.launchPhase = NativeLaunchPhase.install;
+    });
+  }
+
+  private closeInstallDetails(): void {
+    NativeMotion.animate(this.getUIContext(), 'navigation', (): void => {
+      this.launchPhase = NativeLaunchPhase.guide;
+    });
+  }
+
+  private finishGuide(): void {
+    this.skipOnboarding();
+  }
+
+  private finishLaunch(): void {
+    clearTimeout(this.launchFinishTimer);
+    this.launchError = '';
+    this.setOnboardingSeen(true).catch((): void => {});
+    this.launchPhase = NativeLaunchPhase.entering;
+    this.launchOpacity = 1;
+    NativeMotion.animate(this.getUIContext(), 'surface', (): void => {
+      this.launchOpacity = 0;
+    });
+    this.launchFinishTimer = setTimeout((): void => {
+      this.launchPhase = NativeLaunchPhase.hidden;
+      this.launchOpacity = 0;
+      this.applyNativeTheme();
+    }, NativeMotion.enabled() ? NativeMotion.duration('surface') + 20 : 0);
+    this.applyNativeTheme();
   }
 
   private normalize(input: string): string {
@@ -110,11 +235,11 @@ struct Index {
     return value;
   }
 
-  private async connect(): Promise<void> {
+  private async connect(restoring: boolean = false): Promise<void> {
     const next = this.normalize(this.address);
-    if (!next) { this.error = '请输入有效的服务地址'; return; }
+    if (!next) throw new Error('请输入有效的服务地址');
     if (!ProductCapabilities.supportsPasskey && this.mode === 'passkey') this.mode = 'native';
-    if (this.mode === 'passkey' && !next.startsWith('https://')) { this.error = 'Passkey 登录需要 HTTPS'; return; }
+    if (this.mode === 'passkey' && !next.startsWith('https://')) throw new Error('Passkey 登录需要 HTTPS');
     this.busy = true;
     try {
       if (this.origin && this.origin !== next) throw new Error('请先退出当前连接');
@@ -124,7 +249,7 @@ struct Index {
       if (this.mode === 'native') {
         if (state.mode !== 'host') throw new Error('此服务需要 Passkey 登录');
         if (!state.authenticated) {
-          if (!this.accessKey.trim()) throw new Error('请输入访问密钥');
+          if (!this.accessKey.trim()) throw new Error(restoring ? '上次登录已失效，请重新连接' : '请输入访问密钥');
           await this.nativeClient.loginNative(this.accessKey.trim());
           state = await this.nativeClient.state();
           if (!state.authenticated) throw new Error('登录失败，请检查访问密钥');
@@ -134,6 +259,10 @@ struct Index {
       this.authOrigin = this.proxyAuth ? this.normalize(state.authOrigin) : '';
       if (this.authOrigin && !this.authOrigin.startsWith('https://')) throw new Error('认证服务需要 HTTPS');
       if (this.proxyAuth && !this.authOrigin) throw new Error('网关未提供有效的认证服务地址');
+      if (this.mode === 'passkey') {
+        this.authSurface = true;
+        AppStorage.setOrCreate<boolean>('nativeAuthSurface', true);
+      }
       this.bridge = new PocketBridge(this.context, this.controller, next, async (): Promise<void> => {
         await this.resetConnectionState();
       });
@@ -146,6 +275,7 @@ struct Index {
       // Mount the settings tree while hidden so the first open paints from cache.
       this.settingsCached = true;
       if (this.uiMode === 'native') this.openPocketRoute();
+      this.applyNativeTheme();
     } catch (error) {
       this.origin = ''; this.ready = false;
       throw new Error(error instanceof Error ? error.message : '连接失败');
@@ -219,7 +349,8 @@ struct Index {
     }
   }
   private applyNativeTheme(): void {
-    const shell = !this.ready || this.nativeSettings || this.connectionManager ||
+    const shell = !this.ready || this.launchPhase !== NativeLaunchPhase.hidden ||
+      this.nativeSettings || this.connectionManager ||
       (this.uiMode === 'native' && !this.authSurface && !this.compatibilitySurface);
     AppStorage.setOrCreate<boolean>('nativeShellForeground', shell);
     AppStorage.setOrCreate<boolean>('pocketPageThemeKnown', true);
@@ -228,10 +359,21 @@ struct Index {
   }
   private loginSurface(): void {
     this.invokeNative('widgetDisconnected', '').catch(() => {});
-    AppStorage.setOrCreate<boolean>('nativeAuthSurface', true);
-    this.authSurface = true;
+    AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);
+    this.authSurface = false;
+    this.launchError = '';
+    this.launchOpacity = 1;
+    this.launchPhase = NativeLaunchPhase.login;
+    this.applyNativeTheme();
   }
-  private authenticated(): void { if (this.uiMode === 'native') { this.authSurface = false; AppStorage.setOrCreate<boolean>('nativeAuthSurface', false); this.applyNativeTheme(); } }
+  private authenticated(): void {
+    if (this.uiMode === 'native') {
+      this.authSurface = false;
+      AppStorage.setOrCreate<boolean>('nativeAuthSurface', false);
+      if (this.launchPhase !== NativeLaunchPhase.hidden) this.finishLaunch();
+      else this.applyNativeTheme();
+    }
+  }
   private async selectMode(mode: string): Promise<void> {
     this.modePicker = false;
     if (this.bridge) await this.bridge.performNative('uiMode', mode);
@@ -277,6 +419,15 @@ struct Index {
     this.nativeClient = new NativeHarnessClient('');
     this.requestedPocketRoute = ''; this.requestedSession = '';
     try { this.store?.putSync('origin', retainedAddress); await this.store?.flush(); } catch (_) {}
+    this.onboardingSeen = false;
+    try {
+      this.store?.putSync('onboardingSeen', false);
+      await this.store?.flush();
+    } catch (_) {}
+    this.launchError = '';
+    this.launchOpacity = 1;
+    this.launchPhase = NativeLaunchPhase.intro;
+    this.applyNativeTheme();
   }
   private async disconnectConnection(): Promise<void> {
     this.busy = true;
@@ -388,6 +539,19 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.launchPhase === NativeLaunchPhase.booting ||
+      this.launchPhase === NativeLaunchPhase.restoring ||
+      this.launchPhase === NativeLaunchPhase.entering) return true;
+    if (this.launchPhase === NativeLaunchPhase.install) { this.closeInstallDetails(); return true; }
+    if (this.launchPhase === NativeLaunchPhase.guide) { this.backGuide(); return true; }
+    if (this.launchPhase === NativeLaunchPhase.login) {
+      this.launchPhase = NativeLaunchPhase.intro;
+      return true;
+    }
+    if (this.launchPhase === NativeLaunchPhase.error) {
+      this.launchPhase = NativeLaunchPhase.login;
+      return true;
+    }
     if (!this.ready) return false;
     if (this.modePicker) { this.modePicker = false; return true; }
     if (this.nativeSettings) {
@@ -452,7 +616,9 @@ struct Index {
               .onClick(() => { this.connectionManager = false; })
           }.padding(24).width('100%').constraintSize({ maxWidth: 600 }).alignItems(HorizontalAlign.Start)
         }.layoutWeight(1).width('100%')
-      } else if (this.ready) {
+      } else if (this.ready &&
+        (this.launchPhase === NativeLaunchPhase.entering ||
+          this.launchPhase === NativeLaunchPhase.hidden)) {
         if (this.uiMode === 'native' && !this.authSurface) {
           NativeWorkspace({ client: this.nativeClient, context: this.context, supportsPush: PushKitAdapter.supported,
             onLogin: (): void => { this.loginSurface(); },
@@ -507,46 +673,10 @@ struct Index {
               return true;
             })
         }
-      } else {
-        Scroll() {
-          Column({ space: 16 }) {
-            Text('DSH Harmony').fontSize(28).fontWeight(FontWeight.Medium)
-              .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-            Text('连接你的 DeepSeek Harness 工作空间').fontSize(14)
-              .fontColor(this.nativeDark ? '#CFD3D6' : '#61666B')
-            TextInput({ text: this.address, placeholder: 'https://dsh.example.com' })
-              .height(48).borderRadius(12)
-              .backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
-              .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-              .type(InputType.URL).onChange((value: string) => { this.address = value; })
-            Button((this.mode === 'native' ? '✓  ' : '') + '原生登录', { type: ButtonType.Normal })
-              .height(48).borderRadius(12).fontSize(14)
-              .backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
-              .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-              .border({ width: 1, color: this.mode === 'native' ? '#ADB2B8' : Color.Transparent })
-              .width('100%').onClick(() => { this.mode = 'native'; })
-            if (this.mode === 'native') {
-              TextInput({ text: this.accessKey, placeholder: '访问密钥' }).type(InputType.Password)
-                .height(48).borderRadius(12).backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
-                .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115').onChange((value: string) => { this.accessKey = value; })
-            }
-            if (ProductCapabilities.supportsPasskey) {
-              Button((this.mode === 'passkey' ? '✓  ' : '') + 'Pocket ID · Passkey', { type: ButtonType.Normal })
-                .height(48).borderRadius(12).fontSize(14)
-                .backgroundColor(this.nativeDark ? '#2C2C2E' : '#F5F6F7')
-                .fontColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-                .border({ width: 1, color: this.mode === 'passkey' ? '#ADB2B8' : Color.Transparent })
-                .width('100%').onClick(() => { this.mode = 'passkey'; this.accessKey = ''; })
-            }
-            Button(this.busy ? '正在连接…' : '连接工作空间', { type: ButtonType.Normal })
-              .height(48).borderRadius(12).fontSize(14).width('100%').enabled(!this.busy)
-              .backgroundColor(this.nativeDark ? '#F9FAFB' : '#0F1115')
-              .fontColor(this.nativeDark ? '#151517' : '#FFFFFF')
-              .onClick(() => { this.connect().catch((error: Error) => { this.error = error.message || '连接失败'; }); })
-          }.padding(28).width('100%').constraintSize({ maxWidth: 600 })
-        }.layoutWeight(1).width('100%')
       }
-      if (this.error) { Text(this.error).fontColor('#b91c1c').fontSize(13).padding(10) }
+      if (this.error && this.launchPhase === NativeLaunchPhase.hidden) {
+        Text(this.error).fontColor('#b91c1c').fontSize(13).padding(10)
+      }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
       .bindSheet(this.compatibilitySurface, this.compatibilitySheet, { height: SheetSize.LARGE, showClose: false,
         onDisappear: (): void => { this.closeCompatibility(); } })
@@ -556,6 +686,43 @@ struct Index {
           .opacity(this.settingsOpacity)
           .translate({ x: this.settingsShift })
           .hitTestBehavior(this.nativeSettings ? HitTestMode.Default : HitTestMode.None)
+      }
+      if (this.launchPhase !== NativeLaunchPhase.hidden) {
+        Column() {
+          NativeLaunchSurface({
+            phase: this.launchPhase,
+            address: this.address,
+            accessKey: this.accessKey,
+            mode: this.mode,
+            showPasskey: ProductCapabilities.supportsPasskey,
+            busy: this.busy,
+            errorText: this.launchError,
+            onAddressChange: (value: string): void => { this.address = value; },
+            onAccessKeyChange: (value: string): void => { this.accessKey = value; },
+            onModeChange: (value: string): void => {
+              this.mode = value;
+              if (value === 'passkey') this.accessKey = '';
+            },
+            onConnect: (): void => { this.attemptConnect(); },
+            onOpenGuide: (): void => { this.openGuide(); },
+            onCloseGuide: (): void => { this.backGuide(); },
+            onOpenInstall: (): void => { this.openInstallDetails(); },
+            onCloseInstall: (): void => { this.closeInstallDetails(); },
+            onDirect: (): void => {
+              if (this.launchPhase === NativeLaunchPhase.guide) this.finishGuide();
+              else this.skipOnboarding();
+            },
+            onEditAddress: (): void => {
+              this.launchError = '';
+              this.launchPhase = this.launchPhase === NativeLaunchPhase.error
+                ? NativeLaunchPhase.login : NativeLaunchPhase.intro;
+            },
+            onRetry: (): void => { this.attemptConnect(); }
+          })
+        }
+        .width('100%').height('100%').opacity(this.launchOpacity)
+        .backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
+        .hitTestBehavior(this.launchOpacity > 0 ? HitTestMode.Default : HitTestMode.None)
       }
     }.width('100%').height('100%').backgroundColor(this.nativeDark ? '#151517' : '#FFFFFF')
   }

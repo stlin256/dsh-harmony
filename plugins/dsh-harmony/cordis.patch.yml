@@ -1,0 +1,6 @@
+# DSH Harmony bundle: one Host row serves authentication, native APIs, live
+# events, task state and notifications. The browser half provides the native
+# workspace session handoff.
+- insert:
+    - id: dsh-harmony
+      name: '@dsh-harmony/plugin'

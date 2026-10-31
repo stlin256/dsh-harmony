@@ -110,12 +110,13 @@ detail subtree enters or leaves, preventing a one-frame flash through an
 intermediate offset during list relayout.
 
 Chat file resolution publishes a serializable `NativeFileViewRequest` through
-AppStorage after the workspace stat/list call succeeds. `NativeWorkspace` renders
-the reader or directory browser as a root Stack sibling and owns dismissal.
-`NativeInlineText` keeps only the transient resolving indicator and never mounts
-a content cover inside the transcript list. This separation applies the same
-success-path contract to files and folders: a resolved path always produces a
-visible surface, while an unresolved path keeps the short error message.
+AppStorage before any workspace network call. `NativeWorkspace` immediately
+renders the reader as a root Stack sibling and owns dismissal. Background
+validation may replace the request with a resolved basename, switch a directory
+to the file browser or let the mounted reader expose the concise error state.
+Each request carries an AppStorage request id; closing or opening another target
+invalidates late results. `NativeInlineText` never mounts a content cover inside
+the transcript list.
 
 The workspace measures the transcript viewport in `onAreaChange`. It passes
 60% of that height into `NativeProcessView` as the outer operation-list cap and

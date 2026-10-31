@@ -83,13 +83,17 @@ Login stays flexible:
 
 ## Get started
 
-1. Install the DSH plugin from this repository in DeepSeek Harness.
-2. Install DSH Harmony and enter the Harness service origin.
-3. Choose native login or Passkey, then use compatibility or native mode.
+Send this prompt to DSH. An agent with `plugin_manager` support will install the plugin and verify its version:
+
+```text
+Follow https://github.com/stlin256/DSH-Harmony/blob/main/docs/PLUGIN-INSTALL.md to install and enable DSH Harmony. Use dsh-harmony-plugin-0.3.6.tgz from the matching plugin-v0.3.6 release, then verify that @dsh-harmony/plugin is running and report its version.
+```
+
+You can also open **Plugins → Add plugin** in DSH and paste the same versioned tarball URL. Then open DSH Harmony, enter the service origin and choose native login or Passkey.
 
 Setup guides:
 
-[Plugin](plugins/dsh-harmony/README.md) · [Deployment](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [Interface modes](docs/UI-MODES.md)
+[Plugin installation](docs/PLUGIN-INSTALL.md) · [Deployment](docs/DEPLOYMENT.md) · [Passkey](docs/OIDC-DEPLOYMENT.md) · [Interface modes](docs/UI-MODES.md)
 
 ## Stay close to every task
 

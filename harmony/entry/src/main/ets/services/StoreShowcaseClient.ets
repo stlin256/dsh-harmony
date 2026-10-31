@@ -32,6 +32,28 @@ DeepSeek Harness 的鸿蒙原生客户端。
 - 亮色、暗色与跟随系统
 `;
 
+class ShowcaseTodo {
+  content: string = '';
+  status: string = 'pending';
+}
+
+class ShowcaseTodoPayload {
+  todos: ShowcaseTodo[] = [];
+}
+
+function showcaseTodo(content: string, status: string): ShowcaseTodo {
+  const value = new ShowcaseTodo();
+  value.content = content;
+  value.status = status;
+  return value;
+}
+
+function showcasePlan(items: ShowcaseTodo[]): string {
+  const value = new ShowcaseTodoPayload();
+  value.todos = items;
+  return JSON.stringify(value);
+}
+
 function message(id: string, role: string, seq: number, turn: number, step: number, text: string): NativeMessage {
   const value = new NativeMessage();
   value.id = id;
@@ -75,17 +97,36 @@ function showcaseMessages(): NativeMessage[] {
   reasoning.text = '';
   rows.push(reasoning);
 
+  rows.push(toolMessage('plan-start', 'release-plan', 'todo_write',
+    showcasePlan([
+      showcaseTodo('核对 Release 变体', 'pending'),
+      showcaseTodo('构建商店版本', 'pending'),
+      showcaseTodo('整理商店素材', 'pending')
+    ]), '', 3, 1, 2));
+  rows.push(toolMessage('plan-result', 'release-plan', 'todo_write',
+    '', '', 4, 1, 2, true));
+
   rows.push(toolMessage('read-build-profile-start', 'read-build-profile', 'read',
-    '{"path":"harmony/build-profile.json5"}', '', 3, 1, 2));
+    '{"path":"harmony/build-profile.json5"}', '', 5, 1, 2));
   rows.push(toolMessage('read-build-profile-result', 'read-build-profile', 'read',
-    '', '已读取 1 个文件：harmony/build-profile.json5', 4, 1, 2, true));
+    '', '已读取 1 个文件：harmony/build-profile.json5', 6, 1, 2, true));
   rows.push(toolMessage('run-build-check-start', 'run-build-check', 'exec_command',
     '{"command":"devecocli build --product store --build-mode release"}', '',
-    5, 1, 2));
+    7, 1, 2));
   rows.push(toolMessage('run-build-check-result', 'run-build-check', 'exec_command',
-    '', 'BUILD SUCCESSFUL\nstore: release variant ready', 6, 1, 2, true));
+    '', 'BUILD SUCCESSFUL\nstore: release variant ready', 8, 1, 2, true));
 
-  const assistant = message('assistant-release', 'assistant', 7, 1, 3, '');
+  rows.push(toolMessage('plan-refresh-start', 'release-plan-refresh', 'todo_write',
+    showcasePlan([
+      showcaseTodo('核对 Release 变体', 'completed'),
+      showcaseTodo('构建商店版本', 'completed'),
+      showcaseTodo('整理商店素材', 'pending'),
+      showcaseTodo('检查隐私与账户入口', 'in_progress')
+    ]), '', 9, 1, 2));
+  rows.push(toolMessage('plan-refresh-result', 'release-plan-refresh', 'todo_write',
+    '', '', 10, 1, 2, true));
+
+  const assistant = message('assistant-release', 'assistant', 11, 1, 3, '');
   assistant.text = '发布检查完成。当前商店版本已满足构建与功能隔离要求。';
   assistant.blocks = [
     textBlock('heading', '发布检查完成'),
@@ -97,7 +138,7 @@ function showcaseMessages(): NativeMessage[] {
   ];
   rows.push(assistant);
 
-  const end = message('turn-release-end', 'turn', 8, 1, 3, '');
+  const end = message('turn-release-end', 'turn', 12, 1, 3, '');
   end.eventType = 'turn/end';
   end.outcome = 'completed';
   rows.push(end);
@@ -146,7 +187,7 @@ function showcaseFrame(): NativeFrame {
   const frame = new NativeFrame();
   frame.type = 'snapshot';
   frame.messages = showcaseMessages();
-  frame.cursor = 8;
+  frame.cursor = 12;
   frame.beforeSeq = 0;
   frame.hasMore = false;
   frame.running = false;
@@ -167,7 +208,7 @@ export class StoreShowcaseClient extends NativeHarnessClient {
     const record = new NativeSessionCacheRecord();
     record.version = 1;
     record.messages = showcaseMessages();
-    record.cursor = 8;
+    record.cursor = 12;
     record.hasMore = false;
     record.running = false;
     record.waiting = false;
@@ -205,7 +246,7 @@ export class StoreShowcaseClient extends NativeHarnessClient {
     const value = new GatewayState();
     value.mode = 'host';
     value.authenticated = true;
-    value.pluginVersion = '0.3.5';
+    value.pluginVersion = '0.3.6';
     return value;
   }
 

@@ -1,7 +1,53 @@
 {
-  "name": "@dsh-harmony/plugin", "version": "0.3.5", "type": "module", "license": "AGPL-3.0-only",
-  "description": "DSH Harmony native login, session APIs, notifications and web session handoff in one Harness plugin",
-  "main": "index.mjs", "exports": { ".": "./index.mjs", "./client": "./client.browser.js", "./package.json": "./package.json" },
-  "dsh": { "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-workspace"] } },
-  "peerDependencies": { "@deepseek-ai/cordis": "*" }
+  "name": "@dsh-harmony/plugin",
+  "version": "0.3.6",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Native DSH Harmony login, sessions, notifications and web session handoff for DeepSeek Harness",
+  "icon": "./icon.svg",
+  "author": "stlin256",
+  "homepage": "https://github.com/stlin256/DSH-Harmony#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stlin256/DSH-Harmony.git",
+    "directory": "plugins/dsh-harmony"
+  },
+  "keywords": ["dsh", "deepseek-harness", "harmonyos", "notifications"],
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.browser.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.mjs",
+    "client.mjs",
+    "client.browser.js",
+    "gateway/src",
+    "gateway/public",
+    "notify/index.mjs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-alpha.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-workspace"]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  }
 }

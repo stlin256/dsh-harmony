@@ -24,8 +24,12 @@ export struct NativeProcessStepView {
   private diffSignature: string = '';
 
   aboutToAppear(): void {
-    this.expanded = this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true;
+    this.expanded = this.disclosures.get(this.disclosureKey()) === true;
     this.changed();
+  }
+
+  private disclosureKey(): string {
+    return this.message.turnKey + '|' + (this.message.renderKey || this.message.id);
   }
 
   private changed(): void {
@@ -40,7 +44,7 @@ export struct NativeProcessStepView {
         this.diffRemoved = diff.matched ? diff.removed : 0;
       }
     }
-    const key = this.message.turnKey + '|' + this.message.id;
+    const key = this.disclosureKey();
     if (key !== this.disclosureId) {
       this.disclosureId = key;
       this.expanded = this.disclosures.get(key) === true;
