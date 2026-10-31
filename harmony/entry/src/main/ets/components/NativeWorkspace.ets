@@ -271,7 +271,27 @@ export struct NativeWorkspace {
     this.visibleSessionCount = visible.filter((row: NativeWorkspaceRow) => !row.group).length;
     this.sessionSource.set(visible, (row: NativeWorkspaceRow): string => row.key);
   }
-  aboutToAppear(): void { this.mounted = true; this.reload(); }
+  aboutToAppear(): void {
+    this.mounted = true;
+    this.reload();
+    const showcaseScreen = AppStorage.get<string>('storeShowcaseScreen') || '';
+    if (showcaseScreen === 'sidebar') {
+      setTimeout((): void => {
+        if (this.mounted) this.openDrawer(false);
+      }, 700);
+    } else if (showcaseScreen === 'browser') {
+      setTimeout((): void => {
+        if (!this.mounted) return;
+        const request = new NativeFileViewRequest();
+        request.kind = 'browser';
+        request.sessionId = 'showcase-release';
+        request.path = '';
+        this.fileView = request;
+        this.fileViewOpen = true;
+        this.navigationChanged();
+      }, 700);
+    }
+  }
   aboutToDisappear(): void {
     this.mounted = false; this.generation++; this.client.pause();
     clearTimeout(this.paintTimer); clearTimeout(this.reconnectTimer); clearTimeout(this.widgetTimer);

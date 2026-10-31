@@ -5,6 +5,7 @@ These files are used only by the repository landing pages.
 | Asset | Intended render size |
 | --- | --- |
 | `dsh-harmony.svg` | 96×96 px |
+| `dsh-harmony-app-icon-1024.png` | 1024×1024 px AppGallery upload |
 | `deepseek.svg` | 22×22 px |
 | `huawei-appgallery.svg` | 34×34 px |
 

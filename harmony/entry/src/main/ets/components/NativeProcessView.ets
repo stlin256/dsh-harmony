@@ -15,6 +15,7 @@ export struct NativeProcessView {
   @Prop maxExpandedHeight: number = 240;
   @Prop maxChildExpandedHeight: number = 160;
   @StorageLink('nativeDark') private dark: boolean = false;
+  @StorageLink('storeShowcaseProcessOpen') private showcaseOpen: boolean = false;
   @State private expanded: boolean = false;
   private disclosureId: string = '';
   private flatApplied: boolean = false;
@@ -22,7 +23,7 @@ export struct NativeProcessView {
 
   aboutToAppear(): void {
     this.flatApplied = this.message.flat;
-    this.expanded = this.message.flat ||
+    this.expanded = this.message.flat || this.showcaseOpen ||
       this.disclosures.get(this.message.turnKey + '|' + this.message.id) === true;
     this.changed();
   }
@@ -33,10 +34,10 @@ export struct NativeProcessView {
     if (key !== this.disclosureId) {
       this.disclosureId = key;
       this.flatApplied = this.message.flat;
-      this.expanded = this.message.flat || this.disclosures.get(key) === true;
+      this.expanded = this.message.flat || this.showcaseOpen || this.disclosures.get(key) === true;
     } else if (this.flatApplied !== this.message.flat) {
       this.flatApplied = this.message.flat;
-      this.expanded = this.message.flat || this.disclosures.get(key) === true;
+      this.expanded = this.message.flat || this.showcaseOpen || this.disclosures.get(key) === true;
     }
   }
 

@@ -17,6 +17,7 @@ import { NativeMetadataCache } from '../services/NativeMetadataCache';
 import { NativeTranscriptCache } from '../services/NativeTranscriptCache';
 import { NativeAttachmentCache } from '../services/NativeAttachmentCache';
 import { NativeMotion } from '../services/NativeMotion';
+import { StoreShowcaseClient } from '../services/StoreShowcaseClient';
 
 @Entry
 @Component
@@ -27,6 +28,7 @@ struct Index {
   private bridge: PocketBridge | null = null;
   private presentation: string = '';
   private nativeClient: NativeHarnessClient = new NativeHarnessClient('');
+  private showcase: boolean = false;
   @StorageLink('systemDark') @Watch('applyNativeTheme') private systemDark: boolean = false;
   @StorageLink('nativeThemeMode') @Watch('applyNativeTheme') private nativeThemeMode: string = 'system';
   @StorageLink('uiMode') @Watch('modeChanged') private uiMode: string = 'compatibility';
@@ -72,6 +74,21 @@ struct Index {
     this.presentation = util.TextDecoder.create('utf-8').decodeToString(
       await this.context.resourceManager.getRawFileContent('presentation.js'));
     this.store = await preferences.getPreferences(this.context, { name: 'dsh-pocket' });
+    if (AppStorage.get<boolean>('storeShowcase') === true) {
+      this.showcase = true;
+      this.uiMode = 'native';
+      const showcaseTheme = AppStorage.get<string>('storeShowcaseTheme');
+      this.nativeThemeMode = showcaseTheme === 'dark' || showcaseTheme === 'light' ? showcaseTheme : 'system';
+      this.nativeClient = new StoreShowcaseClient();
+      this.address = '';
+      this.origin = '';
+      this.error = '';
+      this.ready = true;
+      this.settingsCached = true;
+      this.applyNativeTheme();
+      if (AppStorage.get<string>('storeShowcaseScreen') === 'settings') this.openSettings();
+      return;
+    }
     const savedMode = this.store.getSync('uiMode', 'compatibility') as string;
     this.uiMode = savedMode === 'native' ? 'native' : 'compatibility';
     this.address = this.store.getSync('origin', '') as string;
@@ -216,6 +233,15 @@ struct Index {
     }
   }
   private async invokeNative(command: string, value: string): Promise<string> {
+    if (this.showcase) {
+      if (command === 'nativeState') return StoreShowcaseClient.initialState();
+      if (command === 'themeMode') {
+        this.nativeThemeMode = value;
+        this.applyNativeTheme();
+      }
+      if (command === 'nativeCompatibilityActive') return '{}';
+      return JSON.stringify({ reduceMotion: false, reduceTransparency: false, themeMode: value });
+    }
     if (!this.bridge) throw new Error('Not connected');
     return await this.bridge.performNative(command, value);
   }
@@ -424,9 +450,13 @@ struct Index {
           NativeWorkspace({ client: this.nativeClient, context: this.context, supportsPush: PushKitAdapter.supported,
             onLogin: (): void => { this.loginSurface(); },
             onSettings: (): void => { this.openSettings(); },
-            onSnapshot: async (value: string): Promise<void> => { await this.invokeNative('widgetSnapshot', value); },
+            onSnapshot: async (value: string): Promise<void> => {
+              if (!this.showcase) await this.invokeNative('widgetSnapshot', value);
+            },
             onLocalNotification: async (sessionId: string, title: string, state: string): Promise<void> => {
-              await this.invokeNative('publishLocalNotification', JSON.stringify({ sessionId, title, state }));
+              if (!this.showcase) {
+                await this.invokeNative('publishLocalNotification', JSON.stringify({ sessionId, title, state }));
+              }
             },
             onCompatibility: (): void => { this.compatibility(); },
             onDestination: (destination: string): void => { this.compatibility(destination); } })

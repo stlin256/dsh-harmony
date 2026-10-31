@@ -68,6 +68,20 @@ export default class EntryAbility extends UIAbility {
   }
 
   private route(want: Want): void {
+    const storeShowcase = want.parameters?.storeShowcase;
+    if (storeShowcase === true || storeShowcase === 'true') {
+      AppStorage.setOrCreate<boolean>('storeShowcase', true);
+    }
+    const showcaseScreen = want.parameters?.showcaseScreen;
+    if (typeof showcaseScreen === 'string' &&
+      ['conversation', 'process', 'sidebar', 'browser', 'settings'].includes(showcaseScreen)) {
+      AppStorage.setOrCreate<string>('storeShowcaseScreen', showcaseScreen);
+      AppStorage.setOrCreate<boolean>('storeShowcaseProcessOpen', showcaseScreen === 'process');
+    }
+    const showcaseTheme = want.parameters?.showcaseTheme;
+    if (typeof showcaseTheme === 'string' && ['light', 'dark', 'system'].includes(showcaseTheme)) {
+      AppStorage.setOrCreate<string>('storeShowcaseTheme', showcaseTheme);
+    }
     const route = want.parameters?.pocketRoute;
     if (typeof route === 'string' && ['workspace', 'overview', 'settings'].includes(route)) {
       AppStorage.setOrCreate<string>('requestedPocketRoute', route);

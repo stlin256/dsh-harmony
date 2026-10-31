@@ -1,0 +1,14 @@
+{
+  "generatedAt": "2026-10-31T07:29:04.8433876Z",
+  "device": "connected-device",
+  "bundleName": "io.github.stlin256.dshharmony",
+  "product": "store",
+  "hap": "harmony/entry/build/store/outputs/store/entry-store-signed.hap",
+  "rawDirectory": "artifacts/store-screenshots/raw",
+  "finalDirectory": "artifacts/store-screenshots/final",
+  "model": "DeepSeek-V4-Pro",
+  "reasoningEffort": "max",
+  "artifactCount": 26,
+  "appGalleryLandscapeCount": 10,
+  "appGalleryPortraitCount": 10
+}

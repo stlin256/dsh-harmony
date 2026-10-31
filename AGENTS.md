@@ -75,6 +75,12 @@ or real transcript content in source, tests, docs, logs or commits.
   [2026-10-31-settings-safe-area-icons.md](docs/requirements/2026-10-31-settings-safe-area-icons.md)
 - Settings surface implementation spec:
   [2026-10-31-settings-safe-area-icons.md](docs/specs/2026-10-31-settings-safe-area-icons.md)
+- Store showcase screenshot requirement:
+  [2026-10-31-store-showcase-screenshots.md](docs/requirements/2026-10-31-store-showcase-screenshots.md)
+- Store showcase screenshot implementation spec:
+  [2026-10-31-store-showcase-screenshots.md](docs/specs/2026-10-31-store-showcase-screenshots.md)
+- Store showcase screenshot E2E:
+  [2026-10-31-store-showcase-screenshots-e2e.md](docs/testing/2026-10-31-store-showcase-screenshots-e2e.md)
 - Chat controls and drawer requirement:
   [2026-10-31-chat-controls-refinement.md](docs/requirements/2026-10-31-chat-controls-refinement.md)
 - Chat controls and drawer implementation spec:
