@@ -32,14 +32,42 @@ DSH Harmony brings DeepSeek Harness workspaces, sessions, tool calls and live ou
 
 The goal goes beyond making Harness fit. From cold start to long-history scrolling, from a tool call to a background notification, DSH Harmony is built around less waiting, clearer state and more natural interaction.
 
+## The workflow at a glance
+
+<p align="center">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/01-conversation-1920x1080.png" width="100%" alt="DSH Harmony native conversation view">
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/02-process-1080x1920.png" width="250" alt="Tool process and conversation result"><br>
+      <strong>Clear process, direct results</strong><br>
+      <sub>Reasoning, commands and file changes stay compact and expand in context.</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/03-sidebar-1080x1920.png" width="250" alt="Workspace sidebar"><br>
+      <strong>Workspaces in order</strong><br>
+      <sub>Pinned sessions, recents, search and workspace controls stay within reach.</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/04-file-browser-1080x1920.png" width="250" alt="Workspace file browser"><br>
+      <strong>Files live in the workspace</strong><br>
+      <sub>Browse folders and preview Markdown, code and images in read-only form.</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/09-process-dark-1920x1080.png" width="49%" alt="DSH Harmony dark mode process view">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/10-sidebar-dark-1920x1080.png" width="49%" alt="DSH Harmony dark mode sidebar">
+</p>
+
 ## Fluid, focused and complete
 
 | **Fluid** | **Focused** |
 | --- | --- |
 | Cache-first rendering and incremental sync preload nearby history. Stable lists and virtualized rendering keep long conversations light, while transitions follow HarmonyOS motion. | DSH's compact hierarchy and visual language keep tools, reasoning, files and messages distinct without letting chrome compete with content. |
-
-| **Native** | **Complete** |
-| --- | --- |
 | Press feedback, drawers, navigation, safe areas and system Back are implemented natively, with respect for reduced-motion preferences. | Sessions, models, tools, approvals, questions, images, Markdown, code, file browsing and tiered notifications cover real mobile workflows. |
 
 ## Two experiences, one workspace

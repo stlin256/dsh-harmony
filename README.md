@@ -32,14 +32,42 @@ DSH Harmony 将 DeepSeek Harness 的工作空间、会话、工具调用和实�
 
 它关心的不只是“能不能用”。从冷启动到长对话滚动，从一次工具调用到一条后台通知，DSH Harmony 都围绕更少的等待、更清楚的状态和更自然的操作展开。
 
+## 一眼看清工作流
+
+<p align="center">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/01-conversation-1920x1080.png" width="100%" alt="DSH Harmony 原生会话界面">
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/02-process-1080x1920.png" width="250" alt="工具过程与会话结果"><br>
+      <strong>过程清楚，结果直接</strong><br>
+      <sub>思考、命令与文件改动保持紧凑，并在同一处展开。</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/03-sidebar-1080x1920.png" width="250" alt="工作区侧边栏"><br>
+      <strong>工作区井然有序</strong><br>
+      <sub>置顶、最近会话、搜索与工作区管理随手可达。</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="artifacts/store-screenshots/final/appgallery-portrait/04-file-browser-1080x1920.png" width="250" alt="工作区文件浏览器"><br>
+      <strong>文件就在工作区里</strong><br>
+      <sub>浏览目录，预览 Markdown、代码和图片，全程只读。</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/09-process-dark-1920x1080.png" width="49%" alt="DSH Harmony 深色模式工作过程">
+  <img src="artifacts/store-screenshots/final/appgallery-landscape/10-sidebar-dark-1920x1080.png" width="49%" alt="DSH Harmony 深色模式侧边栏">
+</p>
+
 ## 顺滑、简洁，也足够完整
 
 | **顺滑** | **简洁** |
 | --- | --- |
 | 缓存先行、增量同步，历史内容提前预取；稳定列表与虚拟化渲染让长对话保持轻盈，页面切换和展开状态遵循 HarmonyOS 的节奏。 | 沿用 DSH 的紧凑信息层级与视觉语义。工具、思考、文件和消息保持清楚，但不让界面替内容抢戏。 |
-
-| **原生触感** | **功能完整** |
-| --- | --- |
 | 触控反馈、抽屉、页面动线、安全区和系统 Back 都为 HarmonyOS 重新实现，并尊重系统的减少动态效果设置。 | 覆盖会话、模型、工具、审批、提问、图片、Markdown、代码、文件浏览与分级通知，让移动端真正完成工作流。 |
 
 ## 两种体验，一套工作空间
